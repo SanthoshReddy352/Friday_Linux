@@ -1,0 +1,12 @@
+PyQt5==5.15.10
+PyYAML==6.0.1
+psutil
+PyAutoGUI
+Pillow
+
+# Phase 3 - Voice I/O Configured for Local Pipeline
+faster-whisper
+llama-cpp-python
+numpy
+sounddevice
+pyttsx3

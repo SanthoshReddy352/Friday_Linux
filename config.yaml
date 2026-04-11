@@ -1,0 +1,12 @@
+app:
+  name: "FRIDAY"
+  version: "0.1"
+  theme: "dark"
+gui:
+  window_width: 500
+  window_height: 700
+  # We can add more specific gui configs here
+modules:
+  # Module specific configurations
+  greeter:
+    enabled: true
