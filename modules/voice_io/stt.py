@@ -6,7 +6,7 @@ import re
 import time
 import difflib
 from core.logger import logger
-from .audio_devices import apply_input_device_selection
+from .audio_devices import apply_input_device_selection, list_audio_input_devices
 
 # Words that trigger an immediate TTS interrupt (barge-in)
 BARGE_IN_WORDS = {"stop", "wait", "cancel", "enough", "quiet", "silence", "pause"}
@@ -27,6 +27,11 @@ class STTEngine:
         self._drop_audio_until = 0.0
         self.device_id = None # Default device
         self.device_label = "System default"
+        self.target_samplerate = 16000
+        self.stream_samplerate = self.target_samplerate
+        self.stream_channels = 1
+        self.stream_blocksize = 800
+        self._startup_device_selected = False
 
         # VAD settings - tuned for background noise rejection
         self.silence_threshold = 0.008
@@ -118,18 +123,32 @@ class STTEngine:
         """Thread that keeps the microphone hardware active to avoid Bluetooth reconnection blips."""
         try:
             import sounddevice as sd
-            samplerate = 16000
-            blocksize = 800
+            self._ensure_startup_input_device()
+            stream_settings = self._resolve_stream_settings(sd)
+            self.stream_samplerate = stream_settings["samplerate"]
+            self.stream_channels = stream_settings["channels"]
+            self.stream_blocksize = stream_settings["blocksize"]
 
-            logger.info(f"Opening persistent sd.InputStream on device {self.device_id}...")
+            logger.info(
+                "Opening persistent sd.InputStream on device %s (%s, %s channel%s, blocksize=%s)...",
+                stream_settings["device"],
+                self.stream_samplerate,
+                self.stream_channels,
+                "" if self.stream_channels == 1 else "s",
+                self.stream_blocksize,
+            )
             # We wrap the InputStream in a try/except because some devices might not be available
             with sd.InputStream(
-                samplerate=samplerate, blocksize=blocksize, device=self.device_id,
-                dtype='float32', channels=1, callback=self.audio_callback
+                samplerate=self.stream_samplerate,
+                blocksize=self.stream_blocksize,
+                device=stream_settings["device"],
+                dtype='float32',
+                channels=self.stream_channels,
+                callback=self.audio_callback
             ):
                 audio_buffer = []
                 silence_frames = 0
-                frames_per_second = samplerate / blocksize
+                frames_per_second = self.stream_samplerate / self.stream_blocksize
 
                 while self._loop_active:
                     try:
@@ -157,7 +176,8 @@ class STTEngine:
 
                         if (silence_frames > (self.silence_duration * frames_per_second)
                                 and len(audio_buffer) > frames_per_second):
-                            audio_data = np.concatenate(audio_buffer).flatten()
+                            audio_data = np.concatenate(audio_buffer, axis=0)
+                            audio_data = self._prepare_audio_for_transcription(audio_data)
                             audio_buffer = []
                             silence_frames = 0
 
@@ -296,6 +316,7 @@ class STTEngine:
         logger.info("Switching mic hardware to device: %s", next_label)
         self.device_id = next_device
         self.device_label = next_label
+        self._startup_device_selected = True
 
         # We must restart the actual hardware stream if the device changes
         self._loop_active = False
@@ -334,3 +355,164 @@ class STTEngine:
                 self.q.get_nowait()
             except queue.Empty:
                 break
+
+    def _ensure_startup_input_device(self):
+        if self._startup_device_selected or self.device_id is not None or self.device_label != "System default":
+            return
+
+        try:
+            devices = list_audio_input_devices()
+        except Exception as exc:
+            logger.warning("Could not inspect microphone devices: %s", exc)
+            return
+
+        if not devices:
+            return
+
+        preferred = next((device for device in devices if device.is_default), None)
+        if preferred is None:
+            preferred = next((device for device in devices if device.backend == "pipewire"), None)
+        if preferred is None:
+            preferred = next(
+                (
+                    device for device in devices
+                    if any(token in device.label.lower() for token in ("built-in", "analog", "microphone", "mic"))
+                ),
+                None,
+            )
+        if preferred is None:
+            preferred = devices[0]
+
+        try:
+            selection = apply_input_device_selection(preferred.target)
+        except Exception as exc:
+            logger.warning("Could not select startup microphone '%s': %s", preferred.label, exc)
+            return
+
+        self.device_id = selection.get("device")
+        self.device_label = selection.get("label", preferred.label)
+        self._startup_device_selected = True
+        logger.info("Startup microphone selected: %s", self.device_label)
+
+    def _resolve_stream_settings(self, sd):
+        default_input = None
+        try:
+            default_input = sd.default.device[0]
+        except Exception:
+            pass
+
+        candidates = []
+
+        def add_candidate(device, label=""):
+            key = (device, label)
+            if key not in candidates:
+                candidates.append(key)
+
+        add_candidate(self.device_id, self.device_label)
+        if self.device_id is None:
+            add_candidate(None, "System default")
+            if default_input is not None:
+                add_candidate(default_input, f"Default input {default_input}")
+
+        try:
+            all_devices = list(sd.query_devices())
+        except Exception:
+            all_devices = []
+
+        preferred_ids = []
+        fallback_ids = []
+        for index, device in enumerate(all_devices):
+            if device.get("max_input_channels", 0) <= 0:
+                continue
+            name = device.get("name", f"Input {index}")
+            lowered = name.lower()
+            if lowered in {"default", "pipewire", "sysdefault"} or "monitor" in lowered:
+                fallback_ids.append((index, name))
+                continue
+            if any(token in lowered for token in ("built-in", "analog", "mic", "microphone", "hda intel", "alc")):
+                preferred_ids.append((index, name))
+            else:
+                fallback_ids.append((index, name))
+
+        for index, label in preferred_ids + fallback_ids:
+            add_candidate(index, label)
+
+        attempted = []
+        for device, label in candidates:
+            info = self._query_input_device_info(sd, device, default_input)
+            if not info:
+                continue
+            max_channels = max(1, int(info.get("max_input_channels", 1) or 1))
+            sample_rates = self._candidate_sample_rates(info)
+            channel_options = [1]
+            if max_channels > 1:
+                channel_options.append(min(2, max_channels))
+
+            for sample_rate in sample_rates:
+                for channels in channel_options:
+                    blocksize = max(256, int(sample_rate * 0.05))
+                    try:
+                        sd.check_input_settings(
+                            device=device,
+                            samplerate=sample_rate,
+                            channels=channels,
+                            dtype="float32",
+                        )
+                        return {
+                            "device": device,
+                            "label": label or info.get("name", "System default"),
+                            "samplerate": int(sample_rate),
+                            "channels": channels,
+                            "blocksize": blocksize,
+                        }
+                    except Exception as exc:
+                        attempted.append(f"{label or device}:{sample_rate}Hz/{channels}ch ({exc})")
+                        continue
+
+        details = "; ".join(attempted[:6]) if attempted else "no compatible input candidates"
+        raise RuntimeError(f"No compatible microphone input format found: {details}")
+
+    def _query_input_device_info(self, sd, device, default_input):
+        query_target = default_input if device is None and default_input is not None else device
+        try:
+            if query_target is None:
+                return None
+            return sd.query_devices(query_target, "input")
+        except Exception:
+            return None
+
+    def _candidate_sample_rates(self, info):
+        rates = [self.target_samplerate]
+        default_rate = info.get("default_samplerate")
+        try:
+            if default_rate:
+                rounded = int(default_rate)
+                if rounded not in rates:
+                    rates.append(rounded)
+        except Exception:
+            pass
+        for fallback in (48000, 44100):
+            if fallback not in rates:
+                rates.append(fallback)
+        return rates
+
+    def _prepare_audio_for_transcription(self, audio_data):
+        if isinstance(audio_data, np.ndarray) and audio_data.ndim == 2 and audio_data.shape[1] > 1:
+            audio_data = np.mean(audio_data, axis=1)
+        else:
+            audio_data = np.asarray(audio_data, dtype=np.float32).reshape(-1)
+
+        if self.stream_samplerate != self.target_samplerate:
+            audio_data = self._resample_audio(audio_data, self.stream_samplerate, self.target_samplerate)
+
+        return np.asarray(audio_data, dtype=np.float32)
+
+    def _resample_audio(self, audio_data, source_rate, target_rate):
+        if source_rate == target_rate or len(audio_data) == 0:
+            return audio_data
+
+        duration = len(audio_data) / float(source_rate)
+        target_length = max(1, int(round(duration * target_rate)))
+        source_positions = np.linspace(0.0, len(audio_data) - 1, num=len(audio_data), dtype=np.float32)
+        target_positions = np.linspace(0.0, len(audio_data) - 1, num=target_length, dtype=np.float32)
+        return np.interp(target_positions, source_positions, audio_data).astype(np.float32)

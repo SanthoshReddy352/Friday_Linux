@@ -37,7 +37,10 @@ def apply_input_device_selection(target):
         if result.returncode != 0:
             error = (result.stderr or result.stdout or "unknown error").strip()
             raise RuntimeError(f"Failed to set default microphone: {error}")
-        return {"device": None, "label": target.get("label", f"PipeWire source {node_id}")}
+        return {
+            "device": _resolve_pipewire_sounddevice_input(),
+            "label": target.get("label", f"PipeWire source {node_id}"),
+        }
 
     if isinstance(target, dict) and target.get("kind") == "sounddevice":
         return {"device": target.get("id"), "label": target.get("label", f"Device {target.get('id')}")}
@@ -208,3 +211,29 @@ def _pipewire_node_description(node_id):
         if match:
             return match.group(1).strip()
     return ""
+
+
+def _resolve_pipewire_sounddevice_input():
+    try:
+        import sounddevice as sd
+    except Exception:
+        return None
+
+    try:
+        devices = list(sd.query_devices())
+    except Exception:
+        return None
+
+    preferred = None
+    fallback = None
+    for index, device in enumerate(devices):
+        if device.get("max_input_channels", 0) <= 0:
+            continue
+        lowered = str(device.get("name", "")).strip().lower()
+        if lowered == "pipewire":
+            preferred = index
+            break
+        if lowered == "default":
+            fallback = index
+
+    return preferred if preferred is not None else fallback
