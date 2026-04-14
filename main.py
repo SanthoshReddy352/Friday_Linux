@@ -4,12 +4,13 @@ import os
 import logging
 
 # Adjust sys.path to load local dependencies from 'libs' due to NTFS execution restrictions
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-LIBS_DIR = os.path.join(CURRENT_DIR, 'libs')
-if os.path.exists(LIBS_DIR) and LIBS_DIR not in sys.path:
-    # Insert at position 1 (after current directory) so they take precedence over system packages,
-    # but local project files still take top priority.
-    sys.path.insert(1, LIBS_DIR)
+# (DEPRECATED: We now use a virtual environment for better dependency management)
+# CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# LIBS_DIR = os.path.join(CURRENT_DIR, 'libs')
+# if os.path.exists(LIBS_DIR) and LIBS_DIR not in sys.path:
+#     # Insert at position 1 (after current directory) so they take precedence over system packages,
+#     # but local project files still take top priority.
+#     sys.path.insert(1, LIBS_DIR)
 
 from core.app import FridayApp
 from core.logger import set_console_logging

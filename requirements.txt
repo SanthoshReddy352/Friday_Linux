@@ -1,16 +1,26 @@
-PyQt5==5.15.10
+# --- CORE GUI & UTILS ---
+PyQt6
 PyYAML==6.0.1
 psutil
 PyAutoGUI
 Pillow
+huggingface_hub
+python-dotenv
+requests
 
-# Phase 3 - Voice I/O Configured for Local Pipeline
+# --- VOICE I/O (LOCAL PIPELINE) ---
 faster-whisper
 llama-cpp-python
 numpy
 sounddevice
 pyttsx3
+
+# --- AGENTIC FRAMEWORK & STORAGE ---
 langgraph
 langchain-core
 chromadb
+
+# --- BROWSER AUTOMATION ---
 playwright
+selenium
+webdriver-manager

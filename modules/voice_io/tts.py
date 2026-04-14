@@ -132,6 +132,10 @@ class TextToSpeech:
         if state:
             self.speaking_started_at = time.monotonic()
         else:
+            # Add a tiny buffer (50ms) to allow for OS-level audio buffer handoffs
+            # The STT will add its own larger grace period on top of this.
+            if not self.interrupt_event.is_set():
+                time.sleep(0.05)
             self.speaking_stopped_at = time.monotonic()
         if not state:
             self.current_text = ""

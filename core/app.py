@@ -34,6 +34,7 @@ class FridayApp:
         # TTS reference — set by VoiceIOPlugin after it constructs TextToSpeech
         self.tts = None
         self.stt = None
+        self.media_control_mode = False
 
     def initialize(self):
         logger.info("Initializing FRIDAY...")
@@ -79,13 +80,30 @@ class FridayApp:
             cleaned = self.assistant_context.clean_user_text(text, source=source)
             if cleaned:
                 route_text = cleaned
+
+        # Process through router
         response = self.router.process_text(route_text)
+        
+        # Post-process state changes
+        decision = getattr(self.router, "last_routing_decision", None)
+        if decision:
+            # Enable media mode if we just started a browser media action
+            if decision.tool_name in ("play_youtube", "play_youtube_music", "browser_media_control"):
+                if not self.media_control_mode:
+                    logger.info("[app] Entering Restricted Media Control Mode.")
+                    self.media_control_mode = True
+            
+            # Disable media mode if we got a wake-up command
+            if decision.tool_name == "enable_voice" and decision.args.get("wake_up"):
+                if self.media_control_mode:
+                    logger.info("[app] Exiting Restricted Media Control Mode.")
+                    self.media_control_mode = False
+                    response = "I'm awake! How can I help you?"
+
         if response:
             self.emit_assistant_message(response, source="friday")
         
         # Auto-Resume Mic after processing is complete
-        # Note: If TTS is running, the user might want it to stay paused until finished.
-        # But per user request, "until that task is done", unpausing here allows follow-up.
         if source == "voice":
             self.event_bus.publish("gui_toggle_mic", True)
             

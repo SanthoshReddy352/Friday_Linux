@@ -1,40 +1,51 @@
-# FRIDAY - AI Desktop Assistant
+# 🤖 FRIDAY - AI Desktop Assistant
 
-FRIDAY is a powerful, local-first AI desktop assistant with voice interaction, intent recognition, and system control capabilities.
+FRIDAY is a powerful, local-first AI assistant designed for Linux. It combines state-of-the-art Large Language Models (LLMs) with voice interaction and system control to provide a seamless, privacy-focused experience.
 
-## Features
+---
 
-- **Voice I/O:** Local STT (Faster-Whisper/Vosk) and TTS (Piper).
-- **LLM Powered:** Uses Gemma 2B for intelligent command processing and chat.
-- **System Control:** Manage applications, media playback, and get system info.
-- **Privacy First:** Designed to run entirely on your local machine.
+## ✨ Key Features
 
-## Quick Start
+- **🗣️ Natural Voice Interaction**: Fast, local Speech-to-Text (Faster-Whisper) and high-quality Text-to-Speech (Piper).
+- **🧠 Advanced Reasoning**: Powered by Gemma 2B and Qwen 2.5 for chat and complex tool usage.
+- **🖥️ System Control**: Control media, launch apps, search the web, and manage your files—all via voice or text.
+- **🔒 Privacy First**: All processing stays on your machine. No cloud required.
+- **🎨 Modern HUD**: A sleek, transparent GUI for real-time interaction feedback.
 
-1. **Clone the repo:**
-   ```bash
-   git clone https://github.com/SanthoshReddy352/FRIDAY.git
-   cd FRIDAY
-   ```
+---
 
-2. **Run Setup:**
-   Follow the [Complete Setup Guide](SETUP_GUIDE.md) to install dependencies and download the necessary models.
+## 🚀 Quick Start
 
-3. **Start FRIDAY:**
-   ```bash
-   source .venv/bin/activate
-   python main.py
-   ```
-   This now launches the terminal-first FRIDAY CLI. To open the older desktop window instead, run:
-   ```bash
-   python main.py --gui
-   ```
+1.  **Clone the Repository**:
+    ```bash
+    git clone https://github.com/SanthoshReddy352/FRIDAY.git
+    cd FRIDAY
+    ```
 
-## Documentation
+2.  **Run Automated Setup**:
+    ```bash
+    chmod +x setup.sh
+    ./setup.sh
+    ```
 
-- [Setup Guide](SETUP_GUIDE.md) - Detailed installation and model download instructions.
-- [Project Structure](docs/structure.md) - (Coming soon) Overview of the codebase.
+3.  **Download Models**:
+    Follow the [**Setup Guide**](SETUP_GUIDE.md) to download and place the required local models.
 
-## License
+4.  **Launch**:
+    ```bash
+    source .venv/bin/activate
+    python main.py
+    ```
+
+---
+
+## 📖 Documentation
+
+- [**Full Installation Guide**](SETUP_GUIDE.md) - Detailed step-by-step instructions.
+- [**Troubleshooting**](SETUP_GUIDE.md#troubleshooting) - Solutions for common issues.
+
+---
+
+## 📝 License
 
 This project is licensed under the MIT License.

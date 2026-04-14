@@ -1,73 +1,108 @@
-# FRIDAY Setup Guide
+# 🛡️ FRIDAY Setup Guide
 
-This guide will walk you through the process of setting up FRIDAY on a new Linux machine.
+Welcome to the **FRIDAY** project! This guide will help you install and configure your local AI assistant from scratch.
 
-## Prerequisites
+---
 
-- **OS:** Linux (Ubuntu/Debian recommended)
-- **Python:** 3.10 or higher
-- **Git**
-- **System Dependencies:**
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y python3-venv python3-pip libxcb-cursor0 libportaudio2
-  ```
+## 🚀 Quick Start (Ubuntu/Debian)
 
-## 1. Clone the Repository
+If you have Python 3 and Git installed, run:
 
 ```bash
-git clone https://github.com/SanthoshReddy352/FRIDAY.git
-cd FRIDAY
-```
-
-## 2. Automatic Environment Setup
-
-Run the included setup script to create the virtual environment and install Python dependencies:
-
-```bash
+git clone https://github.com/SanthoshReddy352/FRIDAY.git && cd FRIDAY
 chmod +x setup.sh
 ./setup.sh
 ```
 
-## 3. Download Model Files
+---
 
-You need to manually download the following models and place them in the `models/` directory.
+## 📋 Prerequisites
 
-### A. Large Language Model (Gemma 2B)
-- **File:** `gemma-2-2b-it-Q4_K_M.gguf`
-- **Link:** [Download from Hugging Face](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf?download=true)
-- **Destination:** `models/gemma-2b-it.gguf` (Rename if necessary)
+- **OS:** Linux (Ubuntu/Debian strongly recommended).
+- **Python:** 3.10 to 3.13.
+- **Hardware:** 8GB+ RAM recommended (for running local models).
+- **Internet:** Required for initial setup and downloading models.
 
-### B. Text-to-Speech Voice (Piper)
-Download both the ONNX model and the config file:
-- **ONNX Model:** [en_US-lessac-medium.onnx](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true)
-- **Config File:** [en_US-lessac-medium.onnx.json](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json?download=true)
-- **Destination:** `models/`
+---
 
-### C. Speech-to-Text (Vosk)
-- **Link:** [vosk-model-small-en-us-0.15.zip](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip)
-- **Destination:** Extract inside `models/` and rename folder to `vosk-model-small`.
+## 📦 Step 1: Clone & Automate
 
-## 4. Download Piper Engine
+Clone the repository and run the automated setup script. This script handles virtual environment creation, system dependencies, and Python libraries.
 
-The Piper engine binaries are required for voice output.
-- **Link:** [piper_amd64.tar.gz (for Linux x86_64)](https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz)
-- **Steps:**
-  1. Create a `piper` directory: `mkdir -p piper`
-  2. Download and extract the archive into the `piper` directory.
-  3. Ensure the structure looks like: `piper/piper`, `piper/libespeak-ng.so`, etc.
+```bash
+git clone https://github.com/SanthoshReddy352/FRIDAY.git
+cd FRIDAY
+chmod +x setup.sh
+./setup.sh
+```
 
-## 5. Running FRIDAY
+> [!TIP]
+> If the setup script fails due to "noexec" mount permissions, try moving the project folder to your home directory (`~/`) or remounting your drive with execution permissions.
 
-Once all models and binaries are in place:
+---
+
+## 🧠 Step 2: Download AI Models
+
+FRIDAY runs entirely locally. You need to download the following models and place them in the `models/` directory.
+
+| Model Type | File Name | Download Link |
+| :--- | :--- | :--- |
+| **LLM (Chat)** | `gemma-2b-it.gguf` | [Gemma 2B IT GGUF](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf?download=true) |
+| **LLM (Tools)** | `qwen2.5-7b-instruct.gguf` | [Qwen2.5 7B GGUF](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true) |
+| **TTS (Voice)** | `en_US-lessac-medium.onnx` | [Piper Voice Model](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true) |
+| **TTS (Config)** | `en_US-lessac-medium.onnx.json` | [Piper Voice Config](https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json?download=true) |
+
+> [!IMPORTANT]
+> Ensure the files are named **exactly** as shown above or update your `config.yaml` to match.
+
+---
+
+## 🔊 Step 3: Setup Piper Voice Engine
+
+To enable FRIDAY to speak, you need the Piper binary engine:
+
+1.  **Download** the Linux AMD64 binary: [piper_amd64.tar.gz](https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz)
+2.  **Create** a folder named `piper` in the project root.
+3.  **Extract** the contents into that folder.
+4.  **Verify**: You should have a file at `piper/piper`.
+
+---
+
+## 🌐 Step 4: Browser Automation
+
+FRIDAY uses Playwright for browser-based tasks (YouTube, web search). The setup script installs the Chromium binaries automatically, but if you encounter issues, run:
+
+```bash
+source .venv/bin/activate
+python3 -m playwright install --with-deps chromium
+```
+
+---
+
+## 🏁 Step 5: Start FRIDAY
+
+Once everything is ready, launch the assistant:
 
 ```bash
 source .venv/bin/activate
 python main.py
 ```
 
-## Troubleshooting
+To run in **Text-Only CLI mode**:
+```bash
+python main.py --text
+```
 
-- **Audio issues:** Ensure `libportaudio2` is installed.
-- **Permission denied:** Ensure `setup.sh` and the `piper/piper` binary have execution permissions (`chmod +x`).
-- **Missing Models:** Double-check that files are named exactly as expected by the code or update `config.yaml`.
+---
+
+## 🛠️ Troubleshooting
+
+### Audio Issues
+- Ensure `libportaudio2` is installed: `sudo apt install libportaudio2`
+- Check if your microphone is recognized: `python tests/test_audio_devices.py`
+
+### Permission Denied
+- If `setup.sh` or `piper/piper` won't run: `chmod +x setup.sh piper/piper`
+
+### Missing Modules
+- Re-run the dependency sync: `pip install -r requirements.txt`

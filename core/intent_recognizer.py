@@ -195,11 +195,28 @@ class IntentRecognizer:
 
         if active_browser and "browser_media_control" in getattr(self.router, "_tools_by_name", {}):
             normalized = clause_lower.strip(" .!?")
+            
+            # Complex phrase matching for skipping/reverting (making 'seconds' optional)
+            if re.search(r"\b(?:skip|forward|move)\b.*?\b(?:seconds?|secs?)\b", normalized) or re.search(r"\bfast\s+forward\b", normalized):
+                return {"tool": "browser_media_control", "args": {"control": "forward"}, "text": clause, "domain": "browser"}
+            if re.search(r"\b(?:revert|back|rewind|previous)\b.*?\b(?:seconds?|secs?)\b", normalized):
+                return {"tool": "browser_media_control", "args": {"control": "backward"}, "text": clause, "domain": "browser"}
+            
             mapping = {
+                "play": "resume",
                 "pause": "pause",
                 "resume": "resume",
+                "stop": "pause",
                 "next": "next",
                 "skip": "next",
+                "next video": "next",
+                "previous video": "previous",
+                "previous": "previous",
+                "rewind": "previous", # Requested mapping: Shift+P
+                "forward": "forward",
+                "backward": "backward",
+                "revert": "backward",
+                "back": "backward",
             }
             if normalized in mapping:
                 return {
@@ -450,6 +467,8 @@ class IntentRecognizer:
         return None
 
     def _parse_voice_toggle(self, clause, clause_lower, context):
+        if re.search(r"\bfriday\s+wake\s+up\b", clause_lower):
+            return {"tool": "enable_voice", "args": {"wake_up": True}, "text": clause, "domain": "voice"}
         if re.search(r"\b(?:enable|start|turn on)\s+(?:the\s+)?(?:mic|microphone|voice)\b", clause_lower):
             return {"tool": "enable_voice", "args": {}, "text": clause, "domain": "voice"}
         if re.search(r"\b(?:disable|stop|turn off)\s+(?:the\s+)?(?:mic|microphone|voice)\b", clause_lower):

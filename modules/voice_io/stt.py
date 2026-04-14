@@ -5,12 +5,21 @@ import os
 import re
 import time
 import difflib
+import subprocess
+import shutil
 from core.logger import logger
 from .audio_devices import apply_input_device_selection, list_audio_input_devices
 
 # Words that trigger an immediate TTS interrupt (barge-in)
 BARGE_IN_WORDS = {"stop", "wait", "cancel", "enough", "quiet", "silence", "pause"}
 FILLER_ONLY_WORDS = {"please", "yeah", "yes", "okay", "ok", "go", "uh", "um", "hmm", "hm"}
+
+# Whitelist for restricted media control mode
+MEDIA_COMMAND_WHITELIST = {
+    "play", "pause", "resume", "stop", "next", "previous", "skip", 
+    "forward", "back", "backward", "revert", "rewind", "seconds", "secs", "video",
+    "wake", "up", "friday"
+}
 
 class STTEngine:
     def __init__(self, app_core):
@@ -46,6 +55,13 @@ class STTEngine:
         self.barge_in_grace_period_s = float(os.getenv("FRIDAY_BARGE_IN_GRACE_S", "0.7"))
         self.barge_in_post_stop_drop_s = float(os.getenv("FRIDAY_BARGE_IN_POST_STOP_DROP_S", "0.12"))
         self._barge_in_frame_count = 0
+        self.use_rms_barge_in = True
+
+        # Profile state
+        self.is_bluetooth_active = False
+        self.system_media_active = False
+        self._last_profile_check = 0.0
+        self.profile_check_interval = 5.0
 
     def initialize(self):
         if self.model is not None:
@@ -95,13 +111,23 @@ class STTEngine:
         if not self.is_listening:
             return
 
-        if time.monotonic() < self._drop_audio_until:
+        # Periodic profile check (Adaptive VAD)
+        now = time.monotonic()
+        if now - self._last_profile_check > self.profile_check_interval:
+            self._update_audio_profile()
+            self._last_profile_check = now
+
+        if now < self._drop_audio_until:
             return
 
         rms = float(np.sqrt(np.mean(indata ** 2)))
         if self.app_core.is_speaking:
             self._maybe_interrupt_for_live_speech(rms)
-            return
+            # Do NOT return early here. We allow audio to pass into the queue 
+            # while speaking so word-based barge-in ("Friday stop") can work.
+            # But we use a higher threshold to avoid transcribing everything.
+            if rms < self.silence_threshold * 2.0:
+                return
             
         try:
             self.q.put_nowait(indata.copy())
@@ -196,9 +222,46 @@ class STTEngine:
 
     def _process_voice_text(self, text):
         text_clean = self._sanitize_text(text)
+        if not text_clean:
+            return
+
+        # Strict Mode: Speaker feedback suppression
+        # If media is playing on speakers, we are much more critical of the input
+        if self.system_media_active and not self.is_bluetooth_active:
+            is_wake_up = "friday" in text_clean or "wake up" in text_clean
+            is_media_cmd = bool(set(text_clean.split()) & MEDIA_COMMAND_WHITELIST)
+            
+            # If it's just a few words of junk that isn't a command or wake word, drop it
+            if not (is_wake_up or is_media_cmd):
+                # We also drop if it's too short (less than 2 words) as it's likely a speaker blip
+                if len(text_clean.split()) < 2:
+                    logger.info(f"[STT] Ignored short noise '{text_clean}' (Required 'Friday' trigger because media is active).")
+                    return
+                # If it's longer but doesn't mention friday, it might be the video audio
+                if "friday" not in text_clean:
+                    logger.info(f"[STT] Ignored '{text_clean}' (Missing 'Friday' trigger while media is active).")
+                    return
+
+        # Restricted Media Mode: Discard if not a whitelist command
+        media_mode = getattr(self.app_core, "media_control_mode", False)
+        if media_mode:
+            words = set(text_clean.split())
+            is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
+            is_wake_up = "wake up" in text_clean
+            
+            if not (is_media_cmd or is_wake_up):
+                logger.debug(f"[STT] Dropping non-media command in restricted mode: '{text_clean}'")
+                return
+            logger.info(f"[STT] Whitelist match in media mode: '{text_clean}'")
 
         # Basic barge-in logic
         if self.app_core.is_speaking:
+            text_clean_barge = text_clean
+            # In Speaker mode, we strictly require the 'Friday' keyword to avoid
+            # accidental triggers from speaker reflections or room noise.
+            if not self.is_bluetooth_active and "friday" not in text_clean:
+                return
+
             words = set(text_clean.split())
             if bool(words & BARGE_IN_WORDS) or "friday" in text_clean or self._looks_like_fresh_command(text_clean):
                 logger.info(f"[STT] Barge-in detected during speech: '{text_clean}'")
@@ -228,7 +291,7 @@ class STTEngine:
         self.app_core.process_input(text_clean, source="voice")
 
     def _maybe_interrupt_for_live_speech(self, rms):
-        if not self.app_core.is_speaking:
+        if not self.app_core.is_speaking or not self.use_rms_barge_in:
             self._barge_in_frame_count = 0
             return
 
@@ -382,6 +445,83 @@ class STTEngine:
     def _current_listen_request_id(self):
         with self._listen_request_lock:
             return self._listen_request_id
+
+    def _update_audio_profile(self):
+        """Detects if we are on Bluetooth and if system audio is active."""
+        wpctl = shutil.which("wpctl")
+        if not wpctl:
+            return
+
+        try:
+            result = subprocess.run([wpctl, "status"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return
+
+            status = result.stdout
+            
+            # Detect Bluetooth Sink
+            # Look for lines under Sinks or Filters that are marked as default (*) and have bluetooth signatures
+            sinks_section = False
+            is_bt = False
+            for line in status.splitlines():
+                if "Sinks:" in line:
+                    sinks_section = True
+                    continue
+                if sinks_section and line.strip() == "":
+                    sinks_section = False
+                    continue
+                
+                if sinks_section and "*" in line:
+                    if any(token in line.lower() for token in ("bluez", "ion", "headset", "earplay", "bt")):
+                        is_bt = True
+                        break
+
+            # Detect System Audio Activity
+            # Look for [active] streams that are NOT our own process
+            is_media_active = False
+            streams_section = False
+            for line in status.splitlines():
+                if "Streams:" in line:
+                    streams_section = True
+                    continue
+                if "[active]" in line and "python" not in line and "stt" not in line:
+                    is_media_active = True
+                    break
+
+            if is_bt != self.is_bluetooth_active or is_media_active != self.system_media_active:
+                self.is_bluetooth_active = is_bt
+                self.system_media_active = is_media_active
+                self._apply_adaptive_thresholds()
+        except Exception as e:
+            logger.warning(f"[STT] Failed to update audio profile: {e}")
+
+    def _apply_adaptive_thresholds(self):
+        """Sets VAD thresholds based on connection and background noise."""
+        if self.is_bluetooth_active:
+            # Sensitive profile for isolated headsets
+            self.silence_threshold = 0.008
+            self.use_rms_barge_in = True
+            self.barge_in_rms_threshold = 0.045
+            self.listen_resume_delay_s = 0.15
+            profile_name = "HEADSET (Bluetooth)"
+        else:
+            # Conservative profile for built-in speakers
+            # Disable volume-based barge-in to prevent self-triggering
+            self.silence_threshold = 0.008
+            self.barge_in_rms_threshold = 0.25 # Be very conservative
+            self.use_rms_barge_in = False
+            self.barge_in_grace_period_s = 1.2
+            self.listen_resume_delay_s = 0.8
+            profile_name = "SPEAKER (Built-in)"
+
+        if self.system_media_active:
+            # Even stricter if music is playing
+            self.silence_threshold += 0.005
+            self.barge_in_rms_threshold += 0.02
+            profile_name += " + ACTIVE MEDIA"
+
+        logger.info(f"[STT] Adaptive VAD profile updated: {profile_name}")
+        logger.debug(f"[STT] Thresholds: silence={self.silence_threshold:.4f}, barge_in={self.barge_in_rms_threshold:.4f}")
 
     def _transcribe_buffer(self, audio_buffer):
         audio_data = np.concatenate(audio_buffer, axis=0)

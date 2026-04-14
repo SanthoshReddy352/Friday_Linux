@@ -192,7 +192,11 @@ class BrowserMediaWorkflow(BaseWorkflow):
         lower_text = (user_text or "").lower().strip()
         if self.should_start(user_text, context=context):
             return True
-        return lower_text in {"pause", "resume", "next", "skip", "play", "open it in music instead", "play it in music instead"}
+        media_keywords = {
+            "pause", "resume", "next", "skip", "play", "previous", "forward", "back", "backward", "revert", "rewind",
+            "open it in music instead", "play it in music instead"
+        }
+        return any(word in lower_text for word in media_keywords)
 
     def _handle(self, state):
         user_text = state["user_text"]
@@ -297,13 +301,26 @@ class BrowserMediaWorkflow(BaseWorkflow):
         if re.search(r"\bopen\s+youtube\b", lower_text):
             return {"action": "open", "platform": "youtube", "browser_name": browser_name}
 
-        if lower_text in {"pause", "resume", "next", "skip"}:
-            return {
-                "action": "next" if lower_text == "skip" else lower_text,
-                "platform": workflow_state.get("platform") or "youtube",
-                "browser_name": browser_name,
-                "query": workflow_state.get("query", ""),
-            }
+        media_map = {
+            "pause": "pause",
+            "resume": "resume",
+            "play": "resume",
+            "next": "next",
+            "skip": "next",
+            "previous": "previous",
+            "forward": "forward",
+            "backward": "backward",
+            "revert": "backward",
+            "rewind": "backward",
+        }
+        for keyword, cmd in media_map.items():
+            if keyword in lower_text:
+                return {
+                    "action": cmd,
+                    "platform": workflow_state.get("platform") or "youtube",
+                    "browser_name": browser_name,
+                    "query": workflow_state.get("query", ""),
+                }
 
         if "music instead" in lower_text:
             return {

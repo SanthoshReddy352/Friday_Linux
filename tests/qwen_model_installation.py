@@ -4,14 +4,14 @@ import time
 import shutil
 
 def test_qwen():
-    print("Downloading/Locating Gemma 2 2B GGUF model...")
+    print("Downloading/Locating Qwen 2.5 7B GGUF model...")
     model_path = hf_hub_download(
         repo_id="paultimothymooney/Qwen2.5-7B-Instruct-Q4_K_M-GGUF",
-        filename="Qwen2.5-7B-Instruct-Q4_K_M-GGUF"
+        filename="qwen2.5-7b-instruct-q4_k_m.gguf"
     )
     print(f"Downloaded Model Path: {model_path}")
     
-    target_path = "/mnt/NewVolume/FRIDAY/models/qwen2.5-7b-instruct.gguf"
+    target_path = "/mnt/NewVolume/Friday_Linux/models/qwen2.5-7b-instruct.gguf"
     print(f"Copying model to {target_path} ...")
     shutil.copy(model_path, target_path)
     print("Loading Llama model...")

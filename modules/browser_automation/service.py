@@ -74,15 +74,27 @@ class BrowserMediaService:
 
         try:
             page.bring_to_front()
-            if action == "pause":
+            # Click the body or some safe area to ensure the player window is focused for shortcuts
+            try:
+                page.mouse.click(10, 10)
+            except:
+                pass
+
+            if action in ("pause", "resume"):
                 page.keyboard.press("k")
-                return f"Paused {platform.replace('_', ' ')}."
-            if action == "resume":
-                page.keyboard.press("k")
-                return f"Resumed {platform.replace('_', ' ')}."
+                return f"{action.capitalize()}d {platform.replace('_', ' ')}."
             if action == "next":
                 page.keyboard.press("Shift+N")
-                return f"Skipped to the next item on {platform.replace('_', ' ')}."
+                return f"Skipped to next item on {platform.replace('_', ' ')}."
+            if action == "previous":
+                page.keyboard.press("Shift+P")
+                return f"Went back on {platform.replace('_', ' ')}."
+            if action == "forward":
+                page.keyboard.press("l")
+                return f"Skipped forward on {platform.replace('_', ' ')}."
+            if action == "backward":
+                page.keyboard.press("j")
+                return f"Reverted back on {platform.replace('_', ' ')}."
             if action == "play" and query:
                 if platform == "youtube_music":
                     return self.play_youtube_music(query)
@@ -530,17 +542,21 @@ class BrowserMediaService:
             self._focus_browser_window(platform_name, fullscreen=False)
 
     def _start_media_playback(self, page):
-        paused = self._media_paused(page)
-        if paused is False:
-            return
-        for key in ("k", " "):
-            try:
-                page.keyboard.press(key)
-                page.wait_for_timeout(500)
-            except Exception:
-                continue
-            if self._media_paused(page) is False:
-                return
+        # Force playback via JavaScript instead of toggling keys.
+        # This ensures the video starts if paused, but does nothing if already playing.
+        try:
+            page.evaluate(
+                """
+                () => {
+                    const media = document.querySelector("video, audio");
+                    if (media && media.paused) {
+                        media.play().catch(() => {});
+                    }
+                }
+                """
+            )
+        except Exception:
+            pass
 
     def _media_paused(self, page):
         try:
@@ -548,7 +564,10 @@ class BrowserMediaService:
                 """
                 () => {
                     const media = document.querySelector("video, audio");
-                    return media ? media.paused : null;
+                    if (!media) return null;
+                    // If the video is still in a pending/loading state, don't assume it's paused
+                    if (media.readyState < 2) return false; 
+                    return media.paused;
                 }
                 """
             )
@@ -618,14 +637,11 @@ class BrowserMediaService:
             return False
 
     def _click_youtube_fullscreen_button(self, page):
+        # Hovering the player is usually enough to reveal the controls.
+        # We avoid clicking the 'video' element directly because that toggles play/pause on YouTube.
         try:
             page.locator(".html5-video-player").first.hover(timeout=2000)
-            page.wait_for_timeout(250)
-        except Exception:
-            pass
-        try:
-            page.locator("video").first.click(timeout=2000, position={"x": 40, "y": 40})
-            page.wait_for_timeout(250)
+            page.wait_for_timeout(400)
         except Exception:
             pass
         selectors = (

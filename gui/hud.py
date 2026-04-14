@@ -242,6 +242,19 @@ class CentralReactor(QWidget):
         painter.drawArc(rect_outer, 45 * 16, 90 * 16)
         painter.drawArc(rect_outer, 225 * 16, 90 * 16)
 
+class DeviceDiscoveryThread(QThread):
+    devices_found = pyqtSignal(list)
+
+    def run(self):
+        try:
+            from modules.voice_io.audio_devices import list_audio_input_devices
+            devices = list_audio_input_devices()
+            self.devices_found.emit(devices)
+        except Exception as e:
+            from core.logger import logger
+            logger.error(f"DeviceDiscoveryThread: Error listing devices: {e}")
+            self.devices_found.emit([])
+
 class MicSelector(QFrame):
     device_selected = pyqtSignal(object)
     
@@ -275,31 +288,54 @@ class MicSelector(QFrame):
         
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_devices)
-        self.refresh_timer.start(5000) # Refresh every 5s
+        self.refresh_timer.start(10000) # Refresh every 10s (was 5s)
         
+        self.discovery_thread = None
         self.combo.currentIndexChanged.connect(self.on_selection_changed)
         self.refresh_devices()
 
     def refresh_devices(self):
+        if self.discovery_thread and self.discovery_thread.isRunning():
+            return
+
+        if self.combo.count() == 0:
+            self.combo.addItem("Searching for devices...", None)
+
+        self.discovery_thread = DeviceDiscoveryThread()
+        self.discovery_thread.devices_found.connect(self._on_devices_found)
+        self.discovery_thread.start()
+
+    def _on_devices_found(self, devices):
         try:
             current_id = self.combo.currentData()
-            devices = list_audio_input_devices()
             self.combo.blockSignals(True)
             self.combo.clear()
 
-            for device in devices:
-                prefix = "[Default] " if device.is_default else ""
-                suffix = f" ({device.backend})"
-                self.combo.addItem(f"{prefix}{device.label}{suffix}", device.target)
+            if not devices:
+                self.combo.addItem("No microphones found", None)
+            else:
+                for device in devices:
+                    prefix = "[Default] " if device.is_default else ""
+                    suffix = f" ({device.backend})"
+                    self.combo.addItem(f"{prefix}{device.label}{suffix}", device.target)
 
             if current_id is not None:
                 for index in range(self.combo.count()):
                     if self.combo.itemData(index) == current_id:
                         self.combo.setCurrentIndex(index)
                         break
+            elif self.combo.count() > 0 and devices:
+                # If no selection, try to select the default one
+                for index in range(self.combo.count()):
+                    label = self.combo.itemText(index)
+                    if "[Default]" in label:
+                        self.combo.setCurrentIndex(index)
+                        break
+            
             self.combo.blockSignals(False)
         except Exception as e:
-            print(f"Error refreshing mic devices: {e}")
+            from core.logger import logger
+            logger.error(f"MicSelector: Error updating combo: {e}")
 
     def on_selection_changed(self, index):
         if index >= 0:

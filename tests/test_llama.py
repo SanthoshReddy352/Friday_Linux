@@ -11,7 +11,7 @@ def test_llama():
     )
     print(f"Downloaded Model Path: {model_path}")
     
-    target_path = "/mnt/NewVolume/FRIDAY/models/gemma-2b-it.gguf"
+    target_path = "/mnt/NewVolume/Friday_Linux/models/gemma-2b-it.gguf"
     print(f"Copying model to {target_path} ...")
     shutil.copy(model_path, target_path)
     print("Loading Llama model...")
