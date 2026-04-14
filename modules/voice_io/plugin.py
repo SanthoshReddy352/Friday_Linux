@@ -1,8 +1,39 @@
 from core.plugin_manager import FridayPlugin
 from core.logger import logger
 import threading
+import re
 from .stt import STTEngine
 from .tts import TextToSpeech
+
+
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U00002700-\U000027BF"
+    "\U000024C2-\U0001F251"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def sanitize_for_speech(text):
+    if not text:
+        return ""
+
+    cleaned = re.sub(r"<[^>]+>", "", text)
+    cleaned = re.sub(r"```[a-zA-Z0-9_-]*", "", cleaned).replace("```", "")
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*[*+-]\s+", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*\d+\.\s+", "", cleaned)
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    cleaned = re.sub(r"[_*~]", "", cleaned)
+    cleaned = EMOJI_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 class VoiceIOPlugin(FridayPlugin):
@@ -15,6 +46,7 @@ class VoiceIOPlugin(FridayPlugin):
 
         # Expose TTS on app_core so STT can call app_core.tts.stop()
         app.tts = self.tts
+        app.stt = self.stt
 
         self.on_load()
 
@@ -46,18 +78,16 @@ class VoiceIOPlugin(FridayPlugin):
     def handle_speak(self, text):
         if not text:
             return
-        # Strip any HTML markup that may come from the GUI display layer
-        import re
-        clean_text = re.sub(r'<[^>]+>', '', text).strip()
+        clean_text = sanitize_for_speech(text)
+        if not clean_text:
+            return
         self.tts.speak_chunked(clean_text)
 
     def start_listening(self, text=None):
-        self.stt.start_listening()
-        return "Voice listening enabled."
+        return "Voice listening enabled." if self.stt.start_listening() else "I couldn't enable voice listening."
 
     def stop_listening(self, text=None):
-        self.stt.stop_listening()
-        return "Voice listening disabled."
+        return "Voice listening disabled." if self.stt.stop_listening() else "I couldn't disable voice listening."
 
     def toggle_mic(self, state):
         """Called from the GUI toggle switch."""

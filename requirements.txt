@@ -10,3 +10,7 @@ llama-cpp-python
 numpy
 sounddevice
 pyttsx3
+langgraph
+langchain-core
+chromadb
+playwright

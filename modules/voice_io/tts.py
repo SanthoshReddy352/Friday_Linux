@@ -4,6 +4,8 @@ import subprocess
 import os
 import shutil
 import tempfile
+import queue
+import time
 from core.logger import logger
 
 
@@ -24,6 +26,10 @@ class TextToSpeech:
         self._run_id = 0
         self._runtime_prepared = False
         self._runtime_lock = threading.Lock()
+        
+        self.speech_queue = queue.Queue()
+        self.worker_thread = threading.Thread(target=self._tts_worker, daemon=True)
+        self.worker_thread.start()
 
         self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         self.model_path = os.path.join(
@@ -36,6 +42,8 @@ class TextToSpeech:
         self.aplay_path = shutil.which("aplay")
         self.current_text = ""
         self.current_sentence = ""
+        self.speaking_started_at = 0.0
+        self.speaking_stopped_at = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -54,21 +62,55 @@ class TextToSpeech:
 
     def speak_chunked(self, text):
         """
-        Speak text sentence-by-sentence in a background thread.
-        Checks interrupt_event between each sentence so the user can barge in.
+        Queue text to be spoken sentence-by-sentence in the background thread.
+        Strips any JSON blocks or markdown fences before queuing.
         """
         if not text or not text.strip():
             return
-        run_id = self._next_run_id(stop_current=True)
-        threading.Thread(target=self._chunked_speak_loop, args=(text, run_id), daemon=True).start()
+        # Strip markdown code fences
+        text = re.sub(r'```[a-z]*', '', text).replace('```', '').strip()
+        # Remove any JSON object - everything between { and the final }
+        text = re.sub(r'\{[^}]*\}', '', text, flags=re.DOTALL).strip()
+        if not text:
+            return
+        self.speech_queue.put(text)
+
+    def _tts_worker(self):
+        while True:
+            text = self.speech_queue.get()
+            if text is None:
+                self.speech_queue.task_done()
+                continue
+
+            # Always clear the interrupt event before processing a new item
+            # so that stop() followed by speak_chunked() works correctly
+            self.interrupt_event.clear()
+            run_id = self._next_run_id(stop_current=False)
+            self._chunked_speak_loop(text, run_id)
+            self.speech_queue.task_done()
 
     def stop(self):
         """
         Signal the TTS to stop immediately.
         Kills the current aplay/piper subprocess and clears the speaking flag.
+        NOTE: interrupt_event is NOT left set — the worker clears it before
+        the next item, so subsequent speak_chunked() calls work correctly.
         """
         logger.info("[TTS] Stop requested.")
         self.interrupt_event.set()
+
+        # Drain the queue so pending items don't play after stop
+        drained = 0
+        while True:
+            try:
+                self.speech_queue.get_nowait()
+                self.speech_queue.task_done()
+                drained += 1
+            except queue.Empty:
+                break
+        if drained:
+            logger.debug(f"[TTS] Drained {drained} pending item(s) from queue.")
+
         with self._speak_lock:
             self._run_id += 1
             self._stop_processes(self._current_processes)
@@ -87,6 +129,10 @@ class TextToSpeech:
 
     def _set_speaking(self, state: bool):
         self._is_speaking = state
+        if state:
+            self.speaking_started_at = time.monotonic()
+        else:
+            self.speaking_stopped_at = time.monotonic()
         if not state:
             self.current_text = ""
             self.current_sentence = ""

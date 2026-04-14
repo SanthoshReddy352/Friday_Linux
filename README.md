@@ -25,6 +25,10 @@ FRIDAY is a powerful, local-first AI desktop assistant with voice interaction, i
    source .venv/bin/activate
    python main.py
    ```
+   This now launches the terminal-first FRIDAY CLI. To open the older desktop window instead, run:
+   ```bash
+   python main.py --gui
+   ```
 
 ## Documentation
 

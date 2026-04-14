@@ -6,15 +6,17 @@ import re
 import time
 import difflib
 from core.logger import logger
+from .audio_devices import apply_input_device_selection
 
 # Words that trigger an immediate TTS interrupt (barge-in)
 BARGE_IN_WORDS = {"stop", "wait", "cancel", "enough", "quiet", "silence", "pause"}
-
+FILLER_ONLY_WORDS = {"please", "yeah", "yes", "okay", "ok", "go", "uh", "um", "hmm", "hm"}
 
 class STTEngine:
     def __init__(self, app_core):
         self.app_core = app_core
-        self.is_listening = False
+        self.is_listening = False  # Software gate (False = mute/ignore)
+        self._loop_active = False # Underlying hardware stream state
         self.model = None
         self.q = queue.Queue(maxsize=32)
         self.listen_thread = None
@@ -23,14 +25,17 @@ class STTEngine:
         self._initializing = False
         self.model_name = os.getenv("FRIDAY_WHISPER_MODEL", "base.en")
         self._drop_audio_until = 0.0
+        self.device_id = None # Default device
+        self.device_label = "System default"
 
-        # VAD settings
-        self.silence_threshold = 0.005
-        self.silence_duration = 0.35
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
+        # VAD settings - tuned for background noise rejection
+        self.silence_threshold = 0.008
+        self.silence_duration = 0.6
+        self.barge_in_rms_threshold = float(os.getenv("FRIDAY_BARGE_IN_RMS", "0.045"))
+        self.barge_in_trigger_frames = max(1, int(os.getenv("FRIDAY_BARGE_IN_FRAMES", "4")))
+        self.barge_in_grace_period_s = float(os.getenv("FRIDAY_BARGE_IN_GRACE_S", "0.7"))
+        self.barge_in_post_stop_drop_s = float(os.getenv("FRIDAY_BARGE_IN_POST_STOP_DROP_S", "0.12"))
+        self._barge_in_frame_count = 0
 
     def initialize(self):
         if self.model is not None:
@@ -55,6 +60,10 @@ class STTEngine:
             logger.info(f"Initializing faster-whisper {self.model_name} model...")
             self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
             logger.info("faster-whisper loaded successfully.")
+            
+            # Start the persistent hardware stream thread immediately after model load
+            self._start_hardware_stream()
+            
             return True
         except Exception as e:
             logger.error(f"Failed to load Whisper model: {e}")
@@ -67,15 +76,23 @@ class STTEngine:
     def warm_up(self):
         threading.Thread(target=self.initialize, daemon=True).start()
 
-    # ------------------------------------------------------------------
-    # Audio callback — always runs, no hard gate
-    # ------------------------------------------------------------------
-
-    def audio_callback(self, indata, frames, time, status):
+    def audio_callback(self, indata, frames, time_info, status):
+        """Always running hardware callback."""
         if status:
             logger.warning(f"Audio status: {status}")
-        if time_module() < self._drop_audio_until:
+        
+        # Software Gate: Only put data into queue if we are actively 'listening'
+        if not self.is_listening:
             return
+
+        if time.monotonic() < self._drop_audio_until:
+            return
+
+        rms = float(np.sqrt(np.mean(indata ** 2)))
+        if self.app_core.is_speaking:
+            self._maybe_interrupt_for_live_speech(rms)
+            return
+            
         try:
             self.q.put_nowait(indata.copy())
         except queue.Full:
@@ -86,32 +103,46 @@ class STTEngine:
             try:
                 self.q.put_nowait(indata.copy())
             except queue.Full:
-                logger.debug("[STT] Dropping audio frame because processing is behind.")
+                logger.debug("[STT] Queue full even after pruning.")
 
-    # ------------------------------------------------------------------
-    # Listen loop
-    # ------------------------------------------------------------------
+    def _start_hardware_stream(self):
+        """Starts the persistent thread that keeps the sounddevice InputStream open."""
+        if self._loop_active:
+            return
+        self._loop_active = True
+        self.listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self.listen_thread.start()
+        logger.info("Persistent audio stream thread started.")
 
     def _listen_loop(self):
+        """Thread that keeps the microphone hardware active to avoid Bluetooth reconnection blips."""
         try:
             import sounddevice as sd
             samplerate = 16000
             blocksize = 800
 
-            logger.info("Started continuous listening loop with Whisper.")
+            logger.info(f"Opening persistent sd.InputStream on device {self.device_id}...")
+            # We wrap the InputStream in a try/except because some devices might not be available
             with sd.InputStream(
-                samplerate=samplerate, blocksize=blocksize, device=None,
+                samplerate=samplerate, blocksize=blocksize, device=self.device_id,
                 dtype='float32', channels=1, callback=self.audio_callback
             ):
                 audio_buffer = []
                 silence_frames = 0
                 frames_per_second = samplerate / blocksize
 
-                while self.is_listening:
+                while self._loop_active:
                     try:
+                        # We still wait on the queue, but the callback only fills it if is_listening is True
                         data = self.q.get(timeout=0.1)
                     except queue.Empty:
                         continue
+                        
+                    # If we somehow got data while not listening, clear it
+                    if not self.is_listening:
+                        audio_buffer = []
+                        continue
+
                     rms = float(np.sqrt(np.mean(data ** 2)))
 
                     if rms > self.silence_threshold:
@@ -149,120 +180,153 @@ class STTEngine:
                                 logger.debug("[Whisper] No speech identified.")
 
         except Exception as e:
-            logger.error(f"Error in continuous listening loop: {e}")
-            self.is_listening = False
-
-    # ------------------------------------------------------------------
-    # Text processing — handles barge-in and normal commands
-    # ------------------------------------------------------------------
+            logger.error(f"Error in persistent listening loop: {e}")
+            self._loop_active = False
 
     def _process_voice_text(self, text):
         text_clean = self._sanitize_text(text)
 
-        # --- Barge-in detection (works even while TTS is playing) ---
+        # Basic barge-in logic
         if self.app_core.is_speaking:
             words = set(text_clean.split())
-            is_barge_in = bool(words & BARGE_IN_WORDS)
-            # Also treat any wake-word prefix as barge-in
-            is_wake = "friday" in text_clean
-            is_new_request = self._is_new_user_request(text_clean)
-
-            if is_barge_in or is_wake or is_new_request:
-                logger.info(f"[STT] Barge-in detected: '{text_clean}'")
-                tts = getattr(self.app_core, 'tts', None)
-                if tts:
-                    tts.stop()
+            if bool(words & BARGE_IN_WORDS) or "friday" in text_clean or self._looks_like_fresh_command(text_clean):
+                logger.info(f"[STT] Barge-in detected during speech: '{text_clean}'")
+                if self.app_core.tts:
+                    self.app_core.tts.stop()
                 self._clear_audio_queue()
-                self._drop_audio_until = time_module() + 0.12
+                self._drop_audio_until = time.monotonic() + 0.15
 
-                # If it was only a stop word, don't process further
-                if is_barge_in and not is_wake:
-                    return
-
-                # Strip barge-in words and wake word, then process the rest
                 for word in BARGE_IN_WORDS | {"friday", "hey"}:
                     text_clean = text_clean.replace(word, "")
-                text_clean = self._sanitize_text(text_clean)
-                if not text_clean:
+                text_clean = self._clean_command_text(text_clean)
+                if not text_clean or text_clean in FILLER_ONLY_WORDS:
                     return
             else:
-                # TTS is speaking and no barge-in trigger — ignore
-                logger.debug("[STT] Ignoring audio: TTS is speaking, no barge-in detected.")
                 return
 
-        # --- Normal wake-word stripping ---
         if "friday" in text_clean or "hey friday" in text_clean:
-            logger.info("Wake word detected!")
-            text_clean = self._sanitize_text(
+            text_clean = self._clean_command_text(
                 text_clean.replace("hey friday", "").replace("friday", "")
             )
+        else:
+            text_clean = self._clean_command_text(text_clean)
 
         if not text_clean:
             return
 
         self.app_core.process_input(text_clean, source="voice")
 
-    # ------------------------------------------------------------------
-    # Start / Stop
-    # ------------------------------------------------------------------
+    def _maybe_interrupt_for_live_speech(self, rms):
+        if not self.app_core.is_speaking:
+            self._barge_in_frame_count = 0
+            return
+
+        tts = getattr(self.app_core, "tts", None)
+        now = time.monotonic()
+        speaking_started_at = getattr(tts, "speaking_started_at", 0.0) if tts else 0.0
+        if speaking_started_at and (now - speaking_started_at) < self.barge_in_grace_period_s:
+            self._barge_in_frame_count = 0
+            return
+
+        if rms >= self.barge_in_rms_threshold:
+            self._barge_in_frame_count += 1
+        else:
+            self._barge_in_frame_count = 0
+            return
+
+        if self._barge_in_frame_count < self.barge_in_trigger_frames:
+            return
+
+        self._barge_in_frame_count = 0
+        if tts:
+            logger.info("[STT] Live barge-in detected from voice activity.")
+            self._clear_audio_queue()
+            self._drop_audio_until = now + self.barge_in_post_stop_drop_s
+            tts.stop()
+
+    def _looks_like_fresh_command(self, text):
+        if not text:
+            return False
+
+        current_text = getattr(getattr(self.app_core, "tts", None), "current_text", "") or ""
+        similarity = difflib.SequenceMatcher(None, text, self._sanitize_text(current_text)).ratio()
+        if similarity >= 0.82:
+            return False
+
+        command_starters = (
+            "what", "how", "why", "when", "where", "who",
+            "open", "search", "find", "read", "summarize",
+            "create", "write", "append", "save", "tell",
+            "show", "launch", "start", "stop",
+        )
+        return any(text.startswith(starter) for starter in command_starters)
 
     def start_listening(self):
+        """Lightweight software gate activation."""
         if not self.model and not self.initialize():
-            logger.error("Cannot start listening: STT model not loaded.")
-            return
+            logger.error("Cannot start listening: STT model or hardware stream failed.")
+            return False
+            
         if self.is_listening:
-            return
+            return True
+            
         self._clear_audio_queue()
+        self._barge_in_frame_count = 0
         self.is_listening = True
-        self.listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
-        self.listen_thread.start()
-        logger.info("Microphone listening activated.")
+        logger.info("Microphone software gate OPENED.")
+        return True
 
     def stop_listening(self):
+        """Lightweight software gate deactivation."""
         self.is_listening = False
+        self._barge_in_frame_count = 0
         self._clear_audio_queue()
-        logger.info("Microphone listening deactivated.")
+        logger.info("Microphone software gate CLOSED.")
+        return True
+
+    def set_device(self, device_id):
+        """Switch device by restarting the underlying hardware loop."""
+        selection = apply_input_device_selection(device_id)
+        next_device = selection.get("device")
+        next_label = selection.get("label", "System default")
+
+        if self.device_id == next_device and self.device_label == next_label:
+            return
+
+        logger.info("Switching mic hardware to device: %s", next_label)
+        self.device_id = next_device
+        self.device_label = next_label
+
+        # We must restart the actual hardware stream if the device changes
+        self._loop_active = False
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.listen_thread.join(timeout=1.0)
+        time.sleep(0.5)
+        self._start_hardware_stream()
+
+    def shutdown(self):
+        """Cleanly close the hardware stream and stop the process."""
+        logger.info("STT: Shutting down persistent audio stream...")
+        self._loop_active = False
+        self.is_listening = False
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.listen_thread.join(timeout=1.0)
+        logger.info("STT: Hardware stream closed.")
 
     def _sanitize_text(self, text):
-        if not isinstance(text, str):
-            return ""
+        if not isinstance(text, str): return ""
         cleaned = text.lower().strip()
         cleaned = re.sub(r"[^\w\s]", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
-    def _is_new_user_request(self, text_clean):
-        if not text_clean or len(text_clean) < 3:
-            return False
-
-        # Single filler-like words during speech are usually noise or echo.
-        if len(text_clean.split()) == 1 and text_clean in {"yeah", "okay", "ok", "hmm", "uh", "um"}:
-            return False
-
-        tts = getattr(self.app_core, "tts", None)
-        if not tts:
-            return True
-
-        current_sentence = self._sanitize_text(getattr(tts, "current_sentence", "") or "")
-        current_text = self._sanitize_text(getattr(tts, "current_text", "") or "")
-        if not current_sentence and not current_text:
-            return True
-
-        references = [ref for ref in (current_sentence, current_text) if ref]
-        if any(text_clean == ref for ref in references):
-            return False
-        if any(text_clean in ref for ref in references if len(text_clean) >= 5):
-            return False
-
-        similarities = [
-            difflib.SequenceMatcher(None, text_clean, ref).ratio()
-            for ref in references
-        ]
-        max_similarity = max(similarities, default=0.0)
-        if max_similarity >= 0.7:
-            return False
-
-        return True
+    def _clean_command_text(self, text):
+        assistant_context = getattr(self.app_core, "assistant_context", None)
+        if assistant_context and hasattr(assistant_context, "clean_voice_transcript"):
+            cleaned = assistant_context.clean_voice_transcript(text)
+            if isinstance(cleaned, str) and cleaned:
+                return cleaned
+        return self._sanitize_text(text)
 
     def _clear_audio_queue(self):
         while True:
@@ -270,7 +334,3 @@ class STTEngine:
                 self.q.get_nowait()
             except queue.Empty:
                 break
-
-
-def time_module():
-    return time.monotonic()

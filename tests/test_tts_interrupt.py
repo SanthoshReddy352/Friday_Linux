@@ -119,3 +119,11 @@ def test_split_sentences_single():
     from modules.voice_io.tts import _split_sentences
     result = _split_sentences("Just one sentence")
     assert len(result) == 1
+
+
+def test_sanitize_for_speech_strips_markdown_and_emoji():
+    from modules.voice_io.plugin import sanitize_for_speech
+
+    result = sanitize_for_speech("**Heading**\n* Item one\n`code`\nDone 😊")
+
+    assert result == "Heading\nItem one\ncode\nDone"

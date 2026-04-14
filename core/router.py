@@ -3,8 +3,20 @@ import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from dataclasses import dataclass
+
 from core.intent_recognizer import IntentRecognizer
 from core.logger import logger
+from core.model_manager import LocalModelManager
+
+
+@dataclass
+class RoutingDecision:
+    source: str
+    tool_name: str = ""
+    args: dict | None = None
+    spoken_ack: str = ""
 
 
 class CommandRouter:
@@ -16,19 +28,54 @@ class CommandRouter:
         self._tool_patterns = {}
         self._tools_prompt_cache = None
         self.llm = None
-        self.llm_model_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "models", "gemma-2b-it.gguf"
-        )
+        self.chat_llm = None
+        self.tool_llm = None
         self._llm_lock = threading.Lock()
+        self._tool_llm_lock = threading.Lock()
+        # Set to True when voice_response was already published during routing,
+        # so that emit_assistant_message can skip redundant TTS.
+        self._voice_already_spoken = False
         self._llm_load_failed = False
+        self._tool_llm_load_failed = False
         self._last_context = {}
-        # Deterministic routing is faster and more reliable than LLM tool selection.
-        self.enable_llm_tool_routing = os.getenv("FRIDAY_USE_LLM_TOOL_ROUTER", "0") == "1"
+        self.assistant_context = None
+        self.context_store = None
+        self.workflow_orchestrator = None
+        self.session_id = None
+        self.current_route_source = "idle"
+        self.current_model_lane = "idle"
+        self.last_routing_decision = RoutingDecision(source="idle", args={})
+        # Use LLM for tool routing by default, but allow override.
+        self.enable_llm_tool_routing = os.getenv("FRIDAY_USE_LLM_TOOL_ROUTER", "1") == "1"
+        self.routing_policy = "selective_executor"
+        self.tool_timeout_ms = int(os.getenv("FRIDAY_TOOL_TIMEOUT_MS", "8000"))
+        self.tool_max_tokens = int(os.getenv("FRIDAY_TOOL_MAX_TOKENS", "96"))
+        self.tool_target_max_tokens = int(os.getenv("FRIDAY_TOOL_TARGET_MAX_TOKENS", "64"))
+        self.tool_top_p = float(os.getenv("FRIDAY_TOOL_TOP_P", "0.2"))
+        self.tool_json_response = os.getenv("FRIDAY_TOOL_JSON_RESPONSE", "1") == "1"
+        self.model_manager = LocalModelManager(base_dir=os.path.dirname(os.path.dirname(__file__)))
+        self.refresh_runtime_settings()
         self.intent_recognizer = IntentRecognizer(self)
         if os.path.exists(self.llm_model_path):
-            logger.info(f"[router] Gemma intent model available for lazy loading: {self.llm_model_path}")
+            logger.info("[router] Chat model available for loading: %s", self.llm_model_path)
         else:
-            logger.warning(f"Llama model not found at {self.llm_model_path}. Chat will be unavailable.")
+            logger.warning("Chat model not found at %s. Conversational fallback will be unavailable.", self.llm_model_path)
+        if os.path.exists(self.tool_model_path):
+            logger.info("[router] Tool model available for loading: %s", self.tool_model_path)
+        else:
+            logger.warning("Tool model not found at %s. Selective tool reasoning will be unavailable.", self.tool_model_path)
+
+    def refresh_runtime_settings(self, config=None):
+        self.model_manager.refresh_from_config(config)
+        self.llm_model_path = self.model_manager.profile("chat").path
+        self.tool_model_path = self.model_manager.profile("tool").path
+        if config is not None and hasattr(config, "get"):
+            self.routing_policy = config.get("routing.policy", "selective_executor")
+            self.tool_timeout_ms = int(config.get("routing.tool_timeout_ms", self.tool_timeout_ms))
+            self.tool_max_tokens = int(config.get("routing.tool_max_tokens", self.tool_max_tokens))
+            self.tool_target_max_tokens = int(config.get("routing.tool_target_max_tokens", self.tool_target_max_tokens))
+            self.tool_top_p = float(config.get("routing.tool_top_p", self.tool_top_p))
+            self.tool_json_response = bool(config.get("routing.tool_json_response", self.tool_json_response))
 
     # ------------------------------------------------------------------
     # Primary API: structured tool registration
@@ -94,36 +141,123 @@ class CommandRouter:
 
     def process_text(self, text):
         """
-        Process user text using Gemma tool-calling, falling back to
-        keyword/fuzzy matching when LLM is unavailable or fails.
+        Process user text using deterministic routing first, then
+        selective Qwen tool reasoning, and finally Gemma chat fallback.
         Returns a response string.
         """
+        self._voice_already_spoken = False
+        self.current_route_source = "idle"
+        self.current_model_lane = "idle"
+        self.last_routing_decision = RoutingDecision(source="idle", args={})
         logger.info(f"Router received: {text}")
         text_lower = self._normalize_text(text)
         if not text_lower or not re.search(r"[a-z0-9]", text_lower):
             return ""
+        if not self._is_confirmation_input(text_lower):
+            dialog_state = getattr(self, "dialog_state", None)
+            if dialog_state and hasattr(dialog_state, "clear_pending_clarification"):
+                dialog_state.clear_pending_clarification()
 
-        # 1. Deterministic plan for one or more concrete actions
+        # --- TRANSCRIPT CLEANING ---
+        # Remove common voice-recognition stutters and repetitive phrases
+        stutter_patterns = [
+            r"\b(what do you say|what do you say)\b", 
+            r"\b(can you tell me|can you tell me)\b",
+            r"\b(tell me|tell me)\b"
+        ]
+        text_clean = text_lower
+        for p in stutter_patterns:
+            text_clean = re.sub(p, "", text_clean).strip()
+
+        # 1. Deterministic Fast-Path for simple commands (high confidence)
+        best_route = self._find_best_route(text_clean, min_score=80)
         action_plan = self._plan_actions(text)
-        if action_plan:
+
+        if len(action_plan) > 1:
+            self._set_routing_decision("deterministic", tool_name="multi_action_plan")
             return self._execute_plan(action_plan)
 
-        # 2. Optional experimental LLM tool selection
-        if self.enable_llm_tool_routing and self.get_llm() and self.tools:
-            result = self._infer_with_llm(text)
+        # If the intent recognizer fully resolved a launch_app action with
+        # specific app_names, trust it — no need to defer to the LLM.
+        if (
+            len(action_plan) == 1
+            and action_plan[0]["route"]["spec"]["name"] == "launch_app"
+            and action_plan[0]["args"].get("app_names")
+        ):
+            logger.info("[router] Fast-path multi-app launch (intent recognizer resolved app names)")
+            self._set_routing_decision("deterministic", tool_name="launch_app", args=action_plan[0]["args"])
+            return self._execute_plan(action_plan)
+
+        if len(action_plan) == 1:
+            planned_route = action_plan[0]["route"]
+            logger.info(f"[router] Fast-path (planned) routing: {planned_route['spec']['name']}")
+            self._set_routing_decision("deterministic", tool_name=planned_route["spec"]["name"], args=action_plan[0]["args"])
+            return self._execute_plan(action_plan)
+
+        is_complex_action = best_route and best_route["spec"]["name"] in (
+            "search_file",
+            "open_file",
+            "read_file",
+            "summarize_file",
+            "list_folder_contents",
+            "open_folder",
+        )
+        if best_route and not is_complex_action:
+            logger.info(f"[router] Match Found: Exact/Fuzzy match on tool '{best_route['spec']['name']}'")
+            self._set_routing_decision("deterministic", tool_name=best_route["spec"]["name"], args={})
+            result = self._invoke_route(best_route, text, {})
+            self._last_context = {"tool": best_route["spec"]["name"], "domain": best_route["spec"]["name"], "args": {}}
+            return result
+
+        if not action_plan:
+            workflow_result = self._continue_active_workflow(text)
+            if workflow_result is not None:
+                return workflow_result
+
+        # 2. Selective Qwen tool reasoning for ambiguous or complex tool requests
+        should_use_tool_model = (
+            self.routing_policy == "selective_executor"
+            and self.enable_llm_tool_routing
+            and self.tools
+            and (is_complex_action or self._should_use_tool_model(text_clean, best_route, action_plan))
+        )
+        if should_use_tool_model and self.get_tool_llm():
+            if is_complex_action:
+                tool_label = best_route['spec']['name'].replace('_', ' ')
+                self.event_bus.publish("voice_response", f"Sure, preparing to {tool_label}...")
+            else:
+                self.event_bus.publish("voice_response", "Just a moment...")
+
+            result = self._infer_with_tool_llm(text, target_tool=best_route if is_complex_action else None)
             if result is not None:
                 return result
 
-        # 3. Deterministic fallback
+        # 3. Deterministic fallback for actions
+        if action_plan:
+            action = action_plan[0]
+            self._set_routing_decision("deterministic", tool_name=action["route"]["spec"]["name"], args=action["args"])
+            return self._execute_plan(action_plan)
+
+        # 4. Deterministic fallback
         fallback_result = self._keyword_fallback(text, text_lower)
         if fallback_result is not None:
             return fallback_result
 
-        # 4. Final fallback to conversational chat
+        workflow_result = self._continue_active_workflow(text)
+        if workflow_result is not None:
+            return workflow_result
+
+        if should_use_tool_model:
+            self._set_routing_decision("fallback_clarify")
+            return "I need a bit more detail before I can do that."
+
+        # 5. Final fallback to conversational chat
         llm_chat = self._tools_by_name.get("llm_chat")
         if llm_chat:
+            logger.info("[router] No specific tool matched. Falling back to conversational chat.")
             try:
-                return llm_chat["callback"](text, {"query": text})
+                self._set_routing_decision("gemma_chat", tool_name="llm_chat", args={"query": text})
+                return self._remember_possible_clarification(llm_chat["callback"](text, {"query": text}))
             except Exception as e:
                 logger.error(f"Error executing llm_chat fallback: {e}")
                 return f"Error running command: {e}"
@@ -133,6 +267,101 @@ class CommandRouter:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _set_routing_decision(self, source, tool_name="", args=None, spoken_ack=""):
+        self.current_route_source = source
+        if source == "gemma_chat":
+            self.current_model_lane = "chat"
+        elif source == "qwen_tool":
+            self.current_model_lane = "tool"
+        elif source == "fallback_clarify":
+            self.current_model_lane = "tool"
+        else:
+            self.current_model_lane = "deterministic"
+        self.last_routing_decision = RoutingDecision(
+            source=source,
+            tool_name=tool_name or "",
+            args=dict(args or {}),
+            spoken_ack=spoken_ack or "",
+        )
+
+    def _should_use_tool_model(self, text_clean, best_route, action_plan):
+        if self.llm is not None:
+            return True
+        if action_plan:
+            return False
+        if best_route and best_route["spec"]["name"] == "llm_chat":
+            return False
+        if self._looks_conversational(text_clean):
+            return False
+        return self._is_tool_oriented_text(text_clean)
+
+    def _looks_conversational(self, text_clean):
+        patterns = (
+            r"^(?:hi|hello|hey)\b",
+            r"\b(?:how are you|what is your name|who are you)\b",
+            r"\b(?:tell me something|let'?s talk|chat with me)\b",
+        )
+        return any(re.search(pattern, text_clean) for pattern in patterns)
+
+    def _is_tool_oriented_text(self, text_clean):
+        starters = (
+            "open", "launch", "start", "bring up", "run", "execute", "take", "capture", "find", "search",
+            "locate", "set", "save", "read", "show", "list", "check", "summarize",
+            "summary", "remind", "enable", "disable", "turn", "mute", "unmute",
+            "increase", "decrease", "lower", "raise", "pause", "stop",
+        )
+        if any(text_clean.startswith(starter) for starter in starters):
+            return True
+        return bool(re.search(r"\b(?:run|open|launch|start|execute)\b.*\b(?:browser|app|application|file|folder)\b", text_clean))
+
+    def _run_tool_model_request(self, llm, text, target_tool=None):
+        prompt = self._build_router_prompt(
+            text,
+            dialog_state=getattr(self, "dialog_state", None),
+            target_tool=target_tool,
+        )
+        messages = [{"role": "user", "content": prompt}]
+        output_tokens = max(
+            24,
+            self.tool_target_max_tokens if target_tool else self.tool_max_tokens,
+        )
+
+        def _call():
+            if hasattr(llm, "create_chat_completion"):
+                kwargs = {
+                    "messages": messages,
+                    "max_tokens": output_tokens,
+                    "temperature": self.model_manager.profile("tool").temperature,
+                    "top_p": self.tool_top_p,
+                }
+                if self.tool_json_response:
+                    kwargs["response_format"] = {"type": "json_object"}
+                try:
+                    return llm.create_chat_completion(**kwargs)
+                except TypeError:
+                    kwargs.pop("response_format", None)
+                    return llm.create_chat_completion(**kwargs)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": llm(
+                                prompt,
+                                max_tokens=output_tokens,
+                                temperature=self.model_manager.profile("tool").temperature,
+                            )["choices"][0]["text"]
+                        }
+                    }
+                ]
+            }
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                return future.result(timeout=max(1, self.tool_timeout_ms) / 1000)
+            except FutureTimeout as exc:
+                raise TimeoutError(f"tool model exceeded {self.tool_timeout_ms}ms") from exc
 
     def _build_tools_prompt(self):
         """Serialize available tools into a compact JSON string for the prompt."""
@@ -149,58 +378,59 @@ class CommandRouter:
         return self._tools_prompt_cache
 
     def get_llm(self):
+        if self.chat_llm is not None:
+            return self.chat_llm
         if self.llm is not None:
             return self.llm
         if self._llm_load_failed:
             return None
-        if not os.path.exists(self.llm_model_path):
-            return None
 
         with self._llm_lock:
+            if self.chat_llm is not None:
+                return self.chat_llm
             if self.llm is not None:
                 return self.llm
-            if self._llm_load_failed:
-                return None
-            try:
-                from llama_cpp import Llama
-
-                logger.info(f"Loading Gemma intent model from {self.llm_model_path}...")
-                self.llm = Llama(
-                    model_path=self.llm_model_path,
-                    n_ctx=2048,
-                    n_threads=max(1, (os.cpu_count() or 2) - 1),
-                    verbose=False,
-                )
-            except Exception as e:
-                logger.error(f"Error initializing Llama: {e}")
+            model = self.model_manager.get_chat_model()
+            if model is None:
                 self._llm_load_failed = True
-                self.llm = None
-        return self.llm
+                return None
+            self.chat_llm = model
+            return self.chat_llm
 
-    def _infer_with_llm(self, text):
+    def get_tool_llm(self):
+        if self.tool_llm is not None:
+            return self.tool_llm
+        if self.llm is not None and self.tool_llm is None:
+            return self.llm
+        if self._tool_llm_load_failed:
+            return None
+
+        with self._tool_llm_lock:
+            if self.tool_llm is not None:
+                return self.tool_llm
+            if self.llm is not None and self.tool_llm is None:
+                return self.llm
+            model = self.model_manager.get_tool_model()
+            if model is None:
+                self._tool_llm_load_failed = True
+                return None
+            self.tool_llm = model
+            return self.tool_llm
+
+    def _infer_with_llm(self, text, target_tool=None):
+        return self._infer_with_tool_llm(text, target_tool=target_tool)
+
+    def _infer_with_tool_llm(self, text, target_tool=None):
         """
-        Ask Gemma to pick a tool and provide args.
+        Ask the tool model to pick a tool and provide args.
         Returns a response string, or None if inference/parsing fails.
         """
-        try:
-            tools_json = self._build_tools_prompt()
-            prompt = (
-                f"You are FRIDAY, an offline desktop assistant. "
-                f"Given the user's input and the list of available tools, "
-                f"reply with EXACTLY ONE JSON object selecting the best tool.\n\n"
-                f"Available tools:\n{tools_json}\n\n"
-                f"User input: \"{text}\"\n\n"
-                f"Reply format (strict JSON, no markdown, nothing else):\n"
-                f'{{\"tool\": \"<tool_name>\", \"args\": {{<key>: <value>}}}}'
-            )
+        llm = self.get_tool_llm()
+        if llm is None:
+            return None
 
-            messages = [
-                {"role": "user", "content": prompt}
-            ]
-            if hasattr(self.llm, "create_chat_completion"):
-                res = self.llm.create_chat_completion(messages=messages, max_tokens=150, temperature=0.1)
-            else:
-                res = self.llm(prompt, max_tokens=150, temperature=0.1)
+        try:
+            res = self._run_tool_model_request(llm, text, target_tool=target_tool)
 
             choice = res["choices"][0]
             raw_output = ""
@@ -218,26 +448,35 @@ class CommandRouter:
             if raw_output.count("{") > raw_output.count("}"):
                 raw_output += "}"
 
-            logger.info(f"[LLM] Raw tool-call output: {raw_output}")
-            data = json.loads(raw_output)
+            logger.info(f"[Tool LLM] Raw tool-call output: {raw_output}")
+            data = self._parse_llm_payload(raw_output)
+            if data is None:
+                return None
 
-            tool_name = data.get("tool", "").strip()
-            args = data.get("args", {})
-            if not isinstance(args, dict):
-                args = {}
+            if data["mode"] in {"chat", "clarify"} and data["reply"]:
+                self._set_routing_decision("qwen_tool", tool_name=data["tool"], args=data["args"], spoken_ack=data["say"])
+                return self._remember_possible_clarification(data["reply"])
 
-            logger.info(f"[LLM] Tool: '{tool_name}', Args: {args}")
+            tool_name = data["tool"]
+            args = data["args"]
+
+            logger.info(f"[Tool LLM] Tool: '{tool_name}', Args: {args}")
 
             # Find and invoke the matching tool
             route = self._tools_by_name.get(tool_name)
             if route:
-                return route["callback"](text, args)
+                if data["say"]:
+                    self.event_bus.publish("voice_response", data["say"])
+                self._set_routing_decision("qwen_tool", tool_name=tool_name, args=args, spoken_ack=data["say"])
+                return self._invoke_route(route, text, args)
 
-            logger.warning(f"[LLM] Tool '{tool_name}' not found in registered tools.")
+            logger.warning(f"[Tool LLM] Tool '{tool_name}' not found in registered tools.")
         except json.JSONDecodeError as e:
-            logger.error(f"[LLM] JSON parse failed: {e}")
+            logger.error(f"[Tool LLM] JSON parse failed: {e}")
+        except TimeoutError as e:
+            logger.warning(f"[Tool LLM] Inference timed out: {e}")
         except Exception as e:
-            logger.error(f"[LLM] Inference error: {e}")
+            logger.error(f"[Tool LLM] Inference error: {e}")
 
         return None
 
@@ -245,6 +484,7 @@ class CommandRouter:
         """Keyword + fuzzy matching fallback."""
         best_route = self._find_best_route(text)
         if best_route:
+            self._set_routing_decision("deterministic", tool_name=best_route["spec"]["name"], args={})
             result = self._invoke_route(best_route, text, {})
             self._last_context = {"tool": best_route["spec"]["name"], "domain": best_route["spec"]["name"], "args": {}}
             return result
@@ -261,6 +501,7 @@ class CommandRouter:
             best = closest[0]
             logger.info(f"[router] Fuzzy matched '{text_lower}' → '{best}'")
             route = alias_to_tool[best]
+            self._set_routing_decision("deterministic", tool_name=route["spec"]["name"], args={})
             result = self._invoke_route(route, text, {})
             self._last_context = {"tool": route["spec"]["name"], "domain": route["spec"]["name"], "args": {}}
             return result
@@ -268,12 +509,31 @@ class CommandRouter:
         logger.debug("No handler matched the command.")
         return None
 
+    def _continue_active_workflow(self, text):
+        orchestrator = getattr(self, "workflow_orchestrator", None)
+        session_id = getattr(self, "session_id", None)
+        if not orchestrator or not session_id:
+            return None
+
+        result = orchestrator.continue_active(
+            text,
+            session_id,
+            context={"last_context": dict(self._last_context or {})},
+        )
+        if not result or not result.handled:
+            return None
+
+        self._set_routing_decision("workflow", tool_name=result.workflow_name, args=result.state)
+        return self._finalize_response(result.response)
+
     def _normalize_text(self, text):
         return " ".join(text.lower().strip().split())
 
     def _invoke_route(self, route, text, args):
         try:
-            return route["callback"](text, args)
+            response = route["callback"](text, args)
+            self._remember_tool_use(route["spec"]["name"], args)
+            return self._finalize_response(response)
         except Exception as e:
             logger.error(f"Error executing tool '{route['spec']['name']}': {e}")
             return f"Error running command: {e}"
@@ -346,6 +606,130 @@ class CommandRouter:
             "domain": action.get("domain", action["route"]["spec"]["name"]),
             "args": dict(action.get("args", {})),
         }
+        self._remember_tool_use(action["route"]["spec"]["name"], action.get("args", {}))
+
+    def _remember_tool_use(self, tool_name, args):
+        assistant_context = getattr(self, "assistant_context", None)
+        if assistant_context:
+            assistant_context.remember_tool_use(tool_name, args)
+
+    def _finalize_response(self, response):
+        if not isinstance(response, str):
+            return response
+        assistant_context = getattr(self, "assistant_context", None)
+        if assistant_context:
+            response = assistant_context.humanize_tool_result(response)
+        return self._remember_possible_clarification(response)
+
+    def _remember_possible_clarification(self, response):
+        dialog_state = getattr(self, "dialog_state", None)
+        if not dialog_state or not isinstance(response, str):
+            return response
+
+        search_match = re.search(
+            r"Would you like me to search for [\"'](.+?)[\"'](?: on (YouTube(?: Music)?))?\?",
+            response,
+            re.IGNORECASE,
+        )
+        if search_match:
+            query = search_match.group(1).strip()
+            platform = (search_match.group(2) or "").lower()
+            action_text = (
+                f"play {query} in youtube music"
+                if "music" in platform
+                else f"play {query} in youtube"
+            )
+            dialog_state.set_pending_clarification(
+                action_text=action_text,
+                prompt=response,
+                cancel_message="Okay. Tell me what you'd like instead.",
+            )
+            return response
+
+        meant_match = re.search(r"\"([^\"]+)\"\.\s*Is that what you meant\?", response, re.IGNORECASE)
+        if not meant_match:
+            meant_match = re.search(r"(?:^|[\s])'([^']+)'\.\s*Is that what you meant\?", response, re.IGNORECASE)
+        if meant_match:
+            dialog_state.set_pending_clarification(
+                action_text=meant_match.group(1).strip(),
+                prompt=response,
+                cancel_message="Okay. Please say it again in a different way.",
+            )
+        return response
+
+    def _is_confirmation_input(self, text_lower):
+        normalized = text_lower.strip(" .!?")
+        return normalized in {
+            "yes", "yeah", "yep", "sure", "okay", "ok", "open it", "do it",
+            "no", "nope", "cancel", "stop",
+        }
+
+    def _build_router_prompt(self, text, dialog_state=None, target_tool=None):
+        assistant_context = getattr(self, "assistant_context", None)
+        if assistant_context:
+            return assistant_context.build_router_prompt(
+                text,
+                tools=json.loads(self._build_tools_prompt()),
+                dialog_state=dialog_state,
+                last_context=self._last_context,
+                target_tool=target_tool,
+            )
+
+        if target_tool:
+            tools_json = json.dumps([{
+                "name": target_tool["spec"]["name"],
+                "description": target_tool["spec"]["description"],
+                "parameters": target_tool["spec"].get("parameters", {})
+            }])
+        else:
+            tools_json = self._build_tools_prompt()
+
+        context_str = ""
+        if dialog_state:
+            state_dict = {}
+            if dialog_state.current_folder:
+                state_dict["last_folder"] = dialog_state.current_folder
+            if dialog_state.selected_file:
+                state_dict["last_file"] = dialog_state.selected_file
+            if state_dict:
+                context_str = f"Context: {json.dumps(state_dict)}\n"
+
+        return (
+            "ROUTER_HEADER: FAST_JSON_TOOL_ROUTER_V2\n"
+            "ROUTER_FLAGS: JSON_ONLY, COMPACT_ARGS, NO_EXTRA_TEXT\n"
+            f"You are a router. Pick the best tool.\n"
+            f"{context_str}Tools: {tools_json}\nUser: {text}\n"
+            f"First, speak a short natural sentence (e.g. 'Sure, let me check that.'), "
+            f"then output exactly 1 JSON object: {{\"tool\": \"name\", \"args\": {{\"key\": \"val\"}}}}"
+        )
+
+    def _parse_llm_payload(self, raw_output):
+        data = json.loads(raw_output)
+        if not isinstance(data, dict):
+            return None
+
+        tool_name = data.get("tool", "")
+        if not isinstance(tool_name, str):
+            tool_name = ""
+
+        args = data.get("args", {})
+        if not isinstance(args, dict):
+            args = {}
+
+        mode = data.get("mode", "tool")
+        if mode not in {"tool", "chat", "clarify"}:
+            mode = "tool"
+
+        say = data.get("say", "")
+        reply = data.get("reply", "")
+
+        return {
+            "mode": mode,
+            "tool": tool_name.strip(),
+            "args": args,
+            "say": say.strip() if isinstance(say, str) else "",
+            "reply": reply.strip() if isinstance(reply, str) else "",
+        }
 
     def _split_into_clauses(self, text):
         clauses = [text]
@@ -372,6 +756,8 @@ class CommandRouter:
         return [clause for clause in final_clauses if clause]
 
     def _split_on_action_and(self, clause):
+        if re.search(r"\bopen\s+youtube(?:\s+music)?\b.*\band\s+play\b", clause, re.IGNORECASE):
+            return [clause.strip()]
         lower_clause = clause.lower()
         marker = " and "
         idx = lower_clause.find(marker)
@@ -388,7 +774,7 @@ class CommandRouter:
             "open", "launch", "start", "take", "capture", "find", "search", "locate",
             "open file", "set", "save", "read", "show", "list", "get", "check",
             "tell", "what", "remind", "enable", "disable", "turn", "mute", "unmute",
-            "increase", "decrease", "stop", "pause",
+            "increase", "decrease", "stop", "pause", "play",
         )
         normalized = self._normalize_text(text)
         if any(normalized.startswith(starter) for starter in starters):
@@ -468,10 +854,12 @@ class CommandRouter:
             "read_notes": {"read notes", "show notes", "my notes"},
             "get_time": {"time", "what time is it"},
             "get_date": {"date", "today's date", "what day is it"},
+            "manage_file": {"create file", "make file", "new file"},
             "enable_voice": {"enable voice", "start listening", "turn on mic", "turn on microphone"},
             "disable_voice": {"disable voice", "stop listening", "turn off mic", "turn off microphone"},
             "confirm_yes": {"yes", "yeah", "open it", "do it", "sure", "okay"},
             "confirm_no": {"no", "nope", "cancel", "stop that"},
+            "select_file_candidate": {"first one", "second one", "this one", "that one", "option 1", "option 2"},
         }
         return defaults.get(tool_name, set())
 
@@ -492,6 +880,7 @@ class CommandRouter:
             "read_notes": {"notes", "read", "show"},
             "get_time": {"time", "clock"},
             "get_date": {"date", "day", "today"},
+            "manage_file": {"create", "file", "document", "write"},
             "enable_voice": {"voice", "microphone", "mic", "listen"},
             "disable_voice": {"voice", "microphone", "mic", "stop"},
             "confirm_yes": {"yes", "confirm"},
@@ -514,11 +903,13 @@ class CommandRouter:
             "set_reminder": [r"\bremind me\b", r"\bset (?:a )?reminder\b"],
             "save_note": [r"\b(?:save note|note down|remember this|remember that)\b"],
             "read_notes": [r"\b(?:read|show|list)\s+(?:my\s+)?notes\b"],
-            "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b"],
-            "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b"],
+            "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b", r"\btime\b"],
+            "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b", r"\bdate\b"],
+            "manage_file": [r"\b(?:create|make)\s+(?:a\s+)?file\b"],
             "enable_voice": [r"\b(?:enable|start|turn on)\s+(?:the\s+)?(?:mic|microphone|voice)\b"],
             "disable_voice": [r"\b(?:disable|stop|turn off)\s+(?:the\s+)?(?:mic|microphone|voice)\b"],
             "confirm_yes": [r"^(?:yes|yeah|yep|sure|okay|ok|open it|do it)$"],
             "confirm_no": [r"^(?:no|nope|cancel|stop)$"],
+            "select_file_candidate": [r"^(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+(?:one|file)$", r"^(?:the\s+)?(?:this|that)\s+(?:one|file)$", r"^(?:option\s+)?\d+$", r"^(?:the\s+)?(?:pdf|txt|md|json|csv|py|docx)\s+one$"],
         }
         return defaults.get(tool_name, [])

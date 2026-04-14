@@ -24,6 +24,8 @@ def read_file_text(filepath, max_chars=MAX_TEXT_CHARS):
     extension = os.path.splitext(filepath)[1].lower()
 
     try:
+        if not extension:
+            return _read_plain_text(filepath, max_chars=max_chars)
         if extension in TEXT_EXTENSIONS:
             return _read_plain_text(filepath, max_chars=max_chars)
         if extension == ".docx":

@@ -111,6 +111,23 @@ def test_llm_bad_json_falls_back(router):
     assert result == "fallback_hit"
 
 
+def test_llm_can_return_chat_reply(router):
+    router.register_tool(
+        {"name": "llm_chat", "description": "Chat.", "parameters": {"query": "string"}},
+        lambda t, a: "fallback chat",
+    )
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": '{"mode":"chat","reply":"I can help with that."}'}}]
+    }
+    router.llm = mock_llm
+    router.enable_llm_tool_routing = True
+
+    result = router.process_text("tell me something interesting")
+
+    assert result == "I can help with that."
+
+
 def test_multiple_tools_correct_dispatch(router):
     """
     With multiple tools registered and LLM active, the router must dispatch
@@ -233,3 +250,79 @@ def test_router_carries_remaining_file_actions_into_pending_request(router):
     assert result == "Which one?"
     assert router.dialog_state.pending_file_request.requested_actions == ["open", "summarize"]
     assert captured["actions"] is None
+
+
+def test_create_file_command_routes_to_manage_file_when_available(router):
+    captured = {}
+
+    def manage_file_handler(text, args):
+        captured.update(args)
+        return f"created {args['filename']}"
+
+    router.register_tool(
+        {"name": "manage_file", "description": "Manage file.", "parameters": {}},
+        manage_file_handler,
+    )
+
+    result = router.process_text("create a file named ironman")
+
+    assert result == "created ironman"
+    assert captured == {"action": "create", "filename": "ironman"}
+    assert router.current_route_source == "deterministic"
+
+
+def test_open_it_prefers_pending_file_request_over_app_launch(router):
+    router.dialog_state = DialogState()
+    router.dialog_state.set_pending_file_request(
+        candidates=["/tmp/report.pdf"],
+        requested_actions=["open"],
+        folder_path="/tmp",
+        filename_query="report",
+    )
+    hits = []
+
+    router.register_tool(
+        {"name": "launch_app", "description": "Launch app.", "parameters": {}},
+        lambda t, a: hits.append("launch_app") or "launch",
+    )
+    router.register_tool(
+        {"name": "open_file", "description": "Open file.", "parameters": {}},
+        lambda t, a: hits.append("open_file") or "open",
+    )
+
+    result = router.process_text("open it")
+
+    assert result == "open"
+    assert hits == ["open_file"]
+
+
+def test_router_records_pending_clarification_from_chat_reply(router):
+    router.dialog_state = DialogState()
+    router.register_tool(
+        {"name": "llm_chat", "description": "Chat.", "parameters": {"query": "string"}},
+        lambda t, a: 'You\'re looking for "file design build final report". Is that what you meant?',
+    )
+
+    result = router.process_text("file design build final report")
+
+    assert "Is that what you meant?" in result
+    assert router.dialog_state.pending_clarification.action_text == "file design build final report"
+
+
+def test_select_file_candidate_pattern_does_not_match_general_sentence(router):
+    router.dialog_state = DialogState()
+    router.dialog_state.set_pending_file_request(
+        candidates=["/tmp/report.pdf", "/tmp/report.txt"],
+        requested_actions=["open"],
+        folder_path="/tmp",
+        filename_query="report",
+    )
+
+    router.register_tool(
+        {"name": "select_file_candidate", "description": "Choose file.", "parameters": {}},
+        lambda t, a: "selected",
+    )
+
+    result = router.process_text("that file is not present in the desktop folder")
+
+    assert result != "selected"

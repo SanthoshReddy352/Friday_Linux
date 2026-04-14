@@ -18,6 +18,7 @@ from .file_search import (
     search_files_raw,
     canonicalize_extension,
 )
+from .file_workspace import WorkspaceFileController
 from .media_control import set_volume
 from .screenshot import take_screenshot
 from .sys_info import get_battery_status, get_cpu_ram_status, get_system_status
@@ -29,6 +30,8 @@ class SystemControlPlugin(FridayPlugin):
         self.name = "SystemControl"
         self.dialog_state = getattr(app, "dialog_state", DialogState())
         self.pending_file_to_open = None
+        self.file_controller = WorkspaceFileController(app, self.dialog_state)
+        self.app.file_controller = self.file_controller
         self.on_load()
 
     def on_load(self):
@@ -38,6 +41,13 @@ class SystemControlPlugin(FridayPlugin):
             "parameters": {},
             "context_terms": ["system info", "system information", "system details", "system status"],
         }, lambda t, a: get_system_status())
+
+        self.app.router.register_tool({
+            "name": "get_friday_status",
+            "description": "Report FRIDAY runtime status, including model readiness and disabled optional skills.",
+            "parameters": {},
+            "context_terms": ["friday status", "assistant status", "runtime status", "model status"],
+        }, self.handle_friday_status)
 
         self.app.router.register_tool({
             "name": "get_battery",
@@ -88,6 +98,18 @@ class SystemControlPlugin(FridayPlugin):
                 "extension": "string – optional extension such as .pdf or .md",
             }
         }, self.handle_search_file)
+
+        self.app.router.register_tool({
+            "name": "manage_file",
+            "description": "Create, write, append, or read a text file. You can also save the last assistant answer into a file.",
+            "parameters": {
+                "action": "string - one of: create, write, append, read",
+                "filename": "string - the target filename",
+                "folder": "string - optional folder name to place or find the file",
+                "content": "string - optional text content to write",
+                "extension": "string - optional extension such as .txt or .md",
+            }
+        }, self.handle_manage_file)
 
         self.app.router.register_tool({
             "name": "open_file",
@@ -152,6 +174,13 @@ class SystemControlPlugin(FridayPlugin):
             "description": "User declines or cancels a pending action (no, nope, cancel).",
             "parameters": {}
         }, self.handle_no)
+        
+        self.app.router.register_tool({
+            "name": "shutdown_assistant",
+            "description": "Close the application and say goodbye.",
+            "parameters": {},
+            "aliases": ["bye", "goodbye", "exit program", "close assistant", "switch off"]
+        }, self.handle_shutdown)
 
         logger.info("SystemControlPlugin loaded.")
 
@@ -160,9 +189,12 @@ class SystemControlPlugin(FridayPlugin):
         if isinstance(app_names, str):
             app_names = [app_names]
 
-        app_name = args.get("app_name", "").strip()
-        if app_name:
-            app_names.append(app_name)
+        app_name = args.get("app_name", "")
+        # The LLM sometimes returns app_name as a list instead of a string
+        if isinstance(app_name, list):
+            app_names.extend(app_name)
+        elif isinstance(app_name, str) and app_name.strip():
+            app_names.append(app_name.strip())
 
         normalized_names = [name.strip() for name in app_names if isinstance(name, str) and name.strip()]
         if not normalized_names:
@@ -204,123 +236,63 @@ class SystemControlPlugin(FridayPlugin):
         return set_volume(direction, steps=steps)
 
     def handle_search_file(self, text, args):
-        request = self._parse_file_request(text, args, default_actions=["open"])
-        if not request["filename"]:
-            return "Which file would you like me to find?"
+        return self.file_controller.search(text, args)
 
-        folder_path, matches, error = self._resolve_file_matches(request)
-        if error:
-            return error
-
-        if folder_path:
-            self.dialog_state.remember_folder(folder_path)
-
-        if not matches:
-            return self._format_missing_file_response(request, folder_path)
-
-        self.dialog_state.remember_listing(matches)
-        self.pending_file_to_open = matches[0] if len(matches) == 1 else None
-        self.dialog_state.set_pending_file_request(
-            candidates=matches,
-            requested_actions=request["requested_actions"] or ["open"],
-            folder_path=folder_path,
-            filename_query=request["filename"],
-            extension=request["extension"],
-        )
-
-        response = [format_search_results(matches, request["filename"])]
-        if len(matches) == 1:
-            response.append(f"Would you like me to open '{os.path.basename(matches[0])}'?")
-        else:
-            response.append("Tell me the number, exact filename, or extension to choose one.")
-        return "\n".join(response)
+    def handle_manage_file(self, text, args):
+        return self.file_controller.manage(text, args)
 
     def handle_open_file(self, text, args):
-        return self._handle_file_action(text, args, fallback_actions=["open"])
+        return self.file_controller.open(text, args)
 
     def handle_read_file(self, text, args):
-        return self._handle_file_action(text, args, fallback_actions=["read"])
+        return self.file_controller.read(text, args)
 
     def handle_summarize_file(self, text, args):
-        return self._handle_file_action(text, args, fallback_actions=["summarize"])
+        return self.file_controller.summarize(text, args)
 
     def handle_list_folder_contents(self, text, args):
-        request = self._parse_file_request(text, args)
-        folder_path = None
-
-        if request["folder"]:
-            folder_path = resolve_folder_path(request["folder"])
-            if not folder_path:
-                return f"I couldn't find a folder named '{request['folder']}'."
-        elif request["use_current_folder"]:
-            folder_path = self.dialog_state.current_folder
-        else:
-            folder_path = self.dialog_state.current_folder
-
-        if not folder_path:
-            return "Which folder should I inspect?"
-
-        listing = list_folder_contents(folder_path, limit=25)
-        if "other file" in request["text_lower"] and self.dialog_state.selected_file:
-            listing = [path for path in listing if path != self.dialog_state.selected_file]
-
-        self.dialog_state.remember_folder(folder_path)
-        self.dialog_state.remember_listing(listing)
-        return format_folder_listing(folder_path, listing[:15])
+        return self.file_controller.list_folder(text, args)
 
     def handle_open_folder(self, text, args):
-        request = self._parse_file_request(text, args)
-        folder_query = request["folder"]
-        if not folder_query and self.dialog_state.current_folder:
-            return open_folder(self.dialog_state.current_folder)
-        if not folder_query:
-            return "Which folder should I open?"
-
-        folder_path = resolve_folder_path(folder_query)
-        if not folder_path:
-            return f"I couldn't find a folder named '{folder_query}'."
-
-        self.dialog_state.remember_folder(folder_path)
-        return open_folder(folder_path)
+        return self.file_controller.open_folder(text, args)
 
     def handle_select_file_candidate(self, text, args):
-        pending = self.dialog_state.pending_file_request
-        if not pending or not pending.candidates:
-            return "I don't have any pending file choices right now."
-
-        selected_path, error = choose_candidate_from_text(text, pending.candidates)
-        if error:
-            return error
-        if not selected_path:
-            return self._format_candidate_prompt(pending.candidates)
-
-        return self._finalize_pending_file(selected_path, pending.requested_actions or ["open"])
+        return self.file_controller.select_candidate(text, args)
 
     def handle_yes(self, text, args):
-        pending = self.dialog_state.pending_file_request
-        if pending and pending.candidates:
-            if len(pending.candidates) == 1:
-                return self._finalize_pending_file(
-                    pending.candidates[0],
-                    pending.requested_actions or ["open"],
-                )
-            return self._format_candidate_prompt(pending.candidates)
-
-        if self.pending_file_to_open:
-            filepath = self.pending_file_to_open
-            self.pending_file_to_open = None
-            return self._execute_file_actions(filepath, ["open"])
-        return "I'm not sure what you're saying 'yes' to."
+        return self.file_controller.confirm_yes(text, args)
 
     def handle_no(self, text, args):
-        if self.dialog_state.has_pending_file_request():
-            self.dialog_state.clear_pending_file_request()
-            self.pending_file_to_open = None
-            return "Okay, I'll leave it there."
-        if self.pending_file_to_open:
-            self.pending_file_to_open = None
-            return "Okay, I'll leave it closed."
-        return "I'm not sure what you're saying 'no' to."
+        return self.file_controller.confirm_no(text, args)
+
+    def handle_shutdown(self, text, args):
+        """Signal the system to perform a clean shutdown."""
+        import threading
+        import time
+        
+        def _trigger_shutdown():
+            time.sleep(3.5) # Wait for 'Bye' TTS
+            self.app.event_bus.publish("system_shutdown", {})
+            
+        threading.Thread(target=_trigger_shutdown, daemon=True).start()
+        return "Bye sir, see you soon."
+
+    def handle_friday_status(self, text, args):
+        capabilities = getattr(self.app, "capabilities", None)
+        router = getattr(self.app, "router", None)
+        lines = ["FRIDAY status:"]
+        if capabilities:
+            lines.extend(f"- {line}" for line in capabilities.summary_lines())
+            disabled = capabilities.disabled_skills()
+            if disabled:
+                for skill_name, reason in sorted(disabled.items()):
+                    lines.append(f"- {skill_name}: {reason}")
+        if router and hasattr(router, "model_manager"):
+            for role in ("chat", "tool"):
+                status = router.model_manager.status(role)
+                state = "loaded" if status["loaded"] else "available" if status["exists"] else "missing"
+                lines.append(f"- {role} model: {os.path.basename(status['path'])} ({state})")
+        return "\n".join(lines)
 
     def _handle_file_action(self, text, args, fallback_actions):
         if self.dialog_state.has_pending_file_request():
@@ -462,10 +434,10 @@ class SystemControlPlugin(FridayPlugin):
     def _format_missing_file_response(self, request, folder_path):
         if folder_path:
             folder_name = os.path.basename(folder_path)
-            message = f"I couldn't find a file named '{request['filename']}' in the {folder_name} folder."
+            message = f"FAILURE: I couldn't find a file named '{request['filename']}' in the {folder_name} folder."
             self.dialog_state.remember_folder(folder_path)
         else:
-            message = f"I couldn't find any file named '{request['filename']}'."
+            message = f"FAILURE: I couldn't find any file named '{request['filename']}'."
 
         self.dialog_state.remember_error(message)
         if folder_path:

@@ -2,9 +2,9 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QLineEdit, QPushButton
+    QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
 
 
 # ------------------------------------------------------------------
@@ -58,29 +58,43 @@ class MainWindow(QMainWindow):
         self.resize(width, height)
 
         central_widget = QWidget()
+        central_widget.setStyleSheet("background-color: #0d0d0d;")
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+
+        # Companion Display
+        self.companion_display = QLabel("( ^_^ )")
+        self.companion_display.setAlignment(Qt.AlignLeft)
+        self.companion_display.setStyleSheet("font-family: 'Courier New', Courier, monospace; font-size: 16px; min-height: 30px; color: #a8a8a8;")
+        main_layout.addWidget(self.companion_display)
 
         # Chat display area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
+        self.chat_display.setStyleSheet("background-color: #0d0d0d; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-size: 14px; border: none;")
         main_layout.addWidget(self.chat_display)
 
         # Input area
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Type a command...")
+        self.input_field.setPlaceholderText("❯ Type a command...")
+        self.input_field.setStyleSheet("background-color: #1a1a1a; color: #ffffff; font-family: 'Courier New', Courier, monospace; font-size: 14px; border: 1px solid #333333; border-radius: 4px; padding: 8px;")
         self.input_field.returnPressed.connect(self.send_message)
 
-        self.send_button = QPushButton("Send")
+        btn_style = "background-color: #262626; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #333333; border-radius: 4px; padding: 6px 12px;"
+
+        self.send_button = QPushButton("Enter")
+        self.send_button.setStyleSheet(btn_style)
         self.send_button.clicked.connect(self.send_message)
 
-        self.mic_button = QPushButton("🎤 Mic: OFF")
+        self.mic_button = QPushButton("Mic: OFF")
         self.mic_button.setCheckable(True)
+        self.mic_button.setStyleSheet(btn_style)
         self.mic_button.clicked.connect(self.toggle_mic)
 
-        # Stop / barge-in button
-        self.stop_button = QPushButton("⏹ Stop")
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setStyleSheet(btn_style)
         self.stop_button.setToolTip("Stop FRIDAY from speaking")
         self.stop_button.clicked.connect(self.stop_speaking)
 
@@ -90,13 +104,42 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(self.send_button)
         main_layout.addLayout(input_layout)
 
+        # Animation State
+        self.companion_state = "idle"
+        self.companion_tick = 0
+        self.companion_frames = {
+            "idle": ["( ^_^ )", "( ^_^ )", "( ^_^ )", "( -_- )", "( ^_^ )"],
+            "listening": ["( o_o ) •", "( o_o ) ••", "( o_o ) •••"],
+            "thinking": ["( •_• )o", "( •_• )o.", "( •_• )o.."],
+            "speaking": ["( >_< )", "( ^_^ )", "( >_< )", "( ^O^ )"],
+            "executing": ["( ⌐■_■ )", "( ⌐■_■ )p", "( ⌐■_■ )q"]
+        }
+        
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.update_companion_frame)
+        self.anim_timer.start(500)
+        
+        # Subscribe to State Changes
+        self.app_core.event_bus.subscribe("gui_toggle_mic", lambda x: self.set_companion_state("listening" if x else "idle"))
+        self.app_core.event_bus.subscribe("voice_response", lambda x: self.set_companion_state("speaking"))
+
+    def set_companion_state(self, state):
+        if self.companion_state != state:
+            self.companion_state = state
+            self.companion_tick = 0
+            
+    def update_companion_frame(self):
+        # Auto-reset states based on app_core
+        if self.companion_state == "speaking" and not getattr(self.app_core, "is_speaking", False):
+            self.set_companion_state("idle")
+            
+        frames = self.companion_frames.get(self.companion_state, self.companion_frames["idle"])
+        self.companion_display.setText(frames[self.companion_tick % len(frames)])
+        self.companion_tick += 1
+
     def load_theme(self):
-        theme_path = os.path.join(os.path.dirname(__file__), 'styles', 'dark_theme.qss')
-        if os.path.exists(theme_path):
-            with open(theme_path, 'r') as f:
-                self.setStyleSheet(f.read())
-        else:
-            print(f"Theme file not found: {theme_path}")
+        # We explicitly skip the old dark_theme.qss to maintain our CLI exact styling
+        pass
 
     # ------------------------------------------------------------------
     # Mic toggle
@@ -105,11 +148,11 @@ class MainWindow(QMainWindow):
     def toggle_mic(self):
         is_active = self.mic_button.isChecked()
         if is_active:
-            self.mic_button.setText("🎤 Mic: ON")
-            self.mic_button.setStyleSheet("background-color: #ff3366; color: white;")
+            self.mic_button.setText("Mic: ON")
+            self.mic_button.setStyleSheet("background-color: #004d40; color: #4db6ac; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #4db6ac; border-radius: 4px; padding: 6px 12px;")
         else:
-            self.mic_button.setText("🎤 Mic: OFF")
-            self.mic_button.setStyleSheet("")
+            self.mic_button.setText("Mic: OFF")
+            self.mic_button.setStyleSheet("background-color: #262626; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #333333; border-radius: 4px; padding: 6px 12px;")
         self.app_core.event_bus.publish("gui_toggle_mic", is_active)
 
     # ------------------------------------------------------------------
@@ -173,12 +216,12 @@ class MainWindow(QMainWindow):
             self.add_assistant_message(text, source)
 
     def add_user_message(self, text, source="gui"):
-        label = "You (Voice)" if source == "voice" else "You"
-        self.chat_display.append(f"<b>{label}:</b> {text}")
+        prefix = "👤" if source == "voice" else "❯"
+        self.chat_display.append(f"<span style='color:#a8a8a8;'>{prefix} </span><span style='color:#ffffff;'>{text}</span>")
 
     def add_assistant_message(self, text, source="friday"):
         label = "FRIDAY" if source == "friday" else f"FRIDAY ({source.title()})"
-        self.chat_display.append(f"<b style='color:#00ffcc;'>{label}:</b> {text}")
+        self.chat_display.append(f"<span style='color:#00ffcc;'>{label} ❯ </span><span style='color:#e0e0e0;'>{text}</span><br>")
 
 
 def start_gui(app_core):

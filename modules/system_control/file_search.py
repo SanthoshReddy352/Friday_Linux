@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import subprocess
+import time
 
 from core.logger import logger
 
@@ -29,6 +30,24 @@ EXTENSION_ALIASES = {
 }
 
 IGNORED_SUFFIXES = (".resolved", ".resolved.0", ".metadata.json")
+SKIPPED_DIR_NAMES = {
+    ".cache",
+    ".config",
+    ".local",
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    "snap",
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "tmp",
+    "var",
+}
+DEFAULT_SEARCH_TIMEOUT_S = float(os.getenv("FRIDAY_FILE_SEARCH_TIMEOUT_S", "6"))
+ENABLE_MOUNT_SCAN = os.getenv("FRIDAY_SEARCH_ALL_MOUNTS", "0") == "1"
 
 
 def search_files_raw(filename, search_dir=None, folder_path=None, extension=None, limit=5):
@@ -42,10 +61,14 @@ def search_files_raw(filename, search_dir=None, folder_path=None, extension=None
     desired_ext = canonicalize_extension(extension)
     candidates = []
     seen = set()
+    deadline = time.monotonic() + max(1.0, DEFAULT_SEARCH_TIMEOUT_S)
 
     try:
         for root, dirs, files in _iter_search_space(search_dir=search_dir, folder_path=folder_path):
-            dirs[:] = [dirname for dirname in dirs if not dirname.startswith(".")]
+            if time.monotonic() >= deadline:
+                logger.info("File search timed out after %.1fs for query '%s'.", DEFAULT_SEARCH_TIMEOUT_S, query)
+                break
+            dirs[:] = _prune_dirs(dirs)
 
             for file_name in files:
                 if file_name.startswith(".") or file_name.endswith(IGNORED_SUFFIXES):
@@ -61,6 +84,14 @@ def search_files_raw(filename, search_dir=None, folder_path=None, extension=None
 
                 seen.add(filepath)
                 candidates.append((score, filepath))
+                
+                if score >= 320:
+                    # Only short-circuit when the user named the full basename,
+                    # so stem matches like prep.{md,txt} still return all variants.
+                    break
+            
+            if candidates and any(s >= 320 for s, _ in candidates):
+                break
 
         candidates.sort(key=lambda item: (-item[0], len(item[1]), item[1].lower()))
         return [filepath for _, filepath in candidates[:limit]]
@@ -76,10 +107,14 @@ def search_folders_raw(folder_name, search_dir=None, limit=10):
 
     matches = []
     seen = set()
+    deadline = time.monotonic() + max(1.0, DEFAULT_SEARCH_TIMEOUT_S)
 
     try:
         for root, dirs, _ in _iter_search_space(search_dir=search_dir):
-            dirs[:] = [dirname for dirname in dirs if not dirname.startswith(".")]
+            if time.monotonic() >= deadline:
+                logger.info("Folder search timed out after %.1fs for query '%s'.", DEFAULT_SEARCH_TIMEOUT_S, query)
+                break
+            dirs[:] = _prune_dirs(dirs)
             for dirname in dirs:
                 folder_path = os.path.join(root, dirname)
                 if folder_path in seen:
@@ -91,6 +126,12 @@ def search_folders_raw(folder_name, search_dir=None, limit=10):
 
                 seen.add(folder_path)
                 matches.append((score, folder_path))
+                if score >= 230:
+                    # Break on good folder match to save time
+                    break
+            
+            if matches and any(s >= 230 for s, _ in matches):
+                break
 
         matches.sort(key=lambda item: (-item[0], len(item[1]), item[1].lower()))
         return [folder_path for _, folder_path in matches[:limit]]
@@ -128,9 +169,9 @@ def list_folder_contents(folder_path, limit=50):
 
 def format_search_results(matches, filename):
     if not matches:
-        return f"I couldn't find any file matching '{filename}'."
+        return f"FAILURE: I couldn't find any file matching '{filename}'."
 
-    result = [f"I found {len(matches)} matching file(s):"]
+    result = [f"SUCCESS: Found {len(matches)} matching file(s):"]
     for match in matches:
         result.append(f"- {match}")
     return "\n".join(result)
@@ -139,9 +180,9 @@ def format_search_results(matches, filename):
 def format_folder_listing(folder_path, matches):
     folder_name = os.path.basename(folder_path.rstrip(os.sep)) if folder_path else "that folder"
     if not matches:
-        return f"I couldn't find any visible files in {folder_name}."
+        return f"FAILURE: I couldn't find any visible files in {folder_name}."
 
-    lines = [f"Files in {folder_name}:"]
+    lines = [f"SUCCESS: Files in {folder_name}:"]
     for match in matches:
         lines.append(f"- {os.path.basename(match)}")
     return "\n".join(lines)
@@ -169,10 +210,10 @@ def open_path(target_path, label="item"):
             subprocess.Popen(["open", target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         logger.info(f"Opened {label}: {target_path}")
-        return f"Opening {os.path.basename(target_path)}..."
+        return f"SUCCESS: Opening {os.path.basename(target_path)}..."
     except Exception as exc:
         logger.error(f"Failed to open {label} '{target_path}': {exc}")
-        return f"Failed to open the {label}: {exc}"
+        return f"FAILURE: Failed to open the {label}: {exc}"
 
 
 def canonicalize_extension(value):
@@ -250,19 +291,29 @@ def _iter_search_space(search_dir=None, folder_path=None):
     if search_dir:
         search_dirs.append(search_dir)
     else:
-        search_dirs.extend([os.getcwd(), os.path.expanduser("~")])
-        try:
-            import psutil
+        # Prioritize common user folders for low-latency searches
+        home = os.path.expanduser("~")
+        search_dirs.extend([
+            os.getcwd(),
+            os.path.join(home, "Desktop"),
+            os.path.join(home, "Documents"),
+            os.path.join(home, "Downloads"),
+            os.path.join(home, "Pictures"),
+            home,
+        ])
+        if ENABLE_MOUNT_SCAN:
+            try:
+                import psutil
 
-            for partition in psutil.disk_partitions():
-                if "rw" not in partition.opts and "ro" not in partition.opts:
-                    continue
-                if platform.system() == "Linux" and partition.mountpoint == "/":
-                    continue
-                if partition.mountpoint not in search_dirs:
-                    search_dirs.append(partition.mountpoint)
-        except Exception as exc:
-            logger.warning(f"Could not load disk partitions: {exc}")
+                for partition in psutil.disk_partitions():
+                    if "rw" not in partition.opts and "ro" not in partition.opts:
+                        continue
+                    if platform.system() == "Linux" and partition.mountpoint == "/":
+                        continue
+                    if partition.mountpoint not in search_dirs:
+                        search_dirs.append(partition.mountpoint)
+            except Exception as exc:
+                logger.warning(f"Could not load disk partitions: {exc}")
 
     seen = set()
     for directory in search_dirs:
@@ -270,6 +321,17 @@ def _iter_search_space(search_dir=None, folder_path=None):
             continue
         seen.add(directory)
         yield from os.walk(directory)
+
+
+def _prune_dirs(dirs):
+    pruned = []
+    for dirname in dirs:
+        if dirname.startswith("."):
+            continue
+        if dirname.lower() in SKIPPED_DIR_NAMES:
+            continue
+        pruned.append(dirname)
+    return pruned
 
 
 def _score_file_candidate(file_name, query, desired_ext):

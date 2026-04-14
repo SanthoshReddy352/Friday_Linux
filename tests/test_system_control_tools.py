@@ -6,16 +6,36 @@ from core.dialog_state import DialogState
 from unittest.mock import MagicMock
 
 import modules.system_control.plugin as system_plugin
-from modules.system_control.app_launcher import extract_app_names, canonicalize_app_name
+import modules.system_control.file_workspace as file_workspace
+from modules.system_control.app_launcher import extract_app_names, canonicalize_app_name, configure_app_registry
+from core.system_capabilities import SystemCapabilities
 from modules.system_control.plugin import SystemControlPlugin
+from core.assistant_context import AssistantContext
 
 
 def test_extract_app_names_multiple_apps():
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "firefox": "/usr/bin/firefox",
+        "google-chrome": "/usr/bin/google-chrome",
+        "gnome-calculator": "/usr/bin/gnome-calculator",
+    }
+    configure_app_registry(capabilities)
     result = extract_app_names("open firefox and chrome and calculator")
     assert result == ["firefox", "chrome", "calculator"]
 
 
 def test_handle_launch_app_passes_multiple_apps(monkeypatch):
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "firefox": "/usr/bin/firefox",
+        "google-chrome": "/usr/bin/google-chrome",
+        "gnome-calculator": "/usr/bin/gnome-calculator",
+    }
+    configure_app_registry(capabilities)
+
     app = MagicMock()
     app.router.register_tool = MagicMock()
     plugin = SystemControlPlugin(app)
@@ -34,12 +54,55 @@ def test_handle_launch_app_passes_multiple_apps(monkeypatch):
 
 
 def test_extract_app_names_fuzzy_spoken_calculator():
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "firefox": "/usr/bin/firefox",
+        "google-chrome": "/usr/bin/google-chrome",
+        "gnome-calculator": "/usr/bin/gnome-calculator",
+    }
+    configure_app_registry(capabilities)
     result = extract_app_names("open firefox and calipoliters")
     assert result == ["firefox", "calculator"]
 
 
+def test_extract_app_names_brave_resolves_cleanly():
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "brave-browser": "/usr/bin/brave-browser",
+    }
+    configure_app_registry(capabilities)
+    result = extract_app_names("open brave")
+    assert result == ["brave"]
+
+
 def test_canonicalize_plural_app_name():
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "gnome-calculator": "/usr/bin/gnome-calculator",
+    }
+    configure_app_registry(capabilities)
     assert canonicalize_app_name("calculators") == "calculator"
+
+
+def test_extract_app_names_does_not_add_extra_fuzzy_duplicate():
+    capabilities = SystemCapabilities()
+    capabilities.desktop_apps = {}
+    capabilities.binaries = {
+        "firefox": "/usr/bin/firefox",
+        "google-chrome": "/usr/bin/google-chrome",
+        "gnome-calculator": "/usr/bin/gnome-calculator",
+    }
+    configure_app_registry(capabilities)
+    result = extract_app_names("open chrome firefox calculator")
+    assert result == ["chrome", "firefox", "calculator"]
+
+
+def test_canonicalize_app_name_does_not_map_coffee_to_chrome():
+    assert canonicalize_app_name("coffee") == "coffee"
+    assert extract_app_names("open coffee") == []
 
 
 def test_handle_set_volume_parses_unmute_and_steps(monkeypatch):
@@ -107,6 +170,58 @@ def test_missing_file_in_folder_then_list_other_files(monkeypatch, tmp_path):
     assert "recipe.md" in listing
 
 
+def test_file_search_does_not_stick_to_previous_folder_scope(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "coffee.txt").write_text("coffee", encoding="utf-8")
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    report = desktop / "report.txt"
+    report.write_text("report", encoding="utf-8")
+
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    first = plugin.handle_search_file("find the file coffee in the archive folder", {})
+    second = plugin.handle_search_file("find the file report", {})
+
+    assert "coffee.txt" in first
+    assert "report.txt" in second
+    assert "in the archive folder" not in second.lower()
+    assert plugin.dialog_state.current_folder == str(desktop)
+
+
+def test_explicit_folder_override_beats_previous_folder_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "coffee.txt").write_text("coffee", encoding="utf-8")
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    target = desktop / "report.txt"
+    target.write_text("report", encoding="utf-8")
+
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    monkeypatch.setattr(file_workspace, "open_file", lambda path: f"Opening {os.path.basename(path)}...")
+
+    plugin.handle_search_file("find the file coffee in the archive folder", {})
+    response = plugin.handle_open_file("open the file report in the desktop folder", {})
+
+    assert response == "Opening report.txt..."
+    assert plugin.dialog_state.current_folder == str(desktop)
+
+
 def test_select_file_candidate_can_open_and_summarize(monkeypatch, tmp_path):
     coffee = tmp_path / "coffee"
     coffee.mkdir()
@@ -122,9 +237,9 @@ def test_select_file_candidate_can_open_and_summarize(monkeypatch, tmp_path):
     app.dialog_state = DialogState()
     plugin = SystemControlPlugin(app)
 
-    monkeypatch.setattr(system_plugin, "open_file", lambda path: f"Opening {os.path.basename(path)}...")
+    monkeypatch.setattr(file_workspace, "open_file", lambda path: f"Opening {os.path.basename(path)}...")
     monkeypatch.setattr(
-        system_plugin,
+        file_workspace,
         "summarize_file_offline",
         lambda path, llm=None: f"Summary of {os.path.basename(path)}:\n- short summary",
     )
@@ -142,3 +257,62 @@ def test_select_file_candidate_can_open_and_summarize(monkeypatch, tmp_path):
     assert "Summary of prep.pdf" in response
     assert plugin.dialog_state.selected_file == str(pdf_path)
     assert not plugin.dialog_state.has_pending_file_request()
+
+
+def test_manage_file_saves_last_assistant_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    app.assistant_context = AssistantContext()
+    app.assistant_context.record_message("assistant", "Programming is giving instructions to a computer.")
+    plugin = SystemControlPlugin(app)
+
+    response = plugin.handle_manage_file("save that to file friday_notes.md", {})
+
+    saved_path = desktop / "friday_notes.md"
+    assert "Saved friday_notes.md" in response
+    assert saved_path.read_text(encoding="utf-8") == "Programming is giving instructions to a computer."
+
+
+def test_open_file_in_downloads_folder_extracts_filename_correctly(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    target = downloads / "Registrations.xlsx"
+    target.write_text("sheet", encoding="utf-8")
+
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    monkeypatch.setattr(file_workspace, "open_file", lambda path: f"Opening {os.path.basename(path)}...")
+
+    response = plugin.handle_open_file("open the registrations file in the downloads folder", {})
+
+    assert response == "Opening Registrations.xlsx..."
+
+
+def test_manage_file_appends_content(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    existing = desktop / "notes.txt"
+    existing.write_text("alpha", encoding="utf-8")
+
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    response = plugin.handle_manage_file("append beta to file notes.txt", {})
+
+    assert "Updated notes.txt" in response
+    assert existing.read_text(encoding="utf-8") == "alpha\nbeta"

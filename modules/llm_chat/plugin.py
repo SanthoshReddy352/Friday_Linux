@@ -1,6 +1,6 @@
-import os
 from core.plugin_manager import FridayPlugin
 from core.logger import logger
+import re
 
 
 FRIDAY_PERSONA = (
@@ -10,14 +10,10 @@ FRIDAY_PERSONA = (
     "Keep answers short (2-4 sentences) unless the user asks for details."
 )
 
-MAX_HISTORY_TURNS = 6  # keep last N user+assistant pairs
-
-
 class LLMChatPlugin(FridayPlugin):
     def __init__(self, app):
         super().__init__(app)
         self.name = "LLMChat"
-        self._history = []  # list of {"role": "user"|"assistant", "content": str}
         self.on_load()
 
     def on_load(self):
@@ -44,24 +40,11 @@ class LLMChatPlugin(FridayPlugin):
         if llm is None:
             return "My language model isn't loaded right now. Please check the models directory."
 
-        # Build conversation prompt with history
         messages = self._build_messages(query)
 
         logger.debug(f"[LLMChat] Sending chat prompt for: '{query}'")
         try:
-            res = llm.create_chat_completion(
-                messages,
-                max_tokens=200,
-                temperature=0.7,
-            )
-            answer = res["choices"][0]["message"]["content"].strip()
-
-            # Store in history
-            self._history.append({"role": "user", "content": query})
-            self._history.append({"role": "assistant", "content": answer})
-            # Trim history to MAX_HISTORY_TURNS pairs
-            if len(self._history) > MAX_HISTORY_TURNS * 2:
-                self._history = self._history[-(MAX_HISTORY_TURNS * 2):]
+            answer = self._generate_reply(llm, messages)
 
             logger.info(f"[LLMChat] Response: {answer[:80]}...")
             return answer
@@ -70,26 +53,52 @@ class LLMChatPlugin(FridayPlugin):
             logger.error(f"[LLMChat] Inference error: {e}")
             return "I ran into an issue generating a response. Please try again."
 
+    def _generate_reply(self, llm, messages):
+        if not hasattr(llm, "create_chat_completion"):
+            res = llm(messages[-1]["content"], max_tokens=200, temperature=0.7)
+            return res["choices"][0]["text"].strip()
+
+        stream = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=200,
+            temperature=0.7,
+            stream=True,
+        )
+        if isinstance(stream, dict):
+            return stream["choices"][0]["message"]["content"].strip()
+
+        parts = []
+        sentence_buffer = ""
+        for chunk in stream:
+            delta = chunk["choices"][0].get("delta", {})
+            content = delta.get("content")
+            if not content:
+                continue
+            parts.append(content)
+            sentence_buffer += content
+            spoken_parts = re.split(r"(?<=[.!?])\s+", sentence_buffer)
+            if len(spoken_parts) > 1:
+                spoken_text = " ".join(part for part in spoken_parts[:-1] if part).strip()
+                if spoken_text:
+                    self.app.event_bus.publish("voice_response", spoken_text)
+                    self.app.router._voice_already_spoken = True
+                sentence_buffer = spoken_parts[-1]
+
+        if sentence_buffer.strip():
+            self.app.event_bus.publish("voice_response", sentence_buffer.strip())
+            self.app.router._voice_already_spoken = True
+
+        return "".join(parts).strip()
+
     def _build_messages(self, new_query):
-        """Construct a list of messages with persona + conversation history."""
-        messages = []
-        
-        # Add history
-        for idx, turn in enumerate(self._history):
-            role_label = turn["role"]
-            content = turn["content"]
-            # Prepend system persona to the first user message, since Gemma doesn't support "system" role natively
-            if idx == 0 and role_label == "user":
-                content = f"{FRIDAY_PERSONA}\n\n{content}"
-            messages.append({"role": role_label, "content": content})
-            
-        # Add new query
-        final_query = new_query
-        if not self._history:
-            final_query = f"{FRIDAY_PERSONA}\n\n{new_query}"
-        messages.append({"role": "user", "content": final_query})
-        
-        return messages
+        assistant_context = getattr(self.app, "assistant_context", None)
+        if assistant_context:
+            return assistant_context.build_chat_messages(
+                new_query,
+                dialog_state=getattr(self.app, "dialog_state", None),
+            )
+
+        return [{"role": "user", "content": f"{FRIDAY_PERSONA}\n\n{new_query}"}]
 
 
 def setup(app):
