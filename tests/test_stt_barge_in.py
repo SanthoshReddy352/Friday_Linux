@@ -135,3 +135,26 @@ def test_live_barge_in_grace_period_ignores_initial_tts_echo():
 
     app.tts.stop.assert_not_called()
     assert stt.q.empty()
+
+
+def test_start_listening_waits_until_speech_finishes():
+    app = MagicMock()
+    app.is_speaking = True
+
+    stt = STTEngine(app)
+    stt.model = MagicMock()
+    real_thread = None
+
+    class ImmediateThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    with patch("modules.voice_io.stt.threading.Thread", ImmediateThread), \
+         patch("modules.voice_io.stt.time.sleep", side_effect=lambda *_: setattr(app, "is_speaking", False)):
+        assert stt.start_listening() is True
+
+    assert stt.is_listening is True

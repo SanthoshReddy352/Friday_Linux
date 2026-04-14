@@ -32,6 +32,11 @@ class STTEngine:
         self.stream_channels = 1
         self.stream_blocksize = 800
         self._startup_device_selected = False
+        self.max_utterance_duration = float(os.getenv("FRIDAY_MAX_UTTERANCE_S", "4.0"))
+        self.min_utterance_duration = float(os.getenv("FRIDAY_MIN_UTTERANCE_S", "0.35"))
+        self.listen_resume_delay_s = float(os.getenv("FRIDAY_LISTEN_RESUME_DELAY_S", "0.35"))
+        self._listen_request_id = 0
+        self._listen_request_lock = threading.Lock()
 
         # VAD settings - tuned for background noise rejection
         self.silence_threshold = 0.008
@@ -160,6 +165,7 @@ class STTEngine:
                     # If we somehow got data while not listening, clear it
                     if not self.is_listening:
                         audio_buffer = []
+                        silence_frames = 0
                         continue
 
                     rms = float(np.sqrt(np.mean(data ** 2)))
@@ -174,30 +180,15 @@ class STTEngine:
                             silence_frames += 1
                             audio_buffer.append(data)
 
-                        if (silence_frames > (self.silence_duration * frames_per_second)
-                                and len(audio_buffer) > frames_per_second):
-                            audio_data = np.concatenate(audio_buffer, axis=0)
-                            audio_data = self._prepare_audio_for_transcription(audio_data)
-                            audio_buffer = []
-                            silence_frames = 0
+                    buffer_duration = len(audio_buffer) / frames_per_second if frames_per_second else 0.0
+                    has_enough_audio = buffer_duration >= self.min_utterance_duration
+                    hit_silence_boundary = silence_frames > (self.silence_duration * frames_per_second)
+                    hit_max_duration = buffer_duration >= self.max_utterance_duration
 
-                            logger.debug("[Whisper] Transcribing...")
-                            segments, _ = self.model.transcribe(
-                                audio_data,
-                                beam_size=1,
-                                best_of=1,
-                                patience=1,
-                                language="en",
-                                condition_on_previous_text=False,
-                                vad_filter=False,
-                            )
-                            text = "".join(s.text for s in segments).strip()
-
-                            if text:
-                                logger.info(f"[Voice Identified]: {text}")
-                                self._process_voice_text(text)
-                            else:
-                                logger.debug("[Whisper] No speech identified.")
+                    if has_enough_audio and (hit_silence_boundary or hit_max_duration):
+                        self._transcribe_buffer(audio_buffer)
+                        audio_buffer = []
+                        silence_frames = 0
 
         except Exception as e:
             logger.error(f"Error in persistent listening loop: {e}")
@@ -289,15 +280,23 @@ class STTEngine:
             
         if self.is_listening:
             return True
-            
-        self._clear_audio_queue()
-        self._barge_in_frame_count = 0
-        self.is_listening = True
-        logger.info("Microphone software gate OPENED.")
+
+        request_id = self._next_listen_request_id()
+        if self.app_core.is_speaking:
+            logger.info("Microphone gate will open after current speech finishes.")
+            threading.Thread(
+                target=self._complete_listen_when_ready,
+                args=(request_id,),
+                daemon=True,
+            ).start()
+            return True
+
+        self._activate_listening(request_id)
         return True
 
     def stop_listening(self):
         """Lightweight software gate deactivation."""
+        self._next_listen_request_id()
         self.is_listening = False
         self._barge_in_frame_count = 0
         self._clear_audio_queue()
@@ -355,6 +354,56 @@ class STTEngine:
                 self.q.get_nowait()
             except queue.Empty:
                 break
+
+    def _activate_listening(self, request_id=None):
+        if request_id is not None and request_id != self._current_listen_request_id():
+            return
+        self._clear_audio_queue()
+        self._barge_in_frame_count = 0
+        self._drop_audio_until = max(self._drop_audio_until, time.monotonic() + self.listen_resume_delay_s)
+        self.is_listening = True
+        logger.info("Microphone software gate OPENED.")
+
+    def _complete_listen_when_ready(self, request_id):
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if request_id != self._current_listen_request_id():
+                return
+            if not self.app_core.is_speaking:
+                self._activate_listening(request_id)
+                return
+            time.sleep(0.05)
+
+    def _next_listen_request_id(self):
+        with self._listen_request_lock:
+            self._listen_request_id += 1
+            return self._listen_request_id
+
+    def _current_listen_request_id(self):
+        with self._listen_request_lock:
+            return self._listen_request_id
+
+    def _transcribe_buffer(self, audio_buffer):
+        audio_data = np.concatenate(audio_buffer, axis=0)
+        audio_data = self._prepare_audio_for_transcription(audio_data)
+
+        logger.debug("[Whisper] Transcribing...")
+        segments, _ = self.model.transcribe(
+            audio_data,
+            beam_size=1,
+            best_of=1,
+            patience=1,
+            language="en",
+            condition_on_previous_text=False,
+            vad_filter=False,
+        )
+        text = "".join(s.text for s in segments).strip()
+
+        if text:
+            logger.info(f"[Voice Identified]: {text}")
+            self._process_voice_text(text)
+        else:
+            logger.debug("[Whisper] No speech identified.")
 
     def _ensure_startup_input_device(self):
         if self._startup_device_selected or self.device_id is not None or self.device_label != "System default":
