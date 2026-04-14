@@ -33,8 +33,10 @@ ENV/
 # Project Specific
 logs/*.log
 data/*.db
+data/browser-profile/
 models/
 piper/
+tmp_plan_folder_ctx*
 
 # Testing
 .pytest_cache/

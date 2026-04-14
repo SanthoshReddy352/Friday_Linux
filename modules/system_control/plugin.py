@@ -78,7 +78,8 @@ class SystemControlPlugin(FridayPlugin):
             "description": "Control system audio volume.",
             "parameters": {
                 "direction": "string – one of: 'up', 'down', 'mute', 'unmute'",
-                "steps": "integer – number of volume steps to change"
+                "steps": "integer – number of volume steps to change",
+                "percent": "integer – absolute target volume percentage from 0 to 100",
             },
             "context_terms": ["volume", "audio", "sound", "mute", "unmute", "louder", "quieter"],
         }, self.handle_set_volume)
@@ -212,13 +213,23 @@ class SystemControlPlugin(FridayPlugin):
     def handle_set_volume(self, text, args):
         direction = args.get("direction", "").strip().lower()
         steps = args.get("steps", 1)
+        percent = args.get("percent")
         try:
             steps = max(1, int(steps))
         except Exception:
             steps = 1
+        try:
+            percent = None if percent is None else max(0, min(100, int(percent)))
+        except Exception:
+            percent = None
+
+        text_lower = text.lower()
+        if percent is None:
+            percent = self._extract_absolute_volume_percent(text_lower)
+        if percent is not None:
+            return set_volume("absolute", percent=percent)
 
         if direction not in ("up", "down", "mute", "unmute"):
-            text_lower = text.lower()
             step_match = re.search(r'(\d+)\s+(?:times?|steps?|levels?)', text_lower)
             if step_match:
                 steps = max(1, int(step_match.group(1)))
@@ -232,8 +243,19 @@ class SystemControlPlugin(FridayPlugin):
             elif "mute" in text_lower:
                 direction = "mute"
             else:
-                return "Should I turn the volume up, down, mute, or unmute it?"
+                return "What volume percentage would you like, or should I turn it up, down, mute, or unmute it?"
         return set_volume(direction, steps=steps)
+
+    def _extract_absolute_volume_percent(self, text_lower):
+        patterns = (
+            r"\b(?:set|change|make|turn)\s+(?:the\s+)?volume\s+(?:to|at)\s+(\d{1,3})(?:\s*(?:percent|%))?\b",
+            r"\bvolume\s+(?:to|at)\s+(\d{1,3})(?:\s*(?:percent|%))?\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                return max(0, min(100, int(match.group(1))))
+        return None
 
     def handle_search_file(self, text, args):
         return self.file_controller.search(text, args)

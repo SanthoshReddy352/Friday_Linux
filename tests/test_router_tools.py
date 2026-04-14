@@ -225,6 +225,43 @@ def test_volume_steps_are_extracted(router):
     assert captured == {"direction": "up", "steps": 5}
 
 
+def test_volume_absolute_percent_is_extracted(router):
+    captured = {}
+
+    def handler(text, args):
+        captured.update(args)
+        return "volume_ok"
+
+    router.register_tool(
+        {"name": "set_volume", "description": "Volume.", "parameters": {}},
+        handler,
+    )
+
+    result = router.process_text("set the volume to 50 percent")
+
+    assert result == "volume_ok"
+    assert captured == {"percent": 50}
+
+
+def test_volume_follow_up_to_percent_uses_volume_context(router):
+    captured = {}
+
+    def handler(text, args):
+        captured.update(args)
+        return "volume_ok"
+
+    router.register_tool(
+        {"name": "set_volume", "description": "Volume.", "parameters": {}},
+        handler,
+    )
+    router._last_context = {"tool": "set_volume", "domain": "volume", "args": {"direction": "up"}}
+
+    result = router.process_text("to 35")
+
+    assert result == "volume_ok"
+    assert captured == {"percent": 35}
+
+
 def test_router_carries_remaining_file_actions_into_pending_request(router):
     router.dialog_state = DialogState()
     captured = {"actions": None}

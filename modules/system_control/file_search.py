@@ -46,6 +46,9 @@ SKIPPED_DIR_NAMES = {
     "tmp",
     "var",
 }
+SKIPPED_DIR_PREFIXES = (
+    "tmp_plan_folder_ctx",
+)
 DEFAULT_SEARCH_TIMEOUT_S = float(os.getenv("FRIDAY_FILE_SEARCH_TIMEOUT_S", "6"))
 ENABLE_MOUNT_SCAN = os.getenv("FRIDAY_SEARCH_ALL_MOUNTS", "0") == "1"
 
@@ -328,7 +331,10 @@ def _prune_dirs(dirs):
     for dirname in dirs:
         if dirname.startswith("."):
             continue
-        if dirname.lower() in SKIPPED_DIR_NAMES:
+        lowered = dirname.lower()
+        if lowered in SKIPPED_DIR_NAMES:
+            continue
+        if any(lowered.startswith(prefix) for prefix in SKIPPED_DIR_PREFIXES):
             continue
         pruned.append(dirname)
     return pruned

@@ -14,13 +14,19 @@ def _run_cmd(cmd):
         logger.error(f"Error running command '{cmd}': {e}")
         return False
 
-def set_volume(level="up", steps=1):
+def set_volume(level="up", steps=1, percent=None):
     """
     Adjusts volume. Gracefully degrades and logs errors if tools are missing.
     """
     os_name = platform.system()
     steps = max(1, int(steps or 1))
-    percent = 5 * steps
+    target_percent = None
+    if percent is not None:
+        try:
+            target_percent = max(0, min(100, int(percent)))
+        except Exception:
+            target_percent = None
+    step_percent = 5 * steps
     
     try:
         if os_name == "Windows":
@@ -58,11 +64,19 @@ def set_volume(level="up", steps=1):
                 logger.error("No volume tools (wpctl/pactl/amixer) found on this system.")
                 return "Error: No volume control tools found on this system."
 
+            if level == "absolute":
+                target_percent = max(0, min(100, int(target_percent if target_percent is not None else 0)))
+                if backend == "wpctl":
+                    cmd = volume_tool + [f"{target_percent / 100:.2f}"]
+                else:
+                    cmd = volume_tool + [f"{target_percent}%"]
+                success = _run_cmd(cmd)
+                return f"Volume set to {target_percent}%." if success else "Failed to set volume."
             if level == "up":
                 if backend == "pactl":
-                    cmd = volume_tool + [f"+{percent}%"]
+                    cmd = volume_tool + [f"+{step_percent}%"]
                 else:
-                    cmd = volume_tool + [f"{percent}%+"]
+                    cmd = volume_tool + [f"{step_percent}%+"]
                 success = _run_cmd(cmd)
                 return (
                     f"Volume increased {steps} step{'s' if steps != 1 else ''}."
@@ -70,9 +84,9 @@ def set_volume(level="up", steps=1):
                 )
             elif level == "down":
                 if backend == "pactl":
-                    cmd = volume_tool + [f"-{percent}%"]
+                    cmd = volume_tool + [f"-{step_percent}%"]
                 else:
-                    cmd = volume_tool + [f"{percent}%-"]
+                    cmd = volume_tool + [f"{step_percent}%-"]
                 success = _run_cmd(cmd)
                 return (
                     f"Volume decreased {steps} step{'s' if steps != 1 else ''}."

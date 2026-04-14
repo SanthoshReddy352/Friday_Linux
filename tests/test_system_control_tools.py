@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import modules.system_control.plugin as system_plugin
 import modules.system_control.file_workspace as file_workspace
 from modules.system_control.app_launcher import extract_app_names, canonicalize_app_name, configure_app_registry
+from modules.system_control.file_search import search_files_raw
 from core.system_capabilities import SystemCapabilities
 from modules.system_control.plugin import SystemControlPlugin
 from core.assistant_context import AssistantContext
@@ -127,6 +128,27 @@ def test_handle_set_volume_parses_unmute_and_steps(monkeypatch):
     assert captured["direction"] == "unmute"
 
 
+def test_handle_set_volume_parses_absolute_percent(monkeypatch):
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    plugin = SystemControlPlugin(app)
+
+    captured = {}
+
+    def fake_set_volume(direction, steps=1, percent=None):
+        captured["direction"] = direction
+        captured["steps"] = steps
+        captured["percent"] = percent
+        return "ok"
+
+    monkeypatch.setattr(system_plugin, "set_volume", fake_set_volume)
+
+    result = plugin.handle_set_volume("set the volume to 50 percent", {})
+
+    assert result == "ok"
+    assert captured == {"direction": "absolute", "steps": 1, "percent": 50}
+
+
 def test_open_file_with_multiple_extensions_requests_clarification(monkeypatch, tmp_path):
     coffee = tmp_path / "coffee"
     coffee.mkdir()
@@ -194,6 +216,24 @@ def test_file_search_does_not_stick_to_previous_folder_scope(monkeypatch, tmp_pa
     assert "report.txt" in second
     assert "in the archive folder" not in second.lower()
     assert plugin.dialog_state.current_folder == str(desktop)
+
+
+def test_file_search_ignores_tmp_plan_directories(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    expected = desktop / "coffee.txt"
+    expected.write_text("desktop coffee", encoding="utf-8")
+
+    tmp_plan = tmp_path / "tmp_plan_folder_ctx2"
+    tmp_plan.mkdir()
+    (tmp_plan / "coffee.txt").write_text("temp coffee", encoding="utf-8")
+
+    matches = search_files_raw("coffee", limit=10)
+
+    assert str(expected) in matches
+    assert all("tmp_plan_folder_ctx" not in match for match in matches)
 
 
 def test_explicit_folder_override_beats_previous_folder_context(monkeypatch, tmp_path):

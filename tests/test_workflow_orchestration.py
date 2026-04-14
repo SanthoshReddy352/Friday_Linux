@@ -222,6 +222,22 @@ def test_open_file_and_read_it_out_splits_into_file_actions(monkeypatch, tmp_pat
     assert "Arabica" in response
 
 
+def test_open_the_coffee_file_and_read_it_splits_into_file_actions(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    target = desktop / "coffee"
+    target.write_text("Arabica", encoding="utf-8")
+    app = build_test_app(tmp_path)
+    SystemControlPlugin(app)
+
+    response = app.router.process_text("open the coffee file and read it")
+
+    assert "Opening coffee..." in response
+    assert "Arabica" in response
+
+
 def test_file_context_recovers_filename_like_follow_up(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

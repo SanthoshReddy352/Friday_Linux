@@ -267,6 +267,15 @@ class IntentRecognizer:
         return None
 
     def _parse_volume(self, clause, clause_lower, context):
+        absolute_percent = self._extract_volume_percent(clause_lower, context)
+        if absolute_percent is not None:
+            return {
+                "tool": "set_volume",
+                "args": {"percent": absolute_percent},
+                "text": clause,
+                "domain": "volume",
+            }
+
         direction = None
         if re.search(r"\bunmute\b", clause_lower):
             direction = "unmute"
@@ -343,7 +352,7 @@ class IntentRecognizer:
         if re.search(r"\bopen\s+(?:the\s+)?folder\b", clause_lower):
             return {"tool": "open_folder", "args": {}, "text": clause, "domain": "files"}
 
-        if re.search(r"\bopen\s+(?:the\s+)?file\b", clause_lower):
+        if re.search(r"\bopen\s+(?:the\s+)?(?:file\s+[a-z0-9][a-z0-9 _\-.]*|[a-z0-9][a-z0-9 _\-.]*\s+file)\b", clause_lower):
             return {"tool": "open_file", "args": {}, "text": clause, "domain": "files"}
 
         if "folder" in clause_lower and "open" in clause_lower:
@@ -469,6 +478,22 @@ class IntentRecognizer:
         if match:
             return max(1, int(match.group(1)))
         return 1
+
+    def _extract_volume_percent(self, clause_lower, context):
+        patterns = (
+            r"\b(?:set|change|make|turn)\s+(?:the\s+)?volume\s+(?:to|at)\s+(\d{1,3})(?:\s*(?:percent|%))?\b",
+            r"\bvolume\s+(?:to|at)\s+(\d{1,3})(?:\s*(?:percent|%))?\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, clause_lower)
+            if match:
+                return max(0, min(100, int(match.group(1))))
+
+        if context.get("domain") == "volume":
+            match = re.fullmatch(r"(?:to\s+)?(\d{1,3})(?:\s*(?:percent|%))?", clause_lower.strip())
+            if match:
+                return max(0, min(100, int(match.group(1))))
+        return None
 
     def _active_browser_workflow(self):
         store = getattr(self.router, "context_store", None)

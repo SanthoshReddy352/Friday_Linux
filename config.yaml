@@ -40,3 +40,6 @@ browser_automation:
   enabled: true
   allow_online: true
   preferred_browser: "chrome"
+  use_system_profile: true
+  chrome_user_data_dir: ""
+  chrome_profile_directory: ""
