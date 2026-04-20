@@ -143,6 +143,63 @@ class TelemetryPanel(QWidget):
             x = start_x + i * (bar_width + gap)
             painter.drawRect(QRectF(x, base_y - h, bar_width, h))
 
+class ProcessPanel(QWidget):
+    def __init__(self, parent=None, app_core=None):
+        super().__init__(parent)
+        self.app_core = app_core
+        self.setMinimumWidth(300)
+        self.setMinimumHeight(400)
+        self.setStyleSheet("background-color: rgba(0, 5, 10, 230); border: 2px solid #00FFFF; border-radius: 15px;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        title = QLabel("SYSTEM / PROCESSES")
+        title.setStyleSheet("color: #00FFFF; font-family: 'Courier New'; font-size: 16px; font-weight: bold; border: none;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("background-color: #00FFFF;")
+        layout.addWidget(line)
+        
+        self.stats_area = QLabel("Loading system telemetry...")
+        self.stats_area.setStyleSheet("color: #9ae6ff; font-family: 'Courier New'; font-size: 13px; border: none;")
+        self.stats_area.setWordWrap(True)
+        layout.addWidget(self.stats_area)
+        
+        self.plugin_area = QTextEdit()
+        self.plugin_area.setReadOnly(True)
+        self.plugin_area.setStyleSheet("background-color: rgba(0, 0, 0, 100); color: #00FF00; font-family: 'Courier New'; font-size: 12px; border: 1px solid #005555;")
+        layout.addWidget(self.plugin_area)
+        
+        close_btn = QPushButton("CLOSE PANEL")
+        close_btn.setStyleSheet("background-color: #004444; color: white; padding: 5px; font-weight: bold; border: 1px solid #00FFFF;")
+        close_btn.clicked.connect(self.hide)
+        layout.addWidget(close_btn)
+        
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_info)
+        self.update_timer.start(2000)
+        self.update_info()
+
+    def update_info(self):
+        if not self.app_core: return
+        
+        # System status
+        from modules.system_control.sys_info import get_system_status
+        status = get_system_status()
+        self.stats_area.setText(status.replace("\n", " | "))
+        
+        # Plugins
+        plugins = []
+        for p in self.app_core.plugin_manager.plugins:
+            status = " [ACTIVE]"
+            plugins.append(f"• {p.name}{status}")
+        
+        self.plugin_area.setPlainText("LOADED PLUGINS:\n" + "\n".join(plugins))
+
 class CentralReactor(QWidget):
     clicked = pyqtSignal()
 
@@ -425,6 +482,11 @@ class JarvisHUD(QMainWindow):
         self.telemetry = TelemetryPanel()
         self.right_panel_container.addWidget(self.telemetry, stretch=3)
         
+        self.process_btn = QPushButton("VIEW PROCESSES")
+        self.process_btn.setStyleSheet("background-color: #004444; color: #00FFFF; border: 1px solid #00FFFF; padding: 10px; font-weight: bold; margin-bottom: 5px;")
+        self.process_btn.clicked.connect(self.toggle_process_panel)
+        self.right_panel_container.addWidget(self.process_btn)
+
         self.mic_selector = MicSelector()
         self.mic_selector.device_selected.connect(self.on_mic_selected)
         self.right_panel_container.addWidget(self.mic_selector, stretch=1)
@@ -435,6 +497,12 @@ class JarvisHUD(QMainWindow):
         self.right_panel_container.addWidget(self.stop_btn)
         
         main_layout.addLayout(self.right_panel_container)
+        
+        # Floating Process Panel
+        self.process_panel = ProcessPanel(self, self.app_core)
+        self.process_panel.hide()
+        # Position it centered
+        self.process_panel.move(350, 100)
 
         # Connect core signals
         self.app_core.set_gui_callback(self._on_message_from_thread)
@@ -453,6 +521,13 @@ class JarvisHUD(QMainWindow):
 
         # Auto-start mic for voice-only interaction
         QTimer.singleShot(1000, lambda: self.app_core.event_bus.publish("gui_toggle_mic", True))
+
+    def toggle_process_panel(self):
+        if self.process_panel.isVisible():
+            self.process_panel.hide()
+        else:
+            self.process_panel.show()
+            self.process_panel.raise_()
 
     def toggle_pause_everything(self):
         """Toggle mic ON/OFF with sequential logic for Bluetooth stability."""

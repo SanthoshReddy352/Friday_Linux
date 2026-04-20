@@ -99,6 +99,15 @@ if [ -f "piper/piper" ]; then
     echo "Setting execution permissions for Piper binary..."
     chmod +x piper/piper
 fi
+# 6. Snap-to-Start Integration
+echo -e "\n${YELLOW}[6/6] Configuring Snap-to-Start (Autostart)...${NC}"
+if [ -f "modules/voice_io/register_autostart.py" ]; then
+    python3 modules/voice_io/register_autostart.py
+else
+    echo -e "${RED}Warning: Autostart registration script not found.${NC}"
+fi
+
+echo -e "\n${BLUE}==================================================${NC}"
 
 echo -e "\n${BLUE}==================================================${NC}"
 echo -e "${GREEN}            Setup Complete Successfully!           ${NC}"

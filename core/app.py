@@ -61,6 +61,13 @@ class FridayApp:
             self.tts.stop()
             
         logger.info("FRIDAY: Cleanup complete.")
+        
+        # Hard exit to ensure all lingering non-daemon threads from plugins are terminated.
+        # This is necessary because some skills might have background workers that
+        # don't respond to standard signals, which would otherwise keep the process alive
+        # and prevent the snap detector from relaunching.
+        import os
+        os._exit(0)
 
     def process_input(self, text, source="user"):
         """Process user input through the router."""

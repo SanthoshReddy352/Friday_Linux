@@ -228,19 +228,18 @@ class STTEngine:
         # Strict Mode: Speaker feedback suppression
         # If media is playing on speakers, we are much more critical of the input
         if self.system_media_active and not self.is_bluetooth_active:
-            is_wake_up = "friday" in text_clean or "wake up" in text_clean
-            is_media_cmd = bool(set(text_clean.split()) & MEDIA_COMMAND_WHITELIST)
+            # Fuzzy match for 'Friday' to avoid mishearings like 'Florida' or 'Freddy'
+            is_friday = "friday" in text_clean or any(
+                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready", "frighten"]
+            )
             
-            # If it's just a few words of junk that isn't a command or wake word, drop it
-            if not (is_wake_up or is_media_cmd):
-                # We also drop if it's too short (less than 2 words) as it's likely a speaker blip
-                if len(text_clean.split()) < 2:
-                    logger.info(f"[STT] Ignored short noise '{text_clean}' (Required 'Friday' trigger because media is active).")
-                    return
-                # If it's longer but doesn't mention friday, it might be the video audio
-                if "friday" not in text_clean:
-                    logger.info(f"[STT] Ignored '{text_clean}' (Missing 'Friday' trigger while media is active).")
-                    return
+            # We strictly require the wake word if using built-in speakers while media is active
+            # to prevent self-triggering from speaker reflections or video audio.
+            if not is_friday and "wake up" not in text_clean:
+                # Still allow very short noises to be dropped silently, but log others
+                if len(text_clean.split()) >= 2:
+                    logger.info(f"[STT] Ignored '{text_clean}' (Missing 'Friday' trigger while media is active). Tip: Use wake word.")
+                return
 
         # Restricted Media Mode: Discard if not a whitelist command
         media_mode = getattr(self.app_core, "media_control_mode", False)
@@ -252,6 +251,16 @@ class STTEngine:
             if not (is_media_cmd or is_wake_up):
                 logger.debug(f"[STT] Dropping non-media command in restricted mode: '{text_clean}'")
                 return
+            
+            # Even in media mode, if we are on speakers, we want to be sure it wasn't just 
+            # the video saying "next" or "stop".
+            is_friday = "friday" in text_clean or any(
+                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready"]
+            )
+            if not self.is_bluetooth_active and not is_friday and "wake up" not in text_clean:
+                logger.info(f"[STT] Ignored whitelisted command '{text_clean}' (Missing 'Friday' trigger in media mode).")
+                return
+
             logger.info(f"[STT] Whitelist match in media mode: '{text_clean}'")
 
         # Basic barge-in logic
@@ -259,7 +268,10 @@ class STTEngine:
             text_clean_barge = text_clean
             # In Speaker mode, we strictly require the 'Friday' keyword to avoid
             # accidental triggers from speaker reflections or room noise.
-            if not self.is_bluetooth_active and "friday" not in text_clean:
+            is_friday = "friday" in text_clean or any(
+                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready"]
+            )
+            if not self.is_bluetooth_active and not is_friday:
                 return
 
             words = set(text_clean.split())
@@ -278,11 +290,15 @@ class STTEngine:
             else:
                 return
 
-        if "friday" in text_clean or "hey friday" in text_clean:
-            text_clean = self._clean_command_text(
-                text_clean.replace("hey friday", "").replace("friday", "")
-            )
-        else:
+        fuzzy_wake_words = ["hey friday", "friday", "florida", "freddy", "fry day", "fryday", "ready"]
+        wake_found = False
+        for fw in fuzzy_wake_words:
+            if fw in text_clean:
+                text_clean = self._clean_command_text(text_clean.replace(fw, ""))
+                wake_found = True
+                break
+        
+        if not wake_found:
             text_clean = self._clean_command_text(text_clean)
 
         if not text_clean:

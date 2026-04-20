@@ -101,6 +101,7 @@ class IntentRecognizer:
             self._parse_reminder,
             self._parse_notes,
             self._parse_voice_toggle,
+            self._parse_exit,
             self._parse_help,
             self._parse_greeting,
             self._parse_confirmation,
@@ -478,6 +479,12 @@ class IntentRecognizer:
     def _parse_help(self, clause, clause_lower, context):
         if re.search(r"\bhelp\b", clause_lower) or re.search(r"\bwhat\s+(?:else\s+)?can\s+you\s+do\b", clause_lower):
             return {"tool": "show_help", "args": {}, "text": clause, "domain": "help"}
+        return None
+
+    def _parse_exit(self, clause, clause_lower, context):
+        if re.fullmatch(r"(?:bye|goodbye|exit|quit|stop assistant)(?:\s+friday)?[.!?]?", clause_lower) or \
+           re.search(r"\b(?:shut down|shutdown|close|exit|quit)\s+(?:friday|the assistant|yourself)\b", clause_lower):
+            return {"tool": "shutdown_assistant", "args": {}, "text": clause, "domain": "system"}
         return None
 
     def _parse_greeting(self, clause, clause_lower, context):

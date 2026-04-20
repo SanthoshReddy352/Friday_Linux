@@ -24,3 +24,6 @@ chromadb
 playwright
 selenium
 webdriver-manager
+
+# --- CLI INTERFACE ---
+prompt-toolkit
