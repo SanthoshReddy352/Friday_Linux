@@ -30,3 +30,22 @@ class ConfigManager:
             else:
                 return default
         return value
+
+    def set(self, key_path, value):
+        """Set a configuration value using dot notation for nested dicts."""
+        keys = key_path.split(".")
+        target = self.config
+        for key in keys[:-1]:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            target = target[key]
+        target[keys[-1]] = value
+        return value
+
+    def save(self):
+        """Persist the current configuration to disk."""
+        directory = os.path.dirname(os.path.abspath(self.config_path))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(self.config_path, "w", encoding="utf-8") as file:
+            yaml.safe_dump(self.config, file, sort_keys=False)

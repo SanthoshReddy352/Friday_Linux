@@ -21,7 +21,12 @@ class BrowserAutomationPlugin(FridayPlugin):
                 "browser_name": "string - preferred browser, usually chrome",
             },
             "context_terms": ["browser", "chrome", "youtube", "youtube music"],
-        }, self.handle_open_browser_url)
+        }, self.handle_open_browser_url, capability_meta={
+            "connectivity": "online",
+            "latency_class": "interactive",
+            "permission_mode": "ask_first",
+            "side_effect_level": "write",
+        })
 
         self.app.router.register_tool({
             "name": "play_youtube",
@@ -31,7 +36,12 @@ class BrowserAutomationPlugin(FridayPlugin):
                 "browser_name": "string - preferred browser, usually chrome",
             },
             "context_terms": ["play youtube", "video", "music video", "youtube"],
-        }, self.handle_play_youtube)
+        }, self.handle_play_youtube, capability_meta={
+            "connectivity": "online",
+            "latency_class": "interactive",
+            "permission_mode": "ask_first",
+            "side_effect_level": "write",
+        })
 
         self.app.router.register_tool({
             "name": "play_youtube_music",
@@ -41,7 +51,12 @@ class BrowserAutomationPlugin(FridayPlugin):
                 "browser_name": "string - preferred browser, usually chrome",
             },
             "context_terms": ["youtube music", "song", "album", "playlist"],
-        }, self.handle_play_youtube_music)
+        }, self.handle_play_youtube_music, capability_meta={
+            "connectivity": "online",
+            "latency_class": "interactive",
+            "permission_mode": "ask_first",
+            "side_effect_level": "write",
+        })
 
         self.app.router.register_tool({
             "name": "browser_media_control",
@@ -50,7 +65,12 @@ class BrowserAutomationPlugin(FridayPlugin):
                 "control": "string - one of pause, resume, next, play",
             },
             "context_terms": ["pause", "resume", "next", "skip", "browser media"],
-        }, self.handle_browser_media_control)
+        }, self.handle_browser_media_control, capability_meta={
+            "connectivity": "online",
+            "latency_class": "interactive",
+            "permission_mode": "ask_first",
+            "side_effect_level": "write",
+        })
 
         logger.info("BrowserAutomationPlugin loaded.")
 

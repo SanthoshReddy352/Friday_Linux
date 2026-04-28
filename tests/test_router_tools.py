@@ -185,7 +185,43 @@ def test_multi_action_plan_executes_multiple_tools(router):
     result = router.process_text("open firefox and tell me the time")
 
     assert calls == [("launch_app", "open firefox"), ("get_time", "tell me the time")]
-    assert result == "Opening app\nIt is noon"
+    assert result == "Got both:\nOpening app\nIt is noon"
+
+
+def test_time_and_system_info_executes_both_tools(router):
+    calls = []
+
+    router.register_tool(
+        {"name": "get_time", "description": "Get time.", "parameters": {}},
+        lambda t, a: calls.append(("get_time", t)) or "It is noon",
+    )
+    router.register_tool(
+        {"name": "get_system_status", "description": "System status.", "parameters": {}},
+        lambda t, a: calls.append(("get_system_status", t)) or "system_ok",
+    )
+
+    result = router.process_text("what is the time and system info")
+
+    assert calls == [("get_time", "what is the time"), ("get_system_status", "system info")]
+    assert result == "Got both:\nIt is noon\nsystem_ok"
+
+
+def test_misheard_system_info_on_time_executes_both_tools(router):
+    calls = []
+
+    router.register_tool(
+        {"name": "get_time", "description": "Get time.", "parameters": {}},
+        lambda t, a: calls.append(("get_time", t)) or "It is noon",
+    )
+    router.register_tool(
+        {"name": "get_system_status", "description": "System status.", "parameters": {}},
+        lambda t, a: calls.append(("get_system_status", t)) or "system_ok",
+    )
+
+    result = router.process_text("what is the system info on time")
+
+    assert calls == [("get_system_status", "what is the system info"), ("get_time", "time")]
+    assert result == "Got both:\nsystem_ok\nIt is noon"
 
 
 def test_system_info_maps_to_system_status(router):

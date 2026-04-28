@@ -8,11 +8,28 @@ import difflib
 import subprocess
 import shutil
 from core.logger import logger
-from .audio_devices import apply_input_device_selection, list_audio_input_devices
+from .audio_devices import (
+    apply_input_device_selection,
+    choose_startup_input_device,
+    list_audio_input_devices,
+)
+from .safety import VoiceSafetyLayer
+from .wake_detector import WakeWordDetector
 
 # Words that trigger an immediate TTS interrupt (barge-in)
 BARGE_IN_WORDS = {"stop", "wait", "cancel", "enough", "quiet", "silence", "pause"}
 FILLER_ONLY_WORDS = {"please", "yeah", "yes", "okay", "ok", "go", "uh", "um", "hmm", "hm"}
+LOW_SIGNAL_TRANSCRIPTS = {"you", "yo", "uh", "um", "hmm", "hm", "mm", "mmm", "ah", "oh"}
+MEDIA_NOISE_PHRASES = {
+    "thank you for watching",
+    "thanks for watching",
+    "like and subscribe",
+    "dont forget to subscribe",
+    "don t forget to subscribe",
+    "subscribe to our channel",
+    "welcome back to",
+    "in this video",
+}
 
 # Whitelist for restricted media control mode
 MEDIA_COMMAND_WHITELIST = {
@@ -20,19 +37,29 @@ MEDIA_COMMAND_WHITELIST = {
     "forward", "back", "backward", "revert", "rewind", "seconds", "secs", "video",
     "wake", "up", "friday"
 }
+WAKE_WORD_VARIANTS = ("hey friday", "friday", "florida", "freddy", "fry day", "fryday")
 
 class STTEngine:
     def __init__(self, app_core):
         self.app_core = app_core
         self.is_listening = False  # Software gate (False = mute/ignore)
         self._loop_active = False # Underlying hardware stream state
+        self.wake_armed = False
+        self._processing_voice = False
+        self.last_rejected_reason = ""
+        self._explicit_activation_until = 0.0
+        self._explicit_activation_pending = False
         self.model = None
         self.q = queue.Queue(maxsize=32)
         self.listen_thread = None
         self._init_lock = threading.Lock()
         self._initialized_event = threading.Event()
         self._initializing = False
-        self.model_name = os.getenv("FRIDAY_WHISPER_MODEL", "base.en")
+        self.model_name = self._config_str("voice.stt_model", "base.en", "FRIDAY_WHISPER_MODEL")
+        self.compute_type = self._config_str("voice.stt_compute_type", "int8", "FRIDAY_WHISPER_COMPUTE_TYPE")
+        self.language = self._config_str("voice.stt_language", "en", "FRIDAY_WHISPER_LANGUAGE").lower()
+        self.download_root = self._config_str("voice.stt_download_root", "", "FRIDAY_WHISPER_DOWNLOAD_ROOT") or None
+        self.cpu_threads = self._config_int("voice.stt_cpu_threads", max(1, min(8, os.cpu_count() or 1)), "FRIDAY_WHISPER_CPU_THREADS")
         self._drop_audio_until = 0.0
         self.device_id = None # Default device
         self.device_label = "System default"
@@ -62,6 +89,19 @@ class STTEngine:
         self.system_media_active = False
         self._last_profile_check = 0.0
         self.profile_check_interval = 5.0
+        self.wake_session_timeout_s = self._config_float("conversation.wake_session_timeout_s", 12.0)
+        self.assistant_echo_window_s = self._config_float("conversation.assistant_echo_window_s", 1.8)
+        self._wake_session_until = 0.0
+        self.min_wake_free_words = int(os.getenv("FRIDAY_MIN_WAKE_FREE_WORDS", "3"))
+        self.media_max_uninvoked_words = self._config_int("voice.media_max_uninvoked_words", 4)
+        self.wake_model_path = self._resolve_project_path(
+            self._config_str("voice.wake_model_path", "models/hey_friday.onnx")
+        )
+        self.wake_threshold = self._config_float("voice.wake_threshold", 0.5)
+        self.wake_transcript_fallback_enabled = self._config_bool("voice.wake_transcript_fallback", True)
+        self.wake_transcript_fallback = False
+        self.wake_detector = WakeWordDetector(self.wake_model_path, threshold=self.wake_threshold)
+        self.safety = VoiceSafetyLayer(self.media_max_uninvoked_words)
 
     def initialize(self):
         if self.model is not None:
@@ -83,8 +123,19 @@ class STTEngine:
 
         try:
             from faster_whisper import WhisperModel
-            logger.info(f"Initializing faster-whisper {self.model_name} model...")
-            self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
+            logger.info(
+                "Initializing faster-whisper %s model (compute=%s, language=%s)...",
+                self.model_name,
+                self.compute_type,
+                self.language,
+            )
+            self.model = WhisperModel(
+                self.model_name,
+                device="cpu",
+                compute_type=self.compute_type,
+                cpu_threads=self.cpu_threads,
+                download_root=self.download_root,
+            )
             logger.info("faster-whisper loaded successfully.")
             
             # Start the persistent hardware stream thread immediately after model load
@@ -100,29 +151,41 @@ class STTEngine:
                 self._initialized_event.set()
 
     def warm_up(self):
-        threading.Thread(target=self.initialize, daemon=True).start()
+        self._start_hardware_stream()
+        if self._current_mode() != "wake_word":
+            threading.Thread(target=self.initialize, daemon=True).start()
 
     def audio_callback(self, indata, frames, time_info, status):
         """Always running hardware callback."""
         if status:
             logger.warning(f"Audio status: {status}")
-        
-        # Software Gate: Only put data into queue if we are actively 'listening'
-        if not self.is_listening:
-            return
 
         # Periodic profile check (Adaptive VAD)
         now = time.monotonic()
-        if now - self._last_profile_check > self.profile_check_interval:
+        if self._loop_active and now - self._last_profile_check > self.profile_check_interval:
             self._update_audio_profile()
             self._last_profile_check = now
+
+        if self.wake_armed and not self.is_listening:
+            if self.wake_detector.process_frame(indata):
+                self._handle_wake_detected()
+            elif self.wake_detector.unavailable_reason:
+                self._reject_transcript(self.wake_detector.unavailable_reason, log_level="debug")
+            return
+        
+        # Software Gate: Only put data into queue if we are actively transcribing.
+        if not self.is_listening:
+            return
 
         if now < self._drop_audio_until:
             return
 
         rms = float(np.sqrt(np.mean(indata ** 2)))
-        if self.app_core.is_speaking:
-            self._maybe_interrupt_for_live_speech(rms)
+        if self._speech_output_busy():
+            if self._tts_is_actively_speaking() and self._maybe_interrupt_for_live_speech(rms):
+                return
+            if not self._tts_is_actively_speaking():
+                return
             # Do NOT return early here. We allow audio to pass into the queue 
             # while speaking so word-based barge-in ("Friday stop") can work.
             # But we use a higher threshold to avoid transcribing everything.
@@ -223,55 +286,68 @@ class STTEngine:
     def _process_voice_text(self, text):
         text_clean = self._sanitize_text(text)
         if not text_clean:
+            self._reject_transcript("empty transcript", log_level="debug")
             return
 
-        # Strict Mode: Speaker feedback suppression
-        # If media is playing on speakers, we are much more critical of the input
-        if self.system_media_active and not self.is_bluetooth_active:
-            # Fuzzy match for 'Friday' to avoid mishearings like 'Florida' or 'Freddy'
-            is_friday = "friday" in text_clean or any(
-                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready", "frighten"]
-            )
-            
-            # We strictly require the wake word if using built-in speakers while media is active
-            # to prevent self-triggering from speaker reflections or video audio.
-            if not is_friday and "wake up" not in text_clean:
-                # Still allow very short noises to be dropped silently, but log others
-                if len(text_clean.split()) >= 2:
-                    logger.info(f"[STT] Ignored '{text_clean}' (Missing 'Friday' trigger while media is active). Tip: Use wake word.")
-                return
+        wake_found = self._contains_wake_word(text_clean)
+        has_voice_session = self._has_active_wake_session()
+        invoked = wake_found or has_voice_session or self._has_explicit_activation()
+        text_clean = self._clean_command_text(text_clean)
+        if not text_clean:
+            self._reject_transcript("empty command after cleanup", log_level="debug")
+            return
 
-        # Restricted Media Mode: Discard if not a whitelist command
+        if self._current_mode() == "wake_word" and not invoked:
+            self._reject_transcript("waiting for wake word", text_clean, log_level="debug")
+            return
+
+        if self._is_low_signal_transcript(text_clean) and not wake_found:
+            self._reject_transcript("low-signal transcript", text_clean, log_level="debug")
+            return
+
+        if self._looks_like_recent_assistant_echo(text_clean) and not wake_found and not self.app_core.is_speaking:
+            self._reject_transcript("assistant echo", text_clean)
+            return
+
+        if self.system_media_active and not wake_found and self._looks_like_media_noise(text_clean):
+            self._reject_transcript("likely media audio", text_clean)
+            return
+
         media_mode = getattr(self.app_core, "media_control_mode", False)
+        if not isinstance(media_mode, bool):
+            media_mode = False
         if media_mode:
             words = set(text_clean.split())
             is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
             is_wake_up = "wake up" in text_clean
-            
-            if not (is_media_cmd or is_wake_up):
-                logger.debug(f"[STT] Dropping non-media command in restricted mode: '{text_clean}'")
-                return
-            
-            # Even in media mode, if we are on speakers, we want to be sure it wasn't just 
-            # the video saying "next" or "stop".
-            is_friday = "friday" in text_clean or any(
-                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready"]
-            )
-            if not self.is_bluetooth_active and not is_friday and "wake up" not in text_clean:
-                logger.info(f"[STT] Ignored whitelisted command '{text_clean}' (Missing 'Friday' trigger in media mode).")
-                return
+        else:
+            words = set(text_clean.split())
+            is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
+            is_wake_up = "wake up" in text_clean
 
-            logger.info(f"[STT] Whitelist match in media mode: '{text_clean}'")
+        decision = self.safety.evaluate_media_transcript(
+            text_clean,
+            media_active=self.system_media_active,
+            media_control_mode=media_mode,
+            invoked=invoked,
+            is_media_command=is_media_cmd,
+            is_wake_up=is_wake_up,
+            is_bluetooth_active=self.is_bluetooth_active,
+        )
+        if not decision.accepted:
+            self._reject_transcript(decision.reason, text_clean)
+            return
 
         # Basic barge-in logic
-        if self.app_core.is_speaking:
+        if self._tts_is_actively_speaking():
             text_clean_barge = text_clean
             # In Speaker mode, we strictly require the 'Friday' keyword to avoid
             # accidental triggers from speaker reflections or room noise.
             is_friday = "friday" in text_clean or any(
-                w in text_clean for w in ["florida", "freddy", "fry day", "fryday", "ready"]
+                w in text_clean for w in WAKE_WORD_VARIANTS[1:]
             )
-            if not self.is_bluetooth_active and not is_friday:
+            if not self.is_bluetooth_active and not is_friday and not self._looks_like_fresh_command(text_clean):
+                self._reject_transcript("speaker echo during speech", text_clean, log_level="debug")
                 return
 
             words = set(text_clean.split())
@@ -286,46 +362,60 @@ class STTEngine:
                     text_clean = text_clean.replace(word, "")
                 text_clean = self._clean_command_text(text_clean)
                 if not text_clean or text_clean in FILLER_ONLY_WORDS:
+                    self._reject_transcript("barge-in command empty after cleanup", text_clean, log_level="debug")
                     return
             else:
+                self._reject_transcript("ignored during speech", text_clean, log_level="debug")
                 return
 
-        fuzzy_wake_words = ["hey friday", "friday", "florida", "freddy", "fry day", "fryday", "ready"]
-        wake_found = False
-        for fw in fuzzy_wake_words:
-            if fw in text_clean:
-                text_clean = self._clean_command_text(text_clean.replace(fw, ""))
-                wake_found = True
-                break
-        
-        if not wake_found:
+        if wake_found:
+            text_clean = self._strip_wake_words(text_clean)
+            text_clean = self._clean_command_text(text_clean)
+            self._extend_wake_session()
+            if not text_clean:
+                self.last_rejected_reason = ""
+                self._emit_runtime_state()
+                self._handle_wake_detected()
+                return
+        else:
+            if not has_voice_session and not self._has_explicit_activation() and not self.is_bluetooth_active:
+                word_count = len(text_clean.split())
+                if word_count < self.min_wake_free_words:
+                    self._reject_transcript("short transcript missing wake word", text_clean, log_level="debug")
+                    return
             text_clean = self._clean_command_text(text_clean)
 
         if not text_clean:
+            self._reject_transcript("empty command after wake cleanup", log_level="debug")
+            self._clear_explicit_activation()
             return
 
+        self._extend_wake_session()
+        self.last_rejected_reason = ""
+        self._emit_runtime_state()
+        self._clear_explicit_activation()
         self.app_core.process_input(text_clean, source="voice")
 
     def _maybe_interrupt_for_live_speech(self, rms):
-        if not self.app_core.is_speaking or not self.use_rms_barge_in:
+        if not self._tts_is_actively_speaking() or not self.use_rms_barge_in:
             self._barge_in_frame_count = 0
-            return
+            return False
 
         tts = getattr(self.app_core, "tts", None)
         now = time.monotonic()
         speaking_started_at = getattr(tts, "speaking_started_at", 0.0) if tts else 0.0
         if speaking_started_at and (now - speaking_started_at) < self.barge_in_grace_period_s:
             self._barge_in_frame_count = 0
-            return
+            return True
 
         if rms >= self.barge_in_rms_threshold:
             self._barge_in_frame_count += 1
         else:
             self._barge_in_frame_count = 0
-            return
+            return False
 
         if self._barge_in_frame_count < self.barge_in_trigger_frames:
-            return
+            return False
 
         self._barge_in_frame_count = 0
         if tts:
@@ -333,6 +423,8 @@ class STTEngine:
             self._clear_audio_queue()
             self._drop_audio_until = now + self.barge_in_post_stop_drop_s
             tts.stop()
+            return True
+        return False
 
     def _looks_like_fresh_command(self, text):
         if not text:
@@ -351,18 +443,157 @@ class STTEngine:
         )
         return any(text.startswith(starter) for starter in command_starters)
 
-    def start_listening(self):
-        """Lightweight software gate activation."""
-        if not self.model and not self.initialize():
-            logger.error("Cannot start listening: STT model or hardware stream failed.")
+    def _looks_like_short_media_command(self, text):
+        normalized = self._sanitize_text(text).strip()
+        if not normalized:
             return False
-            
+        if len(normalized.split()) > 4:
+            return False
+        direct = {
+            "play", "pause", "resume", "stop", "next", "skip", "previous",
+            "forward", "back", "backward", "revert", "rewind",
+            "next video", "previous video", "play it", "pause it", "resume it",
+            "right next", "ready play", "wake up",
+        }
+        if normalized in direct:
+            return True
+        return bool(re.fullmatch(r"(?:skip|forward|back|backward|revert|rewind)(?: \d+)?(?: seconds?| secs?)?", normalized))
+
+    def _tts_is_actively_speaking(self):
+        app_speaking = getattr(self.app_core, "is_speaking", False)
+        if app_speaking is True:
+            return True
+
+        tts = getattr(self.app_core, "tts", None)
+        if not tts:
+            return False
+
+        tts_speaking = getattr(tts, "is_speaking", False)
+        return tts_speaking is True
+
+    def _speech_output_busy(self):
+        if self._tts_is_actively_speaking():
+            return True
+
+        tts = getattr(self.app_core, "tts", None)
+        if not tts:
+            return False
+
+        pending = getattr(tts, "has_pending_speech", False)
+        if isinstance(pending, bool):
+            return pending
+        return False
+
+    def _should_drop_transcript_before_logging(self, text):
+        text_clean = self._sanitize_text(text)
+        if not text_clean:
+            return True
+        if self._contains_wake_word(text_clean):
+            return False
+        return self._is_low_signal_transcript(text_clean)
+
+    def _looks_like_media_noise(self, text):
+        normalized = self._sanitize_text(text)
+        return any(phrase in normalized for phrase in MEDIA_NOISE_PHRASES)
+
+    def start_listening(self):
+        """Activate the voice gate according to the current listening mode."""
+        mode = self._current_mode()
+        if mode == "wake_word":
+            return self.arm_wake_word()
+        return self.activate_for_invocation(source="command" if mode in {"manual", "on_demand"} else "policy")
+
+    def activate_for_invocation(self, source="button"):
+        """Explicitly open transcription for a short user-invoked session."""
+        mode = self._current_mode()
+        self.wake_armed = False
+        self.wake_transcript_fallback = False
+        if mode in {"wake_word", "on_demand", "manual"}:
+            self._explicit_activation_until = time.monotonic() + self.wake_session_timeout_s
+        if source in {"button", "command", "wake_word"}:
+            self._explicit_activation_pending = True
+        return self._start_transcription_gate()
+
+    def arm_wake_word(self):
+        """Keep hardware warm and listen only for the low-cost wake detector."""
+        self._start_hardware_stream()
+        self.is_listening = False
+        self.wake_armed = True
+        self.wake_transcript_fallback = False
+        if not self.wake_detector.initialize():
+            reason = self.wake_detector.unavailable_reason or "wake detector unavailable"
+            if self.wake_transcript_fallback_enabled:
+                logger.warning("[WakeWord] %s; using transcript wake fallback.", reason)
+                return self._start_transcript_wake_gate(reason)
+            self.wake_armed = False
+            self._reject_transcript(reason)
+        self._emit_runtime_state()
+        return True
+
+    def _start_transcript_wake_gate(self, reason=""):
+        self.last_rejected_reason = ""
+        self.wake_armed = True
+        self.wake_transcript_fallback = True
+        self._explicit_activation_pending = False
+        self._explicit_activation_until = 0.0
+
+        request_id = self._next_listen_request_id()
+        if not self.model:
+            logger.info("Wake transcript fallback will arm after the STT model is ready.")
+            threading.Thread(
+                target=self._complete_transcript_wake_gate_after_initialize,
+                args=(request_id,),
+                daemon=True,
+            ).start()
+        else:
+            self._activate_transcript_wake_gate(request_id)
+
+        self._emit_runtime_state()
+        return True
+
+    def _complete_transcript_wake_gate_after_initialize(self, request_id):
+        if not self.initialize():
+            logger.error("Cannot arm transcript wake fallback: STT model or hardware stream failed.")
+            self.wake_armed = False
+            self.wake_transcript_fallback = False
+            self._reject_transcript("wake transcript fallback unavailable")
+            return
+        self._activate_transcript_wake_gate(request_id)
+
+    def _activate_transcript_wake_gate(self, request_id):
+        if request_id != self._current_listen_request_id():
+            return
+        self._clear_audio_queue()
+        self._barge_in_frame_count = 0
+        self._drop_audio_until = max(self._drop_audio_until, time.monotonic() + self.listen_resume_delay_s)
+        self.is_listening = True
+        self.wake_armed = True
+        self.wake_transcript_fallback = True
+        logger.info("Wake transcript fallback ARMED. Say 'Friday' before the command.")
+        self._emit_runtime_state()
+
+    def _start_transcription_gate(self):
+        """Lightweight software gate activation."""
         if self.is_listening:
+            self._emit_runtime_state()
             return True
 
         request_id = self._next_listen_request_id()
-        if self.app_core.is_speaking:
-            logger.info("Microphone gate will open after current speech finishes.")
+        if not self.model:
+            logger.info("STT model is still loading. Microphone will open when it is ready.")
+            threading.Thread(
+                target=self._complete_listen_after_initialize,
+                args=(request_id,),
+                daemon=True,
+            ).start()
+            return True
+
+        if self._speech_output_busy():
+            if self._tts_is_actively_speaking():
+                logger.info("Microphone barge-in gate armed during speech.")
+            else:
+                logger.info("Microphone barge-in gate armed for queued speech.")
+            self._activate_listening(request_id, resume_delay=0.0)
             threading.Thread(
                 target=self._complete_listen_when_ready,
                 args=(request_id,),
@@ -373,13 +604,24 @@ class STTEngine:
         self._activate_listening(request_id)
         return True
 
+    def _complete_listen_after_initialize(self, request_id):
+        if not self.initialize():
+            logger.error("Cannot start listening: STT model or hardware stream failed.")
+            return
+        self._complete_listen_when_ready(request_id)
+
     def stop_listening(self):
         """Lightweight software gate deactivation."""
         self._next_listen_request_id()
         self.is_listening = False
+        self.wake_armed = False
+        self.wake_transcript_fallback = False
+        self._explicit_activation_until = 0.0
+        self._explicit_activation_pending = False
         self._barge_in_frame_count = 0
         self._clear_audio_queue()
         logger.info("Microphone software gate CLOSED.")
+        self._emit_runtime_state()
         return True
 
     def set_device(self, device_id):
@@ -395,6 +637,7 @@ class STTEngine:
         self.device_id = next_device
         self.device_label = next_label
         self._startup_device_selected = True
+        self._persist_input_device(device_id)
 
         # We must restart the actual hardware stream if the device changes
         self._loop_active = False
@@ -402,6 +645,7 @@ class STTEngine:
             self.listen_thread.join(timeout=1.0)
         time.sleep(0.5)
         self._start_hardware_stream()
+        self._emit_runtime_state()
 
     def shutdown(self):
         """Cleanly close the hardware stream and stop the process."""
@@ -427,6 +671,84 @@ class STTEngine:
                 return cleaned
         return self._sanitize_text(text)
 
+    def _contains_wake_word(self, text):
+        text = self._sanitize_text(text)
+        if not text:
+            return False
+        return any(variant in text for variant in WAKE_WORD_VARIANTS)
+
+    def _strip_wake_words(self, text):
+        cleaned = self._sanitize_text(text)
+        for variant in WAKE_WORD_VARIANTS:
+            cleaned = cleaned.replace(variant, " ")
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    def _extend_wake_session(self):
+        self._wake_session_until = max(self._wake_session_until, time.monotonic() + self.wake_session_timeout_s)
+
+    def _has_active_wake_session(self):
+        return time.monotonic() < self._wake_session_until
+
+    def _is_low_signal_transcript(self, text):
+        normalized = self._sanitize_text(text)
+        if not normalized:
+            return True
+        tokens = normalized.split()
+        if len(tokens) == 1 and tokens[0] in LOW_SIGNAL_TRANSCRIPTS:
+            return True
+        if len(tokens) <= 2 and len(set(tokens)) == 1 and tokens[0] in LOW_SIGNAL_TRANSCRIPTS:
+            return True
+        return False
+
+    def _looks_like_recent_assistant_echo(self, text):
+        if not text:
+            return False
+        candidates = []
+        tts = getattr(self.app_core, "tts", None)
+        now = time.monotonic()
+        is_currently_speaking = bool(getattr(tts, "is_speaking", False) or getattr(self.app_core, "is_speaking", False))
+        speaking_stopped_at = float(getattr(tts, "speaking_stopped_at", 0.0) or 0.0) if tts else 0.0
+        if not is_currently_speaking:
+            if not speaking_stopped_at:
+                return False
+            if (now - speaking_stopped_at) > self.assistant_echo_window_s:
+                return False
+        if tts:
+            candidates.extend(
+                candidate for candidate in (
+                    getattr(tts, "current_text", ""),
+                    getattr(tts, "current_sentence", ""),
+                )
+                if candidate
+            )
+        assistant_context = getattr(self.app_core, "assistant_context", None)
+        if assistant_context and hasattr(assistant_context, "latest_assistant_text"):
+            latest = assistant_context.latest_assistant_text()
+            if latest:
+                candidates.append(latest)
+
+        normalized = self._sanitize_text(text)
+        if len(normalized.split()) < 3:
+            return False
+
+        for candidate in candidates:
+            candidate_norm = self._sanitize_text(candidate)
+            if not candidate_norm:
+                continue
+            similarity = difflib.SequenceMatcher(None, normalized, candidate_norm).ratio()
+            if similarity >= 0.84:
+                return True
+            if normalized == candidate_norm:
+                return True
+            if normalized in candidate_norm and len(normalized) >= 18:
+                return True
+            candidate_tokens = set(candidate_norm.split())
+            normalized_tokens = set(normalized.split())
+            overlap = len(candidate_tokens & normalized_tokens)
+            if len(normalized_tokens) >= 6 and overlap / max(1, len(normalized_tokens)) >= 0.85:
+                return True
+        return False
+
     def _clear_audio_queue(self):
         while True:
             try:
@@ -434,24 +756,128 @@ class STTEngine:
             except queue.Empty:
                 break
 
-    def _activate_listening(self, request_id=None):
+    def _activate_listening(self, request_id=None, resume_delay=None):
         if request_id is not None and request_id != self._current_listen_request_id():
             return
         self._clear_audio_queue()
         self._barge_in_frame_count = 0
-        self._drop_audio_until = max(self._drop_audio_until, time.monotonic() + self.listen_resume_delay_s)
+        delay = self.listen_resume_delay_s if resume_delay is None else max(0.0, float(resume_delay))
+        self._drop_audio_until = max(self._drop_audio_until, time.monotonic() + delay)
         self.is_listening = True
+        self.wake_armed = False
+        self.wake_transcript_fallback = False
         logger.info("Microphone software gate OPENED.")
+        self._emit_runtime_state()
 
     def _complete_listen_when_ready(self, request_id):
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
+        while True:
             if request_id != self._current_listen_request_id():
                 return
-            if not self.app_core.is_speaking:
+            if not self._speech_output_busy():
                 self._activate_listening(request_id)
                 return
             time.sleep(0.05)
+
+    def _handle_wake_detected(self):
+        logger.info("[WakeWord] Wake word detected.")
+        self.last_rejected_reason = ""
+        self._extend_wake_session()
+        self._explicit_activation_until = time.monotonic() + self.wake_session_timeout_s
+        event_bus = getattr(self.app_core, "event_bus", None)
+        if event_bus and hasattr(event_bus, "publish"):
+            event_bus.publish("voice_activation_requested", {"source": "wake_word"})
+        else:
+            self.activate_for_invocation(source="wake_word")
+
+    def set_processing_state(self, processing):
+        self._processing_voice = bool(processing)
+        self._emit_runtime_state()
+
+    def get_runtime_state(self):
+        mode = self._current_mode()
+        ui_state = "muted"
+        if self._tts_is_actively_speaking():
+            ui_state = "speaking"
+        elif self._processing_voice:
+            ui_state = "processing"
+        elif self.is_listening:
+            ui_state = "listening"
+        elif self.wake_armed:
+            ui_state = "armed"
+
+        return {
+            "mode": mode,
+            "ui_state": ui_state,
+            "hardware_warm": bool(self._loop_active),
+            "actively_transcribing": bool(self.is_listening),
+            "wake_armed": bool(self.wake_armed),
+            "wake_transcript_fallback": bool(self.wake_transcript_fallback),
+            "wake_strategy": "Transcript fallback" if self.wake_transcript_fallback else "Wake model",
+            "device_label": self.device_label,
+            "media_active": bool(self.system_media_active or getattr(self.app_core, "media_control_mode", False)),
+            "last_rejected_reason": self.last_rejected_reason,
+        }
+
+    def _emit_runtime_state(self):
+        event_bus = getattr(self.app_core, "event_bus", None)
+        if event_bus and hasattr(event_bus, "publish"):
+            event_bus.publish("voice_runtime_state_changed", self.get_runtime_state())
+
+    def _reject_transcript(self, reason, text="", log_level="info"):
+        reason = reason or "transcript rejected"
+        if reason == self.last_rejected_reason:
+            return
+        self.last_rejected_reason = reason
+        message = f"[STT] Rejected transcript ({reason})"
+        if text:
+            message = f"{message}: '{text}'"
+        getattr(logger, log_level, logger.info)(message)
+        self._emit_runtime_state()
+
+    def _current_mode(self):
+        getter = getattr(self.app_core, "get_listening_mode", None)
+        if callable(getter):
+            try:
+                mode = getter()
+            except Exception:
+                mode = "persistent"
+        else:
+            config = getattr(self.app_core, "config", None)
+            if config and hasattr(config, "get"):
+                mode = config.get("conversation.listening_mode", "persistent")
+            else:
+                mode = "persistent"
+        mode = str(mode or "persistent").strip().lower().replace("-", "_")
+        aliases = {"wakeword": "wake_word", "on demand": "on_demand", "ondemand": "on_demand"}
+        mode = aliases.get(mode, mode)
+        if mode in {"persistent", "wake_word", "on_demand", "manual"}:
+            return mode
+        return "persistent"
+
+    def _has_explicit_activation(self):
+        return self._explicit_activation_pending or time.monotonic() < self._explicit_activation_until
+
+    def _clear_explicit_activation(self):
+        self._explicit_activation_pending = False
+        self._explicit_activation_until = 0.0
+
+    def _persist_input_device(self, device_id):
+        config = getattr(self.app_core, "config", None)
+        if not config or not hasattr(config, "set"):
+            return
+        try:
+            config.set("voice.input_device", device_id)
+            if hasattr(config, "save"):
+                config.save()
+        except Exception as exc:
+            logger.warning("Could not persist microphone selection: %s", exc)
+
+    def _resolve_project_path(self, path):
+        path = str(path or "").strip()
+        if not path or os.path.isabs(path):
+            return path
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(project_root, path)
 
     def _next_listen_request_id(self):
         with self._listen_request_lock:
@@ -495,19 +921,23 @@ class STTEngine:
             # Detect System Audio Activity
             # Look for [active] streams that are NOT our own process
             is_media_active = False
-            streams_section = False
-            for line in status.splitlines():
-                if "Streams:" in line:
-                    streams_section = True
+            for raw_line in status.splitlines():
+                lowered = raw_line.lower()
+                if "[active]" not in lowered:
                     continue
-                if "[active]" in line and "python" not in line and "stt" not in line:
-                    is_media_active = True
-                    break
+                if any(
+                    token in lowered
+                    for token in ("python", "stt", "friday", "aplay", "piper", "speech", "espeak")
+                ):
+                    continue
+                is_media_active = True
+                break
 
             if is_bt != self.is_bluetooth_active or is_media_active != self.system_media_active:
                 self.is_bluetooth_active = is_bt
                 self.system_media_active = is_media_active
                 self._apply_adaptive_thresholds()
+                self._emit_runtime_state()
         except Exception as e:
             logger.warning(f"[STT] Failed to update audio profile: {e}")
 
@@ -534,28 +964,100 @@ class STTEngine:
             # Even stricter if music is playing
             self.silence_threshold += 0.005
             self.barge_in_rms_threshold += 0.02
+            self.use_rms_barge_in = False
             profile_name += " + ACTIVE MEDIA"
 
         logger.info(f"[STT] Adaptive VAD profile updated: {profile_name}")
         logger.debug(f"[STT] Thresholds: silence={self.silence_threshold:.4f}, barge_in={self.barge_in_rms_threshold:.4f}")
+
+    def _config_float(self, key, default):
+        config = getattr(self.app_core, "config", None)
+        if config and hasattr(config, "get"):
+            try:
+                return float(config.get(key, default))
+            except Exception:
+                return float(default)
+        return float(default)
+
+    def _config_int(self, key, default, env_name=None):
+        if env_name:
+            env_value = os.getenv(env_name)
+            if env_value:
+                try:
+                    return int(env_value)
+                except Exception:
+                    return int(default)
+
+        config = getattr(self.app_core, "config", None)
+        if config and hasattr(config, "get"):
+            try:
+                return int(config.get(key, default))
+            except Exception:
+                return int(default)
+        return int(default)
+
+    def _config_str(self, key, default, env_name=None):
+        if env_name:
+            env_value = os.getenv(env_name)
+            if env_value:
+                return env_value.strip()
+
+        config = getattr(self.app_core, "config", None)
+        if config and hasattr(config, "get"):
+            try:
+                value = config.get(key, default)
+            except Exception:
+                value = default
+        else:
+            value = default
+
+        if not isinstance(value, (str, int, float, bool)):
+            return str(default)
+        if value is None:
+            return str(default)
+        return str(value).strip() or str(default)
+
+    def _config_bool(self, key, default=False, env_name=None):
+        if env_name:
+            env_value = os.getenv(env_name)
+            if env_value:
+                return env_value.strip().lower() in {"1", "true", "yes", "on"}
+
+        config = getattr(self.app_core, "config", None)
+        if config and hasattr(config, "get"):
+            try:
+                value = config.get(key, default)
+            except Exception:
+                value = default
+        else:
+            value = default
+        if isinstance(value, bool):
+            return value
+        if not isinstance(value, (str, int, float)):
+            return bool(default)
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     def _transcribe_buffer(self, audio_buffer):
         audio_data = np.concatenate(audio_buffer, axis=0)
         audio_data = self._prepare_audio_for_transcription(audio_data)
 
         logger.debug("[Whisper] Transcribing...")
-        segments, _ = self.model.transcribe(
-            audio_data,
-            beam_size=1,
-            best_of=1,
-            patience=1,
-            language="en",
-            condition_on_previous_text=False,
-            vad_filter=False,
-        )
+        transcribe_kwargs = {
+            "beam_size": 1,
+            "best_of": 1,
+            "patience": 1,
+            "condition_on_previous_text": False,
+            "vad_filter": False,
+        }
+        if self.language and self.language not in {"auto", "detect"}:
+            transcribe_kwargs["language"] = self.language
+        segments, _ = self.model.transcribe(audio_data, **transcribe_kwargs)
         text = "".join(s.text for s in segments).strip()
 
         if text:
+            if self._should_drop_transcript_before_logging(text):
+                self._reject_transcript("low-signal transcript", text, log_level="debug")
+                return
             logger.info(f"[Voice Identified]: {text}")
             self._process_voice_text(text)
         else:
@@ -564,6 +1066,19 @@ class STTEngine:
     def _ensure_startup_input_device(self):
         if self._startup_device_selected or self.device_id is not None or self.device_label != "System default":
             return
+
+        configured_device = self._configured_input_device()
+        if configured_device is not None:
+            try:
+                selection = apply_input_device_selection(configured_device)
+                self.device_id = selection.get("device")
+                self.device_label = selection.get("label", "System default")
+                self._startup_device_selected = True
+                logger.info("Configured microphone selected: %s", self.device_label)
+                self._emit_runtime_state()
+                return
+            except Exception as exc:
+                logger.warning("Could not select configured microphone: %s", exc)
 
         try:
             devices = list_audio_input_devices()
@@ -574,19 +1089,7 @@ class STTEngine:
         if not devices:
             return
 
-        preferred = next((device for device in devices if device.is_default), None)
-        if preferred is None:
-            preferred = next((device for device in devices if device.backend == "pipewire"), None)
-        if preferred is None:
-            preferred = next(
-                (
-                    device for device in devices
-                    if any(token in device.label.lower() for token in ("built-in", "analog", "microphone", "mic"))
-                ),
-                None,
-            )
-        if preferred is None:
-            preferred = devices[0]
+        preferred = choose_startup_input_device(devices) or devices[0]
 
         try:
             selection = apply_input_device_selection(preferred.target)
@@ -598,6 +1101,15 @@ class STTEngine:
         self.device_label = selection.get("label", preferred.label)
         self._startup_device_selected = True
         logger.info("Startup microphone selected: %s", self.device_label)
+        self._emit_runtime_state()
+
+    def _configured_input_device(self):
+        config = getattr(self.app_core, "config", None)
+        if config and hasattr(config, "get"):
+            value = config.get("voice.input_device", None)
+            if isinstance(value, (str, int, dict)) or value is None:
+                return value
+        return None
 
     def _resolve_stream_settings(self, sd):
         default_input = None

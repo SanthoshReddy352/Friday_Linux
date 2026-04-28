@@ -5,7 +5,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from modules.voice_io.audio_devices import AudioInputDevice, apply_input_device_selection, parse_wpctl_inputs
+from modules.voice_io.audio_devices import (
+    AudioInputDevice,
+    apply_input_device_selection,
+    choose_startup_input_device,
+    parse_wpctl_inputs,
+)
+from core.config import ConfigManager
 from modules.voice_io.stt import STTEngine
 
 
@@ -75,6 +81,25 @@ def test_stt_set_device_accepts_pipewire_target():
     stt._start_hardware_stream.assert_called_once()
 
 
+def test_stt_set_device_persists_selected_input(tmp_path):
+    app = MagicMock()
+    app.config = ConfigManager(str(tmp_path / "config.yaml"))
+    app.config.config = {"voice": {}}
+    stt = STTEngine(app)
+    stt._start_hardware_stream = MagicMock()
+    stt.listen_thread = MagicMock()
+    stt.listen_thread.is_alive.return_value = False
+    target = {"kind": "pipewire", "id": 83, "label": "Nirvana Ion"}
+
+    with patch("modules.voice_io.stt.apply_input_device_selection", return_value={"device": None, "label": "Nirvana Ion"}), \
+         patch("modules.voice_io.stt.time.sleep"):
+        stt.set_device(target)
+
+    reloaded = ConfigManager(str(tmp_path / "config.yaml"))
+    reloaded.load()
+    assert reloaded.get("voice.input_device") == target
+
+
 def test_stt_selects_default_startup_microphone():
     app = MagicMock()
     stt = STTEngine(app)
@@ -96,6 +121,58 @@ def test_stt_selects_default_startup_microphone():
     assert stt.device_id is None
     assert stt.device_label == "Built-in Audio Analog Stereo"
     assert stt._startup_device_selected is True
+
+
+def test_choose_startup_input_device_prefers_builtin_over_bluetooth_default():
+    devices = [
+        AudioInputDevice(
+            id="pw:83",
+            label="Nirvana Ion",
+            backend="pipewire",
+            target={"kind": "pipewire", "id": 83, "label": "Nirvana Ion"},
+            is_default=True,
+        ),
+        AudioInputDevice(
+            id="pw:53",
+            label="Built-in Audio Analog Stereo",
+            backend="pipewire",
+            target={"kind": "pipewire", "id": 53, "label": "Built-in Audio Analog Stereo"},
+        ),
+    ]
+
+    preferred = choose_startup_input_device(devices)
+
+    assert preferred is not None
+    assert preferred.id == "pw:53"
+
+
+def test_choose_startup_input_device_avoids_monitor_inputs():
+    devices = [
+        AudioInputDevice(
+            id="sd:0",
+            label="default",
+            backend="sounddevice",
+            target={"kind": "sounddevice", "id": 0, "label": "default"},
+            is_default=True,
+        ),
+        AudioInputDevice(
+            id="sd:1",
+            label="Monitor of Built-in Audio Analog Stereo",
+            backend="sounddevice",
+            target={"kind": "sounddevice", "id": 1, "label": "Monitor of Built-in Audio Analog Stereo"},
+        ),
+        AudioInputDevice(
+            id="sd:2",
+            label="USB Microphone",
+            backend="sounddevice",
+            target={"kind": "sounddevice", "id": 2, "label": "USB Microphone"},
+        ),
+    ]
+
+    preferred = choose_startup_input_device(devices)
+
+    assert preferred is not None
+    assert preferred.id == "sd:2"
 
 
 def test_stt_prepares_stereo_high_rate_audio_for_whisper():

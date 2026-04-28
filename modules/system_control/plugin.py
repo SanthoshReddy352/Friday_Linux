@@ -314,6 +314,9 @@ class SystemControlPlugin(FridayPlugin):
                 status = router.model_manager.status(role)
                 state = "loaded" if status["loaded"] else "available" if status["exists"] else "missing"
                 lines.append(f"- {role} model: {os.path.basename(status['path'])} ({state})")
+        metrics = getattr(self.app, "runtime_metrics", None)
+        if metrics and hasattr(metrics, "summary_lines"):
+            lines.extend(f"- {line}" for line in metrics.summary_lines())
         return "\n".join(lines)
 
     def _handle_file_action(self, text, args, fallback_actions):

@@ -28,6 +28,7 @@ RESERVED_NATIVE_TOOLS = {
     "get_friday_status",
     "enable_voice",
     "disable_voice",
+    "set_voice_mode",
     "llm_chat",
     "get_time",
     "get_date",
@@ -113,6 +114,7 @@ class JarvisSkillsPlugin(FridayPlugin):
                         self.app.router.register_tool(
                             tool_spec,
                             self._wrap_skill_function(functions[tool_name]),
+                            capability_meta=self._build_capability_meta(descriptor, tool_name),
                         )
                         logger.info(f"Registered JARVIS tool: {tool_name}")
         except Exception as e:
@@ -197,6 +199,22 @@ class JarvisSkillsPlugin(FridayPlugin):
                 return json.dumps({"status": "error", "message": str(exc)})
 
         return _wrapped
+
+    def _build_capability_meta(self, descriptor: SkillDescriptor, tool_name: str):
+        lowered = f"{descriptor.name} {tool_name}".lower()
+        connectivity = "online" if any(
+            token in lowered
+            for token in ("weather", "web", "whatsapp", "email", "gemini", "online", "browser")
+        ) else "local"
+        permission_mode = "ask_first" if connectivity == "online" else "always_ok"
+        return {
+            "connectivity": connectivity,
+            "permission_mode": permission_mode,
+            "latency_class": "interactive",
+            "side_effect_level": "write" if any(
+                token in tool_name.lower() for token in ("open", "start", "send", "play", "launch", "write", "save")
+            ) else "read",
+        }
 
 def setup(app):
     return JarvisSkillsPlugin(app)

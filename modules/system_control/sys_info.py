@@ -1,5 +1,12 @@
 import psutil
 
+try:
+    # Prime psutil so later reads can be non-blocking.
+    psutil.cpu_percent(interval=None)
+except Exception:
+    pass
+
+
 def get_battery_status():
     if not hasattr(psutil, "sensors_battery"):
         return "Battery monitoring not supported on this device."
@@ -13,7 +20,7 @@ def get_battery_status():
     return f"Battery is at {percent}% and is currently {plugged}."
 
 def get_cpu_ram_status():
-    cpu = psutil.cpu_percent(interval=0.5)
+    cpu = psutil.cpu_percent(interval=None)
     
     ram = psutil.virtual_memory()
     ram_total = round(ram.total / (1024**3), 1)

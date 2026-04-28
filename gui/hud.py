@@ -1,22 +1,46 @@
-import sys
-import random
 import math
-import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QComboBox, QPushButton, QFrame, QTextEdit
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPointF, QRectF, QThread, QObject
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPolygonF, QLinearGradient, QFont
+import random
+import sys
+import time
+import logging
+
+from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
 from modules.voice_io.audio_devices import list_audio_input_devices
 
-# --- Colors ---
-PRIMARY_COLOR = QColor("#00FFFF")  # Cyan
-ACCENT_COLOR = QColor("#FFFFFF")   # White
-BG_COLOR = QColor("#000000")       # Black
-WARNING_COLOR = QColor("#FFA500")  # Orange (for Pause/Warning)
-THINKING_COLOR = QColor("#8A2BE2") # BlueViolet (for Thinking)
-SPEAKING_COLOR = QColor("#00FF00") # Green (for Speaking)
+
+logger = logging.getLogger(__name__)
 
 HUD_TEXT_MAX_CHARS = 420
 HUD_TEXT_MAX_LINES = 8
+
+BG = "#020104"
+PANEL_BG = "rgba(7, 8, 14, 230)"
+PANEL_BORDER = "rgba(168, 84, 255, 100)"
+TEXT = "#d9fbff"
+TEXT_DIM = "#8bb7c4"
+CYAN = "#4deaff"
+BLUE = "#4e82ff"
+GREEN = "#5dffbf"
+AMBER = "#ffcc66"
+RED = "#ff6376"
+PURPLE = "#b95cff"
+MAGENTA = "#df7bff"
+MUTED = "#51606b"
 
 
 def format_hud_message(role, text, max_chars=HUD_TEXT_MAX_CHARS, max_lines=HUD_TEXT_MAX_LINES):
@@ -33,7 +57,7 @@ def format_hud_message(role, text, max_chars=HUD_TEXT_MAX_CHARS, max_lines=HUD_T
     current_line = ""
     for word in compact.split():
         candidate = f"{current_line} {word}".strip()
-        if len(candidate) <= 52:
+        if len(candidate) <= 56:
             current_line = candidate
         else:
             if current_line:
@@ -47,192 +71,166 @@ def format_hud_message(role, text, max_chars=HUD_TEXT_MAX_CHARS, max_lines=HUD_T
     message = "\n".join(visible_lines)
     if truncated_by_chars or truncated_by_lines:
         message = f"{message}\n..."
-    return f"{prefix}: {message}" if "\n" not in message else f"{prefix}: {visible_lines[0]}\n" + "\n".join(visible_lines[1:] + (["..."] if (truncated_by_chars or truncated_by_lines) else []))
+    if "\n" not in message:
+        return f"{prefix}: {message}"
+    return f"{prefix}: {visible_lines[0]}\n" + "\n".join(
+        visible_lines[1:] + (["..."] if (truncated_by_chars or truncated_by_lines) else [])
+    )
 
-class HexagonPanel(QWidget):
-    def __init__(self, parent=None):
+
+VOICE_MODE_LABELS = {
+    "persistent": "PERSISTENT",
+    "wake_word": "WAKE-WORD",
+    "on_demand": "ON-DEMAND",
+    "manual": "MANUAL",
+}
+
+
+def format_voice_mode_label(mode):
+    normalized = str(mode or "").strip().lower().replace("-", "_")
+    return VOICE_MODE_LABELS.get(normalized, "PERSISTENT")
+
+
+def format_voice_runtime_status(state):
+    state = dict(state or {})
+    ui_state = str(state.get("ui_state") or "muted").upper()
+    if state.get("wake_transcript_fallback") and state.get("wake_armed"):
+        gate = "TRANSCRIPT WAKE"
+    elif state.get("actively_transcribing"):
+        gate = "OPEN"
+    elif state.get("wake_armed"):
+        gate = "ARMED"
+    else:
+        gate = "CLOSED"
+    device = state.get("device_label") or "System default"
+    rejected = state.get("last_rejected_reason") or "None"
+    if rejected == "waiting for wake word":
+        rejected = "None"
+    return {
+        "state": ui_state,
+        "gate": gate,
+        "device": device,
+        "rejected": rejected,
+        "wake_strategy": state.get("wake_strategy") or "Wake model",
+    }
+
+
+def panel_style(border=PANEL_BORDER):
+    return (
+        f"background-color: {PANEL_BG};"
+        f"border: 1px solid {border};"
+        "border-radius: 8px;"
+    )
+
+
+def label_style(color=TEXT_DIM, size=11, weight="normal"):
+    return (
+        f"color: {color};"
+        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        f"font-size: {size}px;"
+        f"font-weight: {weight};"
+        "letter-spacing: 0px;"
+        "border: none;"
+    )
+
+
+class TechPanel(QFrame):
+    def __init__(self, title, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(200)
-        self.opacity = 50
-        self.increasing = True
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(100)
+        self.setStyleSheet(panel_style())
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(14, 12, 14, 14)
+        self.layout.setSpacing(10)
 
-    def animate(self):
-        if self.increasing:
-            self.opacity += 5
-            if self.opacity >= 200: self.increasing = False
-        else:
-            self.opacity -= 5
-            if self.opacity <= 50: self.increasing = True
-        self.update()
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet(label_style(CYAN, 12, "bold"))
+        title_row.addWidget(self.title_label)
+        title_row.addStretch(1)
+        self.indicator = QLabel("ONLINE")
+        self.indicator.setStyleSheet(label_style(GREEN, 10, "bold"))
+        title_row.addWidget(self.indicator)
+        self.layout.addLayout(title_row)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        size = 30
-        rows = 4
-        cols = 3
-        x_offset = 20
-        y_offset = 50
+        self.body = QVBoxLayout()
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(9)
+        self.layout.addLayout(self.body, stretch=1)
 
-        for r in range(rows):
-            for c in range(cols):
-                color = QColor(PRIMARY_COLOR)
-                current_opacity = self.opacity
-                if (r + c) % 2 == 0:
-                   current_opacity = max(50, current_opacity - 50)
-                
-                color.setAlpha(current_opacity)
-                painter.setPen(QPen(color, 2))
-                
-                x = x_offset + c * (size * 1.5)
-                y = y_offset + r * (size * math.sqrt(3))
-                if c % 2 == 1:
-                    y += size * math.sqrt(3) / 2
-                
-                self.draw_hexagon(painter, x, y, size)
 
-    def draw_hexagon(self, painter, x, y, size):
-        points = []
-        for i in range(6):
-            angle_deg = 60 * i
-            angle_rad = math.radians(angle_deg)
-            px = x + size * math.cos(angle_rad)
-            py = y + size * math.sin(angle_rad)
-            points.append(QPointF(px, py))
-        painter.drawPolygon(QPolygonF(points))
-
-class TelemetryPanel(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumWidth(200)
-        self.bar_heights = [20, 40, 60, 30]
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(100)
-
-    def animate(self):
-        self.bar_heights = [random.randint(10, 100) for _ in range(4)]
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        pen = QPen(ACCENT_COLOR)
-        pen.setWidth(2)
-        painter.setPen(pen)
-        
-        path_points = [
-            QPointF(10, 200), QPointF(50, 240), QPointF(150, 240), QPointF(180, 200)
-        ]
-        painter.drawPolyline(QPolygonF(path_points))
-        
-        bar_width = 30
-        gap = 10
-        start_x = 20
-        base_y = 150
-        
-        painter.setBrush(QBrush(PRIMARY_COLOR))
-        painter.setPen(Qt.PenStyle.NoPen)
-        
-        for i, h in enumerate(self.bar_heights):
-            x = start_x + i * (bar_width + gap)
-            painter.drawRect(QRectF(x, base_y - h, bar_width, h))
-
-class ProcessPanel(QWidget):
-    def __init__(self, parent=None, app_core=None):
-        super().__init__(parent)
-        self.app_core = app_core
-        self.setMinimumWidth(300)
-        self.setMinimumHeight(400)
-        self.setStyleSheet("background-color: rgba(0, 5, 10, 230); border: 2px solid #00FFFF; border-radius: 15px;")
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        
-        title = QLabel("SYSTEM / PROCESSES")
-        title.setStyleSheet("color: #00FFFF; font-family: 'Courier New'; font-size: 16px; font-weight: bold; border: none;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #00FFFF;")
-        layout.addWidget(line)
-        
-        self.stats_area = QLabel("Loading system telemetry...")
-        self.stats_area.setStyleSheet("color: #9ae6ff; font-family: 'Courier New'; font-size: 13px; border: none;")
-        self.stats_area.setWordWrap(True)
-        layout.addWidget(self.stats_area)
-        
-        self.plugin_area = QTextEdit()
-        self.plugin_area.setReadOnly(True)
-        self.plugin_area.setStyleSheet("background-color: rgba(0, 0, 0, 100); color: #00FF00; font-family: 'Courier New'; font-size: 12px; border: 1px solid #005555;")
-        layout.addWidget(self.plugin_area)
-        
-        close_btn = QPushButton("CLOSE PANEL")
-        close_btn.setStyleSheet("background-color: #004444; color: white; padding: 5px; font-weight: bold; border: 1px solid #00FFFF;")
-        close_btn.clicked.connect(self.hide)
-        layout.addWidget(close_btn)
-        
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self.update_info)
-        self.update_timer.start(2000)
-        self.update_info()
-
-    def update_info(self):
-        if not self.app_core: return
-        
-        # System status
-        from modules.system_control.sys_info import get_system_status
-        status = get_system_status()
-        self.stats_area.setText(status.replace("\n", " | "))
-        
-        # Plugins
-        plugins = []
-        for p in self.app_core.plugin_manager.plugins:
-            status = " [ACTIVE]"
-            plugins.append(f"• {p.name}{status}")
-        
-        self.plugin_area.setPlainText("LOADED PLUGINS:\n" + "\n".join(plugins))
-
-class CentralReactor(QWidget):
+class ParticleGlobeReactor(QWidget):
     clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.angle_outer = 0
-        self.angle_inner = 0
-        self.state = "idle" # idle, listening, thinking, speaking
-        
+        rng = random.Random(42)
+        self.stars = [
+            (
+                rng.random(),
+                rng.random(),
+                rng.uniform(0.45, 1.8),
+                rng.uniform(0.18, 0.72),
+                rng.uniform(0, math.tau),
+            )
+            for _ in range(165)
+        ]
+        self.particles = []
+        count = 2200
+        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        for index in range(count):
+            z = 1.0 - (2.0 * (index + 0.5) / count)
+            ring = math.sqrt(max(0.0, 1.0 - z * z))
+            theta = index * golden_angle
+            shell_bias = rng.uniform(0.82, 1.0) ** 0.38
+            self.particles.append(
+                {
+                    "x": ring * math.cos(theta),
+                    "y": z,
+                    "z": ring * math.sin(theta),
+                    "shell": shell_bias,
+                    "size": rng.uniform(0.65, 1.65),
+                    "phase": rng.uniform(0, math.tau),
+                    "twinkle": rng.uniform(0.75, 1.25),
+                }
+            )
+
+        self.state = "muted"
+        self.phase = 0.0
+        self.wave_phase = 0.0
+        self.speech_energy = 0.0
+        self._speaking_until = 0.0
+        self.setMinimumSize(520, 520)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(30)
-
-    def animate(self):
-        speed_outer = 2
-        speed_inner = 4
-        
-        if self.state == "listening":
-            speed_outer = 4
-            speed_inner = 8
-        elif self.state == "thinking":
-            speed_outer = 8
-            speed_inner = 12
-        elif self.state == "speaking":
-            speed_outer = 5
-            speed_inner = 2
-            
-        self.angle_outer = (self.angle_outer + speed_outer) % 360
-        self.angle_inner = (self.angle_inner - speed_inner) % 360
-        self.update()
+        self.timer.start(24)
 
     def set_state(self, state):
-        self.state = state
+        self.state = str(state or "muted")
+        self.update()
+
+    def pulse_speaking(self):
+        self._speaking_until = time.monotonic() + 2.6
+        self.speech_energy = max(self.speech_energy, 1.0)
+        self.state = "speaking"
+        self.update()
+
+    def animate(self):
+        active_speech = self.state == "speaking" or time.monotonic() < self._speaking_until
+        target_energy = 1.0 if active_speech else 0.0
+        self.speech_energy += (target_energy - self.speech_energy) * 0.10
+        if active_speech:
+            base_speed = 0.0
+        else:
+            base_speed = 0.006
+            if self.state == "processing":
+                base_speed = 0.013
+            elif self.state == "listening":
+                base_speed = 0.01
+            elif self.state == "armed":
+                base_speed = 0.008
+        self.phase += base_speed
+        self.wave_phase += 0.20 * self.speech_energy
         self.update()
 
     def mousePressEvent(self, event):
@@ -240,376 +238,743 @@ class CentralReactor(QWidget):
             self.clicked.emit()
             event.accept()
 
+    def _state_color(self):
+        if self.state == "speaking" or self.speech_energy > 0.2:
+            return QColor(MAGENTA)
+        if self.state == "processing":
+            return QColor(PURPLE)
+        if self.state == "listening":
+            return QColor(MAGENTA)
+        if self.state == "armed":
+            return QColor(PURPLE)
+        return QColor(134, 69, 175)
+
+    def _rotate_point(self, x, y, z, yaw, pitch, roll):
+        cosy = math.cos(yaw)
+        siny = math.sin(yaw)
+        x, z = x * cosy + z * siny, -x * siny + z * cosy
+
+        cosp = math.cos(pitch)
+        sinp = math.sin(pitch)
+        y, z = y * cosp - z * sinp, y * sinp + z * cosp
+
+        cosr = math.cos(roll)
+        sinr = math.sin(roll)
+        x, y = x * cosr - y * sinr, x * sinr + y * cosr
+        return x, y, z
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        center_x = self.width() / 2
-        center_y = self.height() / 2
-        
-        main_color = PRIMARY_COLOR
-        if self.state == "listening":
-            main_color = PRIMARY_COLOR
-        elif self.state == "thinking":
-            main_color = THINKING_COLOR
-        elif self.state == "speaking":
-            main_color = SPEAKING_COLOR
-        
-        # Core
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(main_color))
-        core_radius = 20
-        pulse = (math.sin(self.angle_outer * 0.1) + 1) * 5
-        painter.drawEllipse(QPointF(center_x, center_y), core_radius + pulse, core_radius + pulse)
+        rect = self.rect()
+        painter.fillRect(rect, QColor("#000000"))
 
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        cx = rect.width() / 2
+        cy = rect.height() / 2
+        radius = min(rect.width(), rect.height()) * 0.385
+        color = self._state_color()
 
-        # Middle Ring
-        pen = QPen(main_color)
-        pen.setWidth(12)
-        pen.setDashPattern([10, 10]) 
-        painter.setPen(pen)
-        
-        radius_mid = 100
+        for sx, sy, size, alpha, star_phase in self.stars:
+            star = QColor(202, 172, 225)
+            twinkle = 0.65 + 0.35 * math.sin(self.phase * 0.9 + star_phase)
+            star.setAlpha(int(alpha * 120 * twinkle))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(star)
+            painter.drawEllipse(QPointF(sx * rect.width(), sy * rect.height()), size, size)
+
+        points = []
+        yaw = self.phase * 0.28
+        pitch = 0.18 * math.sin(self.phase * 0.17)
+        roll = 0.08 * math.cos(self.phase * 0.11)
+        for index, particle in enumerate(self.particles):
+            base_x = particle["x"]
+            base_y = particle["y"]
+            base_z = particle["z"]
+            x, y, z = self._rotate_point(base_x, base_y, base_z, yaw, pitch, roll)
+
+            radius_scale = particle["shell"]
+
+            perspective = 0.76 + 0.28 * z
+            px = cx + x * radius * radius_scale * perspective
+            py = cy + y * radius * radius_scale * (0.82 + 0.08 * z)
+            edge = min(1.0, math.sqrt(base_x * base_x + base_y * base_y) * 1.06)
+            depth = (z + 1.0) * 0.5
+            if self.speech_energy > 0.02:
+                row_wave = math.sin((base_y * 13.5) + self.wave_phase)
+                secondary_wave = 0.42 * math.sin((base_y * 25.0) - (self.wave_phase * 1.35) + particle["phase"])
+                local_jitter = 0.18 * math.sin((base_x * 10.0) + particle["phase"] + self.wave_phase * 0.8)
+                depth_weight = 0.58 + (0.42 * depth)
+                px += self.speech_energy * radius * 0.105 * depth_weight * (row_wave + secondary_wave + local_jitter)
+            edge_visibility = edge ** 1.9
+            alpha = int((16 + 104 * depth) * (0.16 + 0.84 * edge_visibility) * particle["twinkle"])
+            size = particle["size"] * (0.48 + 0.46 * depth)
+            points.append((z, px, py, size, max(6, min(150, alpha)), index))
+
+        points.sort(key=lambda item: item[0])
+        for z, px, py, size, alpha, index in points:
+            if self.state == "muted" and self.speech_energy < 0.08:
+                dot = QColor(131, 76, 169)
+            elif index % 7 == 0:
+                dot = QColor(194, 89, 255)
+            else:
+                dot = QColor(166, 74, 226)
+            dot.setAlpha(max(8, min(210, alpha)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(dot)
+            painter.drawEllipse(QPointF(px, py), size, size)
+
+        painter.setFont(QFont("JetBrains Mono", 11, QFont.Weight.Bold))
+        state_text = QColor(223, 200, 255)
+        state_text.setAlpha(205)
+        painter.setPen(QPen(state_text))
+        painter.drawText(QRectF(0, cy + radius + 24, rect.width(), 28), Qt.AlignmentFlag.AlignCenter, self.state.upper())
+
+
+class RadarPanel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.angle = 0
+        self.setMinimumHeight(210)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(45)
+
+    def animate(self):
+        self.angle = (self.angle + 2) % 360
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w * 0.5, h * 0.53
+        r = min(w, h) * 0.38
+        painter.setPen(QPen(QColor(77, 234, 255, 70), 1))
+        for frac in (0.33, 0.66, 1.0):
+            painter.drawEllipse(QPointF(cx, cy), r * frac, r * frac)
+        painter.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+        painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+
         painter.save()
-        painter.translate(center_x, center_y)
-        painter.rotate(self.angle_outer)
-        painter.drawEllipse(QPointF(0, 0), radius_mid, radius_mid)
+        painter.translate(cx, cy)
+        painter.rotate(self.angle)
+        sweep = QLinearGradient(QPointF(0, 0), QPointF(r, 0))
+        sweep.setColorAt(0, QColor(93, 255, 191, 15))
+        sweep.setColorAt(1, QColor(93, 255, 191, 145))
+        painter.setPen(QPen(QColor(GREEN), 2))
+        painter.setBrush(sweep)
+        painter.drawPie(QRectF(-r, -r, r * 2, r * 2), -14 * 16, 28 * 16)
         painter.restore()
 
-        # Inner Ring
-        pen = QPen(ACCENT_COLOR)
-        pen.setWidth(4)
-        pen.setDashPattern([5, 5])
-        painter.setPen(pen)
-        
-        radius_inner = 70
-        painter.save()
-        painter.translate(center_x, center_y)
-        painter.rotate(self.angle_inner)
-        painter.drawEllipse(QPointF(0, 0), radius_inner, radius_inner)
-        painter.restore()
+        blips = ((0.18, -0.28), (-0.36, 0.22), (0.48, 0.14), (-0.08, -0.55))
+        for i, (x, y) in enumerate(blips):
+            color = QColor(AMBER if i == 1 else GREEN)
+            color.setAlpha(190)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(cx + x * r, cy + y * r), 4, 4)
 
-        # Outer Bracket
-        pen = QPen(main_color)
-        pen.setWidth(3)
-        painter.setPen(pen)
-        radius_outer = 130
-        rect_outer = QRectF(center_x - radius_outer, center_y - radius_outer, 2*radius_outer, 2*radius_outer)
-        painter.drawArc(rect_outer, 45 * 16, 90 * 16)
-        painter.drawArc(rect_outer, 225 * 16, 90 * 16)
+
+class CameraStrip(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.tick = 0
+        self.setMinimumHeight(230)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(80)
+
+    def animate(self):
+        self.tick = (self.tick + 1) % 120
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        labels = ("FRONT", "DESK", "NET", "CORE")
+        cols, rows = 2, 2
+        gap = 10
+        tile_w = (self.width() - gap) / cols
+        tile_h = (self.height() - gap) / rows
+        for row in range(rows):
+            for col in range(cols):
+                index = row * cols + col
+                rect = QRectF(col * (tile_w + gap), row * (tile_h + gap), tile_w, tile_h)
+                grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+                grad.setColorAt(0, QColor(10, 41, 55, 245))
+                grad.setColorAt(1, QColor(3, 11, 20, 245))
+                painter.setPen(QPen(QColor(77, 234, 255, 95), 1))
+                painter.setBrush(grad)
+                painter.drawRoundedRect(rect, 6, 6)
+                painter.setPen(QPen(QColor(93, 255, 191, 55), 1))
+                for line in range(5):
+                    y = rect.top() + 18 + line * 16 + ((self.tick + index * 9) % 9)
+                    painter.drawLine(QPointF(rect.left() + 8, y), QPointF(rect.right() - 8, y - 5))
+                painter.setPen(QPen(QColor(TEXT_DIM), 1))
+                painter.drawText(rect.adjusted(9, 8, -8, -8), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, labels[index])
+                live = QColor(GREEN if index != 2 else AMBER)
+                live.setAlpha(230)
+                painter.setBrush(live)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QPointF(rect.right() - 18, rect.top() + 16), 4, 4)
+
+
+class PulseBars(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.values = [34, 66, 48, 82, 58, 43]
+        self.setMinimumHeight(150)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(220)
+
+    def animate(self):
+        self.values = [max(12, min(96, value + random.randint(-9, 9))) for value in self.values]
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        names = ("CPU", "RAM", "IO", "NET", "LLM", "VAD")
+        row_h = self.height() / len(names)
+        for i, name in enumerate(names):
+            y = i * row_h + 6
+            painter.setPen(QPen(QColor(TEXT_DIM), 1))
+            painter.drawText(QRectF(0, y, 46, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+            track = QRectF(52, y + row_h / 2 - 4, max(30, self.width() - 58), 8)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(29, 54, 68, 190))
+            painter.drawRoundedRect(track, 4, 4)
+            fill = QRectF(track.left(), track.top(), track.width() * self.values[i] / 100, track.height())
+            painter.setBrush(QColor(GREEN if i % 2 else CYAN))
+            painter.drawRoundedRect(fill, 4, 4)
+
+
+class ProcessPanel(QWidget):
+    def __init__(self, parent=None, app_core=None):
+        super().__init__(parent)
+        self.app_core = app_core
+        self.setMinimumSize(420, 480)
+        self.setStyleSheet(panel_style("rgba(93, 255, 191, 155)"))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("PROCESS GRID")
+        title.setStyleSheet(label_style(GREEN, 14, "bold"))
+        layout.addWidget(title)
+
+        self.stats_area = QLabel("Loading system telemetry...")
+        self.stats_area.setStyleSheet(label_style(TEXT_DIM, 12))
+        self.stats_area.setWordWrap(True)
+        layout.addWidget(self.stats_area)
+
+        self.plugin_area = QTextEdit()
+        self.plugin_area.setReadOnly(True)
+        self.plugin_area.setStyleSheet(
+            "background-color: rgba(0, 0, 0, 105);"
+            f"color: {TEXT};"
+            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "font-size: 12px;"
+            "border: 1px solid rgba(77, 234, 255, 90);"
+            "border-radius: 6px;"
+            "padding: 8px;"
+        )
+        layout.addWidget(self.plugin_area, stretch=1)
+
+        close_btn = QPushButton("CLOSE")
+        close_btn.setStyleSheet(button_style())
+        close_btn.clicked.connect(self.hide)
+        layout.addWidget(close_btn)
+
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_info)
+        self.update_timer.start(2000)
+        self.update_info()
+
+    def update_info(self):
+        if not self.app_core:
+            return
+        try:
+            from modules.system_control.sys_info import get_system_status
+
+            status = get_system_status()
+        except Exception as exc:
+            status = f"Telemetry unavailable: {exc}"
+        self.stats_area.setText(status.replace("\n", " | "))
+
+        plugins = []
+        plugin_manager = getattr(self.app_core, "plugin_manager", None)
+        for plugin in getattr(plugin_manager, "plugins", []) or []:
+            plugins.append(f"{plugin.name}  ACTIVE")
+        self.plugin_area.setPlainText("LOADED MODULES\n" + "\n".join(plugins))
+
 
 class DeviceDiscoveryThread(QThread):
     devices_found = pyqtSignal(list)
 
     def run(self):
         try:
-            from modules.voice_io.audio_devices import list_audio_input_devices
-            devices = list_audio_input_devices()
-            self.devices_found.emit(devices)
-        except Exception as e:
-            from core.logger import logger
-            logger.error(f"DeviceDiscoveryThread: Error listing devices: {e}")
+            self.devices_found.emit(list_audio_input_devices())
+        except Exception:
             self.devices_found.emit([])
+
 
 class MicSelector(QFrame):
     device_selected = pyqtSignal(object)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 200); border: 1px solid #00FFFF; border-radius: 10px;")
-        self.setFixedWidth(250)
-        
+        self.setStyleSheet(panel_style("rgba(77, 234, 255, 90)"))
+        self.setMinimumWidth(260)
         layout = QVBoxLayout(self)
-        
-        label = QLabel("MICROPHONE SELECT")
-        label.setStyleSheet("color: #00FFFF; font-weight: bold; border: none;")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        label = QLabel("INPUT DEVICE")
+        label.setStyleSheet(label_style(CYAN, 11, "bold"))
         layout.addWidget(label)
-        
+
         self.combo = QComboBox()
-        self.combo.setStyleSheet("""
-            QComboBox {
-                background-color: #1a1a1a;
-                color: white;
-                border: 1px solid #333;
-                padding: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1a1a;
-                color: white;
-                selection-background-color: #00FFFF;
-            }
-        """)
+        self.combo.setStyleSheet(combo_style())
         layout.addWidget(self.combo)
-        
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_devices)
-        self.refresh_timer.start(10000) # Refresh every 10s (was 5s)
-        
+
         self.discovery_thread = None
         self.combo.currentIndexChanged.connect(self.on_selection_changed)
-        self.refresh_devices()
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_devices)
+        self.refresh_timer.start(10000)
+        QTimer.singleShot(250, self.refresh_devices)
 
     def refresh_devices(self):
         if self.discovery_thread and self.discovery_thread.isRunning():
             return
-
         if self.combo.count() == 0:
-            self.combo.addItem("Searching for devices...", None)
-
+            self.combo.addItem("Scanning...", None)
         self.discovery_thread = DeviceDiscoveryThread()
         self.discovery_thread.devices_found.connect(self._on_devices_found)
         self.discovery_thread.start()
 
     def _on_devices_found(self, devices):
-        try:
-            current_id = self.combo.currentData()
-            self.combo.blockSignals(True)
-            self.combo.clear()
-
-            if not devices:
-                self.combo.addItem("No microphones found", None)
-            else:
-                for device in devices:
-                    prefix = "[Default] " if device.is_default else ""
-                    suffix = f" ({device.backend})"
-                    self.combo.addItem(f"{prefix}{device.label}{suffix}", device.target)
-
-            if current_id is not None:
-                for index in range(self.combo.count()):
-                    if self.combo.itemData(index) == current_id:
-                        self.combo.setCurrentIndex(index)
-                        break
-            elif self.combo.count() > 0 and devices:
-                # If no selection, try to select the default one
-                for index in range(self.combo.count()):
-                    label = self.combo.itemText(index)
-                    if "[Default]" in label:
-                        self.combo.setCurrentIndex(index)
-                        break
-            
-            self.combo.blockSignals(False)
-        except Exception as e:
-            from core.logger import logger
-            logger.error(f"MicSelector: Error updating combo: {e}")
+        current_id = self.combo.currentData()
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        if not devices:
+            self.combo.addItem("No microphone found", None)
+        else:
+            for device in devices:
+                prefix = "Default - " if device.is_default else ""
+                suffix = f" ({device.backend})"
+                self.combo.addItem(f"{prefix}{device.label}{suffix}", device.target)
+        if current_id is not None:
+            for index in range(self.combo.count()):
+                if self.combo.itemData(index) == current_id:
+                    self.combo.setCurrentIndex(index)
+                    break
+        self.combo.blockSignals(False)
 
     def on_selection_changed(self, index):
-        if index >= 0:
-            device_id = self.combo.itemData(index)
-            self.device_selected.emit(device_id)
+        if index < 0:
+            return
+        text = self.combo.itemText(index)
+        if text in {"Scanning...", "No microphone found"}:
+            return
+        self.device_selected.emit(self.combo.itemData(index))
+
+
+def button_style(danger=False):
+    if danger:
+        return (
+            "background-color: rgba(92, 18, 28, 235);"
+            f"color: {TEXT};"
+            f"border: 1px solid {RED};"
+            "border-radius: 6px;"
+            "padding: 10px;"
+            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "font-weight: bold;"
+        )
+    return (
+        "background-color: rgba(8, 38, 52, 235);"
+        f"color: {TEXT};"
+        f"border: 1px solid {CYAN};"
+        "border-radius: 6px;"
+        "padding: 10px;"
+        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        "font-weight: bold;"
+    )
+
+
+def combo_style():
+    return (
+        "QComboBox {"
+        "background-color: rgba(2, 10, 18, 230);"
+        f"color: {TEXT};"
+        "border: 1px solid rgba(77, 234, 255, 115);"
+        "border-radius: 5px;"
+        "padding: 7px;"
+        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        "font-size: 12px;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        "background-color: #06121f;"
+        f"color: {TEXT};"
+        f"selection-background-color: {BLUE};"
+        "}"
+    )
+
 
 class JarvisHUD(QMainWindow):
     message_ready = pyqtSignal(object)
     shutdown_signal = pyqtSignal()
+    mic_toggle_ready = pyqtSignal(object)
+    voice_response_ready = pyqtSignal(object)
+    turn_started_ready = pyqtSignal(object)
+    turn_processing_ready = pyqtSignal(object)
+    turn_finished_ready = pyqtSignal(object)
+    listening_mode_ready = pyqtSignal(object)
+    voice_runtime_ready = pyqtSignal(object)
 
     def __init__(self, app_core):
         super().__init__()
         self.app_core = app_core
-        self.is_paused = False
+        self.turn_state = "idle"
+        self.voice_runtime_state = {}
         self.drag_pos = None
-        
-        self.setWindowTitle("FRIDAY HUD")
-        self.resize(1000, 600)
-        
+        self._speaking_until = 0.0
+
+        self.setWindowTitle("FRIDAY")
+        self.resize(1500, 920)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
-        central_widget = QWidget()
-        central_widget.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Left Panel
-        self.left_panel = HexagonPanel()
-        main_layout.addWidget(self.left_panel)
-        
-        # Center
-        center_layout = QVBoxLayout()
-        center_layout.setContentsMargins(16, 16, 16, 16)
-        center_layout.setSpacing(14)
-        self.reactor = CentralReactor()
-        self.reactor.setMinimumSize(320, 320)
-        center_layout.addWidget(self.reactor, stretch=5)
-        
-        # Subtitle area for voice transcript
-        self.transcript_panel = QFrame()
-        self.transcript_panel.setStyleSheet(
-            "background-color: rgba(0, 0, 0, 180);"
-            "border: 1px solid rgba(0, 255, 255, 120);"
+
+        central = QWidget()
+        central.setStyleSheet(f"background-color: {BG}; color: {TEXT};")
+        self.setCentralWidget(central)
+        root = QGridLayout(central)
+        root.setContentsMargins(18, 16, 18, 18)
+        root.setHorizontalSpacing(14)
+        root.setVerticalSpacing(14)
+
+        header = self._build_header()
+        root.addWidget(header, 0, 0, 1, 3)
+
+        left = QVBoxLayout()
+        left.setSpacing(14)
+        radar_panel = TechPanel("SENSOR FIELD")
+        self.radar = RadarPanel()
+        radar_panel.body.addWidget(self.radar)
+        left.addWidget(radar_panel, stretch=3)
+
+        camera_panel = TechPanel("VISUAL FEEDS")
+        self.camera_strip = CameraStrip()
+        camera_panel.body.addWidget(self.camera_strip)
+        left.addWidget(camera_panel, stretch=3)
+
+        stream_panel = TechPanel("EVENT STREAM")
+        self.event_stream = QTextEdit()
+        self.event_stream.setReadOnly(True)
+        self.event_stream.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.event_stream.setStyleSheet(text_box_style(font_size=12))
+        self.event_stream.setPlainText("FRIDAY boot layer ready.\nVoice bus linked.\nTool registry standing by.")
+        stream_panel.body.addWidget(self.event_stream)
+        left.addWidget(stream_panel, stretch=2)
+        root.addLayout(left, 1, 0)
+
+        center = QVBoxLayout()
+        center.setSpacing(14)
+        reactor_panel = TechPanel("PARTICLE REACTOR")
+        reactor_panel.setStyleSheet(
+            "background-color: #000000;"
+            "border: 1px solid rgba(185, 92, 255, 125);"
             "border-radius: 8px;"
         )
-        transcript_layout = QVBoxLayout(self.transcript_panel)
-        transcript_layout.setContentsMargins(10, 8, 10, 8)
-        transcript_layout.setSpacing(6)
+        reactor_panel.layout.setContentsMargins(10, 10, 10, 12)
+        reactor_panel.indicator.setText("CORE")
+        self.reactor = ParticleGlobeReactor()
+        self.reactor.setMinimumSize(640, 560)
+        reactor_panel.body.addWidget(self.reactor, stretch=1)
+        center.addWidget(reactor_panel, stretch=7)
 
-        self.transcript_title = QLabel("LIVE TRANSCRIPT")
-        self.transcript_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.transcript_title.setStyleSheet(
-            "color: #00FFFF; font-family: 'Courier New'; font-size: 12px; font-weight: bold; border: none;"
-        )
-        transcript_layout.addWidget(self.transcript_title)
-
+        transcript_panel = TechPanel("DIALOG")
+        transcript_panel.indicator.setText("LIVE")
         self.subtitle_label = QTextEdit()
         self.subtitle_label.setReadOnly(True)
         self.subtitle_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.subtitle_label.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.subtitle_label.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.subtitle_label.setStyleSheet(
-            "color: white;"
-            "font-family: 'Courier New';"
-            "font-size: 16px;"
-            "background-color: transparent;"
-            "border: none;"
-            "padding: 0px;"
-        )
-        self.subtitle_label.setMinimumHeight(120)
-        self.subtitle_label.setMaximumHeight(150)
-        transcript_layout.addWidget(self.subtitle_label)
+        self.subtitle_label.setMinimumHeight(150)
+        self.subtitle_label.setMaximumHeight(220)
+        self.subtitle_label.setStyleSheet(text_box_style(font_size=15))
+        transcript_panel.body.addWidget(self.subtitle_label)
+        center.addWidget(transcript_panel, stretch=0)
+        root.addLayout(center, 1, 1)
 
-        center_layout.addWidget(self.transcript_panel, stretch=0)
+        right = QVBoxLayout()
+        right.setSpacing(14)
+        voice_panel = TechPanel("VOICE")
+        self.voice_mode_combo = QComboBox()
+        self.voice_mode_combo.setStyleSheet(combo_style())
+        for value in ("persistent", "wake_word", "on_demand", "manual"):
+            self.voice_mode_combo.addItem(format_voice_mode_label(value), value)
+        self.voice_mode_combo.currentIndexChanged.connect(self.on_voice_mode_selected)
+        voice_panel.body.addWidget(self.voice_mode_combo)
 
-        self.status_label = QLabel("route: idle | lane: idle | disabled skills: 0")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: #9ae6ff; font-family: 'Courier New'; font-size: 12px;")
-        center_layout.addWidget(self.status_label, stretch=0)
-        
-        main_layout.addLayout(center_layout, stretch=2)
-        
-        # Right Panel
-        self.right_panel_container = QVBoxLayout()
-        self.telemetry = TelemetryPanel()
-        self.right_panel_container.addWidget(self.telemetry, stretch=3)
-        
-        self.process_btn = QPushButton("VIEW PROCESSES")
-        self.process_btn.setStyleSheet("background-color: #004444; color: #00FFFF; border: 1px solid #00FFFF; padding: 10px; font-weight: bold; margin-bottom: 5px;")
-        self.process_btn.clicked.connect(self.toggle_process_panel)
-        self.right_panel_container.addWidget(self.process_btn)
+        self.voice_state_label = QLabel("STATE: MUTED")
+        self.mic_gate_label = QLabel("MIC GATE: CLOSED")
+        self.wake_strategy_label = QLabel("WAKE ENGINE: Wake model")
+        self.current_device_label = QLabel("DEVICE: System default")
+        self.rejected_reason_label = QLabel("LAST REJECTED: None")
+        for label in (
+            self.voice_state_label,
+            self.mic_gate_label,
+            self.wake_strategy_label,
+            self.current_device_label,
+            self.rejected_reason_label,
+        ):
+            label.setStyleSheet(label_style(TEXT_DIM, 11))
+            label.setWordWrap(True)
+            voice_panel.body.addWidget(label)
+        right.addWidget(voice_panel, stretch=2)
+        self.refresh_voice_mode_button()
+
+        telemetry_panel = TechPanel("SYSTEM PULSE")
+        self.telemetry = PulseBars()
+        telemetry_panel.body.addWidget(self.telemetry)
+        right.addWidget(telemetry_panel, stretch=2)
 
         self.mic_selector = MicSelector()
         self.mic_selector.device_selected.connect(self.on_mic_selected)
-        self.right_panel_container.addWidget(self.mic_selector, stretch=1)
-        
-        self.stop_btn = QPushButton("TERMINATE OUTPUT")
-        self.stop_btn.setStyleSheet("background-color: #800; color: white; border: 1px solid red; padding: 10px; font-weight: bold;")
+        right.addWidget(self.mic_selector, stretch=1)
+
+        self.process_btn = QPushButton("PROCESS GRID")
+        self.process_btn.setStyleSheet(button_style())
+        self.process_btn.clicked.connect(self.toggle_process_panel)
+        right.addWidget(self.process_btn)
+
+        self.stop_btn = QPushButton("STOP SPEECH")
+        self.stop_btn.setStyleSheet(button_style(danger=True))
         self.stop_btn.clicked.connect(self.stop_speaking)
-        self.right_panel_container.addWidget(self.stop_btn)
-        
-        main_layout.addLayout(self.right_panel_container)
-        
-        # Floating Process Panel
+        right.addWidget(self.stop_btn)
+        root.addLayout(right, 1, 2)
+
+        root.setColumnStretch(0, 2)
+        root.setColumnStretch(1, 7)
+        root.setColumnStretch(2, 2)
+        root.setRowStretch(1, 1)
+
         self.process_panel = ProcessPanel(self, self.app_core)
         self.process_panel.hide()
-        # Position it centered
-        self.process_panel.move(350, 100)
+        self.process_panel.move(380, 120)
 
-        # Connect core signals
+        self._connect_runtime()
+
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.check_status)
+        self.status_timer.start(180)
+
+        if getattr(self.app_core, "should_auto_start_voice", lambda: True)():
+            QTimer.singleShot(1000, lambda: self.app_core.event_bus.publish("gui_toggle_mic", True))
+
+    def _build_header(self):
+        header = QFrame()
+        header.setStyleSheet("background-color: rgba(0, 0, 0, 0); border: none;")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("FRIDAY")
+        title.setStyleSheet(
+            f"color: {TEXT};"
+            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "font-size: 34px;"
+            "font-weight: bold;"
+            "letter-spacing: 0px;"
+            "border: none;"
+        )
+        layout.addWidget(title)
+
+        subtitle = QLabel("LOCAL INTELLIGENCE SURFACE")
+        subtitle.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
+        layout.addWidget(subtitle)
+        layout.addStretch(1)
+
+        self.status_label = QLabel("route: idle | lane: idle | voice: idle")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setStyleSheet(label_style(TEXT_DIM, 11))
+        layout.addWidget(self.status_label)
+        return header
+
+    def _connect_runtime(self):
         self.app_core.set_gui_callback(self._on_message_from_thread)
         self.message_ready.connect(self.render_message)
         self.shutdown_signal.connect(self.close)
-        
-        # Status subscriptions
+        self.mic_toggle_ready.connect(self._on_mic_toggle)
+        self.voice_response_ready.connect(self._on_voice_response)
+        self.turn_started_ready.connect(self._on_turn_started)
+        self.turn_processing_ready.connect(self._on_turn_processing)
+        self.turn_finished_ready.connect(self._on_turn_finished)
+        self.listening_mode_ready.connect(self._on_listening_mode_changed)
+        self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
+
         self.reactor.clicked.connect(self.toggle_pause_everything)
-        self.app_core.event_bus.subscribe("gui_toggle_mic", self._on_mic_toggle)
-        self.app_core.event_bus.subscribe("voice_response", lambda x: self.reactor.set_state("speaking"))
-        self.app_core.event_bus.subscribe("system_shutdown", lambda x: self.shutdown_signal.emit())
-        
-        self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.check_status)
-        self.status_timer.start(200)
+        bus = self.app_core.event_bus
+        bus.subscribe("gui_toggle_mic", lambda payload: self.mic_toggle_ready.emit(payload))
+        bus.subscribe("voice_response", lambda payload: self.voice_response_ready.emit(payload))
+        bus.subscribe("turn_started", lambda payload: self.turn_started_ready.emit(payload))
+        bus.subscribe("assistant_ack", lambda payload: self.turn_processing_ready.emit(payload))
+        bus.subscribe("assistant_progress", lambda payload: self.turn_processing_ready.emit(payload))
+        bus.subscribe("tool_started", lambda payload: self.turn_processing_ready.emit(payload))
+        bus.subscribe("llm_started", lambda payload: self.turn_processing_ready.emit(payload))
+        bus.subscribe("turn_completed", lambda payload: self.turn_finished_ready.emit(payload))
+        bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
+        bus.subscribe("listening_mode_changed", lambda payload: self.listening_mode_ready.emit(payload))
+        bus.subscribe("voice_runtime_state_changed", lambda payload: self.voice_runtime_ready.emit(payload))
+        bus.subscribe("system_shutdown", lambda _payload: self.shutdown_signal.emit())
 
-        # Auto-start mic for voice-only interaction
-        QTimer.singleShot(1000, lambda: self.app_core.event_bus.publish("gui_toggle_mic", True))
-
-    def toggle_process_panel(self):
+    def toggle_process_panel(self, _checked=False):
         if self.process_panel.isVisible():
             self.process_panel.hide()
-        else:
-            self.process_panel.show()
-            self.process_panel.raise_()
+            return
+        self.process_panel.show()
+        self.process_panel.raise_()
+
+    def on_voice_mode_selected(self, index):
+        try:
+            mode = self.voice_mode_combo.itemData(index)
+            if mode and hasattr(self.app_core, "set_listening_mode"):
+                self.app_core.set_listening_mode(mode)
+        except Exception as exc:
+            self._report_option_error("VOICE MODE", exc)
+            self.refresh_voice_mode_button()
+
+    def refresh_voice_mode_button(self):
+        self.voice_mode_combo.blockSignals(True)
+        try:
+            mode = getattr(self.app_core, "get_listening_mode", lambda: "persistent")()
+            for index in range(self.voice_mode_combo.count()):
+                if self.voice_mode_combo.itemData(index) == mode:
+                    self.voice_mode_combo.setCurrentIndex(index)
+                    break
+        finally:
+            self.voice_mode_combo.blockSignals(False)
+
+    def _on_listening_mode_changed(self, _payload):
+        self.refresh_voice_mode_button()
+
+    def _on_voice_runtime_state_changed(self, payload):
+        try:
+            self.voice_runtime_state = dict(payload or {})
+            formatted = format_voice_runtime_status(self.voice_runtime_state)
+            self.voice_state_label.setText(f"STATE: {formatted['state']}")
+            self.mic_gate_label.setText(f"MIC GATE: {formatted['gate']}")
+            self.wake_strategy_label.setText(f"WAKE ENGINE: {formatted['wake_strategy']}")
+            self.current_device_label.setText(f"DEVICE: {formatted['device']}")
+            self.rejected_reason_label.setText(f"LAST REJECTED: {formatted['rejected']}")
+            if time.monotonic() >= self._speaking_until:
+                self.reactor.set_state(str(self.voice_runtime_state.get("ui_state") or "muted"))
+        except Exception as exc:
+            self._report_option_error("VOICE STATUS", exc)
+
+    def _on_voice_response(self, text):
+        self._speaking_until = time.monotonic() + 2.8
+        self.reactor.pulse_speaking()
+        if text:
+            self._append_event("SPEECH", str(text)[:90])
 
     def toggle_pause_everything(self):
-        """Toggle mic ON/OFF with sequential logic for Bluetooth stability."""
-        from core.logger import logger
-        # Check current software gate state
-        is_listening = getattr(self.app_core.stt, "is_listening", False)
-        new_state = not is_listening
-        
-        logger.info(f"HUD: Reactor clicked. Toggling pause state. New Gate State: {new_state}")
-        
-        # Get natural phrase from Greeter plugin if available
-        phrase = ""
-        greeter = next((p for p in self.app_core.plugin_manager.plugins if p.name == "Greeter"), None)
-        
-        if not new_state:
-            # --- PAUSING ---
-            # Gate mic off immediately to stop input
+        stt = getattr(self.app_core, "stt", None)
+        is_active = bool(
+            getattr(stt, "is_listening", False)
+            or getattr(stt, "wake_armed", False)
+        )
+        if is_active:
             self.app_core.event_bus.publish("gui_toggle_mic", False)
             self.stop_speaking()
-            self.reactor.set_state("idle")
-            phrase = greeter.get_pause_phrase() if greeter else "I am going offline, sir."
-            self._set_transcript_text("assistant", phrase)
-            self.app_core.event_bus.publish("voice_response", phrase)
+            self.reactor.set_state("muted")
+            phrase = "Voice gate closed."
         else:
-            # --- UNPAUSING / INTERRUPTING ---
-            # 1. Update UI and State
-            phrase = greeter.get_unpause_phrase() if greeter else "Back online, sir."
-            self._set_transcript_text("assistant", phrase)
-            
-            # 2. Speak first (A2DP playback)
+            phrase = "Voice gate opening."
             self.app_core.event_bus.publish("voice_response", phrase)
-            
-            # 3. Wait for playback to likely finish or establish focus before opening mic gate (HFP/HSP)
-            # This is the key for Bluetooth headsets.
-            QTimer.singleShot(1500, lambda: self.app_core.event_bus.publish("gui_toggle_mic", True))
-            
+            QTimer.singleShot(1200, lambda: self.app_core.event_bus.publish("voice_activation_requested", {"source": "button"}))
+        self._set_transcript_text("assistant", phrase)
         QTimer.singleShot(2500, lambda: self.subtitle_label.clear())
 
     def check_status(self):
-        # Update reactor state based on app core
-        if self.app_core.is_speaking:
-            self.reactor.set_state("speaking")
-        elif getattr(self.app_core.stt, "is_listening", False):
-            # This is a bit tricky, maybe add a "thinking" state detection
-            if getattr(self.app_core.router, "is_thinking", False):
-                self.reactor.set_state("thinking")
+        try:
+            if getattr(self.app_core, "is_speaking", False) or time.monotonic() < self._speaking_until:
+                self.reactor.set_state("speaking")
             else:
-                self.reactor.set_state("listening")
-        else:
-            self.reactor.set_state("idle")
+                runtime_state = self.voice_runtime_state or {}
+                runtime_ui_state = runtime_state.get("ui_state")
+                if runtime_ui_state in {"muted", "armed", "listening", "processing", "speaking"}:
+                    self.reactor.set_state(runtime_ui_state)
+                elif self.turn_state in {"thinking", "executing", "processing"}:
+                    self.reactor.set_state("processing")
+                elif getattr(getattr(self.app_core, "stt", None), "is_listening", False):
+                    self.reactor.set_state("listening")
+                else:
+                    self.reactor.set_state("muted")
 
-        router = getattr(self.app_core, "router", None)
-        capabilities = getattr(self.app_core, "capabilities", None)
-        route_source = getattr(router, "current_route_source", "idle") if router else "idle"
-        lane = getattr(router, "current_model_lane", "idle") if router else "idle"
-        disabled_count = len(capabilities.disabled_skills()) if capabilities else 0
-        self.status_label.setText(
-            f"route: {route_source} | lane: {lane} | disabled skills: {disabled_count}"
-        )
+            router = getattr(self.app_core, "router", None)
+            capabilities = getattr(self.app_core, "capabilities", None)
+            route_source = getattr(router, "current_route_source", "idle") if router else "idle"
+            lane = getattr(router, "current_model_lane", "idle") if router else "idle"
+            disabled_count = len(capabilities.disabled_skills()) if capabilities else 0
+            mode = getattr(self.app_core, "get_listening_mode", lambda: "persistent")()
+            self.status_label.setText(f"route: {route_source} | lane: {lane} | voice: {mode} | disabled: {disabled_count}")
+        except Exception as exc:
+            logger.exception("HUD status refresh failed: %s", exc)
 
     def _on_mic_toggle(self, active):
-        if active:
+        stt = getattr(self.app_core, "stt", None)
+        if active and getattr(stt, "wake_armed", False):
+            self.reactor.set_state("armed")
+        elif active:
             self.reactor.set_state("listening")
         else:
-            self.reactor.set_state("idle")
+            self.reactor.set_state("muted")
 
-    def stop_speaking(self):
-        if self.app_core.tts:
+    def _on_turn_started(self, payload):
+        self.turn_state = "processing"
+        self.reactor.set_state("processing")
+        self._append_event("TURN", str((payload or {}).get("text", ""))[:90] if isinstance(payload, dict) else "")
+
+    def _on_turn_processing(self, payload):
+        self.turn_state = "processing"
+        self.reactor.set_state("processing")
+        if isinstance(payload, dict):
+            self._append_event("RUN", str(payload.get("tool") or payload.get("text") or "")[:90])
+
+    def _on_turn_finished(self, _payload):
+        self.turn_state = "idle"
+
+    def stop_speaking(self, _checked=False):
+        if getattr(self.app_core, "tts", None):
             self.app_core.tts.stop()
+        self._speaking_until = 0.0
 
     def on_mic_selected(self, device_id):
-        from core.logger import logger
-        logger.info(f"HUD: Microphone changed to device: {device_id}")
-        if self.app_core.stt:
-            if hasattr(self.app_core.stt, 'set_device'):
-                self.app_core.stt.set_device(device_id)
-                label = getattr(self.app_core.stt, "device_label", "selected device")
-                self._set_transcript_text("assistant", f"Microphone switched to {label}")
-                QTimer.singleShot(2000, lambda: self.subtitle_label.clear())
+        stt = getattr(self.app_core, "stt", None)
+        if not stt or not hasattr(stt, "set_device"):
+            return
+        try:
+            stt.set_device(device_id)
+        except Exception as exc:
+            self._report_option_error("MIC", exc)
+            return
+        label = getattr(stt, "device_label", "selected device")
+        self._set_transcript_text("assistant", f"Microphone switched to {label}")
+        self._append_event("MIC", label)
+        QTimer.singleShot(2000, lambda: self.subtitle_label.clear())
+
+    def _report_option_error(self, label, exc):
+        message = str(exc) or exc.__class__.__name__
+        logger.exception("HUD %s option failed: %s", label, exc)
+        self._append_event(label, f"FAILED: {message}"[:90])
+        self._set_transcript_text("assistant", f"{label.title()} option failed: {message}")
+        QTimer.singleShot(3500, lambda: self.subtitle_label.clear())
 
     def mousePressEvent(self, event):
-        # Allow dragging the frameless window
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
@@ -620,9 +985,6 @@ class JarvisHUD(QMainWindow):
             event.accept()
 
     def closeEvent(self, event):
-        """Perform core app shutdown when the window closes."""
-        from core.logger import logger
-        logger.info("HUD: closeEvent triggered. Shutting down system...")
         self.app_core.shutdown()
         event.accept()
 
@@ -634,18 +996,42 @@ class JarvisHUD(QMainWindow):
         self.message_ready.emit(payload)
 
     def render_message(self, payload):
-        from core.logger import logger
+        if not isinstance(payload, dict):
+            self._set_transcript_text("assistant", str(payload))
+            return
         text = payload.get("text", "")
         role = payload.get("role", "assistant")
-        logger.info(f"HUD: Rendering message from {role}: {text[:50]}...")
         self._set_transcript_text(role, text)
+        self._append_event(role.upper(), text[:90])
 
     def _set_transcript_text(self, role, text):
         self.subtitle_label.setPlainText(format_hud_message(role, text))
         self.subtitle_label.verticalScrollBar().setValue(0)
 
+    def _append_event(self, label, text):
+        if not hasattr(self, "event_stream"):
+            return
+        line = f"{time.strftime('%H:%M:%S')}  {label:<7} {text}".rstrip()
+        existing = self.event_stream.toPlainText().splitlines()
+        next_lines = (existing + [line])[-9:]
+        self.event_stream.setPlainText("\n".join(next_lines))
+        self.event_stream.verticalScrollBar().setValue(self.event_stream.verticalScrollBar().maximum())
+
+
+def text_box_style(font_size=13):
+    return (
+        "background-color: rgba(0, 0, 0, 88);"
+        f"color: {TEXT};"
+        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        f"font-size: {font_size}px;"
+        "border: 1px solid rgba(77, 234, 255, 70);"
+        "border-radius: 6px;"
+        "padding: 8px;"
+    )
+
+
 def start_hud(app_core):
     app = QApplication(sys.argv)
     window = JarvisHUD(app_core)
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec())

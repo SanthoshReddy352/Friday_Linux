@@ -26,6 +26,7 @@ class TextToSpeech:
         self._run_id = 0
         self._runtime_prepared = False
         self._runtime_lock = threading.Lock()
+        self._pending_speech_count = 0
         
         self.speech_queue = queue.Queue()
         self.worker_thread = threading.Thread(target=self._tts_worker, daemon=True)
@@ -40,6 +41,8 @@ class TextToSpeech:
         self._runtime_dir = os.path.join(tempfile.gettempdir(), "friday_runtime", "piper")
         self.piper_path = os.path.join(self._runtime_dir, "piper")
         self.aplay_path = shutil.which("aplay")
+        self.pw_cat_path = shutil.which("pw-cat")
+        self.preferred_playback_backend = os.getenv("FRIDAY_TTS_BACKEND", "auto").strip().lower()
         self.current_text = ""
         self.current_sentence = ""
         self.speaking_started_at = 0.0
@@ -52,6 +55,11 @@ class TextToSpeech:
     @property
     def is_speaking(self):
         return self._is_speaking
+
+    @property
+    def has_pending_speech(self):
+        with self._speak_lock:
+            return self._pending_speech_count > 0
 
     def speak(self, text):
         """Legacy single-shot speak (non-interruptible). Prefer speak_chunked()."""
@@ -73,6 +81,8 @@ class TextToSpeech:
         text = re.sub(r'\{[^}]*\}', '', text, flags=re.DOTALL).strip()
         if not text:
             return
+        with self._speak_lock:
+            self._pending_speech_count += 1
         self.speech_queue.put(text)
 
     def _tts_worker(self):
@@ -113,6 +123,7 @@ class TextToSpeech:
 
         with self._speak_lock:
             self._run_id += 1
+            self._pending_speech_count = max(0, self._pending_speech_count - drained)
             self._stop_processes(self._current_processes)
             self._current_processes = []
         self._set_speaking(False)
@@ -142,16 +153,26 @@ class TextToSpeech:
             self.current_sentence = ""
         if self.app_core:
             self.app_core.is_speaking = state
+            stt = getattr(self.app_core, "stt", None)
+            if stt and hasattr(stt, "_emit_runtime_state"):
+                stt._emit_runtime_state()
 
     def _chunked_speak_loop(self, text, run_id):
-        if not self._check_files():
-            return
-
-        sentences = _split_sentences(text)
-        self.current_text = text
-        self._set_speaking(True)
+        pending_mark_cleared = False
 
         try:
+            if not self._check_files():
+                return
+
+            if self.interrupt_event.is_set() or run_id != self._run_id:
+                return
+
+            sentences = _split_sentences(text)
+            self.current_text = text
+            self._set_speaking(True)
+            self._mark_pending_speech_started()
+            pending_mark_cleared = True
+
             for sentence in sentences:
                 self.current_sentence = sentence
                 if self.interrupt_event.is_set() or run_id != self._run_id:
@@ -162,6 +183,8 @@ class TextToSpeech:
                     logger.info("[TTS] Interrupted after sentence.")
                     break
         finally:
+            if not pending_mark_cleared:
+                self._mark_pending_speech_started()
             if run_id == self._run_id:
                 self._set_speaking(False)
             logger.debug("[TTS] Chunked speak loop finished.")
@@ -178,55 +201,33 @@ class TextToSpeech:
         if run_id is None:
             run_id = self._run_id
 
-        if not self.aplay_path:
-            logger.error("[TTS] aplay not found on PATH.")
+        backends = self._playback_backends()
+        if not backends:
+            logger.error("[TTS] No supported playback backend found. Install 'pw-cat' or 'aplay'.")
             if set_flags:
                 self._set_speaking(False)
             return
 
         try:
-            env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = self._runtime_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-            env["PIPER_DATA_DIR"] = self._runtime_dir
-
-            piper_proc = subprocess.Popen(
-                [self.piper_path, "--model", self.model_path, "--output_raw"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=env,
-            )
-            aplay_proc = subprocess.Popen(
-                [self.aplay_path, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
-                stdin=piper_proc.stdout,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if piper_proc.stdout:
-                piper_proc.stdout.close()
-
-            with self._speak_lock:
-                self._current_processes = [piper_proc, aplay_proc]
-
-            if piper_proc.stdin:
-                piper_proc.stdin.write(text.encode("utf-8"))
-                piper_proc.stdin.close()
-
-            aplay_proc.wait()
-            piper_proc.wait()
-            interrupted = self.interrupt_event.is_set() or run_id != self._run_id
-            if piper_proc.returncode not in (0, None) and not interrupted:
-                logger.error(f"[TTS] Piper exited with code {piper_proc.returncode}.")
-            elif piper_proc.returncode not in (0, None):
-                logger.debug(f"[TTS] Piper interrupted with code {piper_proc.returncode}.")
-            if aplay_proc.returncode not in (0, None) and not interrupted:
-                logger.error(f"[TTS] aplay exited with code {aplay_proc.returncode}.")
-            elif aplay_proc.returncode not in (0, None):
-                logger.debug(f"[TTS] aplay interrupted with code {aplay_proc.returncode}.")
+            interrupted = False
+            for index, backend in enumerate(backends):
+                interrupted, piper_code, playback_code = self._run_pipeline_with_backend(text, run_id, backend)
+                if interrupted:
+                    break
+                if piper_code in (0, None) and playback_code in (0, None):
+                    break
+                if index < len(backends) - 1:
+                    logger.warning(
+                        "[TTS] Playback backend '%s' failed (piper=%s, playback=%s). Trying '%s'.",
+                        backend["name"],
+                        piper_code,
+                        playback_code,
+                        backends[index + 1]["name"],
+                    )
         except Exception as e:
             logger.error(f"[TTS] Subprocess error: {e}")
         finally:
-            self._stop_processes([piper_proc, aplay_proc] if 'piper_proc' in locals() else [])
+            self._stop_processes(self._current_processes)
             with self._speak_lock:
                 self._current_processes = []
             if set_flags and run_id == self._run_id:
@@ -250,6 +251,10 @@ class TextToSpeech:
         self.interrupt_event.clear()
         return run_id
 
+    def _mark_pending_speech_started(self):
+        with self._speak_lock:
+            self._pending_speech_count = max(0, self._pending_speech_count - 1)
+
     def _prepare_runtime(self):
         with self._runtime_lock:
             if self._runtime_prepared and os.path.exists(self.piper_path):
@@ -270,6 +275,75 @@ class TextToSpeech:
 
             self._runtime_prepared = os.path.exists(self.piper_path)
             return self._runtime_prepared
+
+    def _playback_backends(self):
+        available = []
+        if self.pw_cat_path:
+            available.append({
+                "name": "pw-cat",
+                "path": self.pw_cat_path,
+                "argv": [self.pw_cat_path, "--playback", "--raw", "--rate", "22050", "--format", "s16", "--channels", "1", "-"],
+            })
+        if self.aplay_path:
+            available.append({
+                "name": "aplay",
+                "path": self.aplay_path,
+                "argv": [self.aplay_path, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
+            })
+
+        if self.preferred_playback_backend in {"pw-cat", "aplay"}:
+            preferred = [item for item in available if item["name"] == self.preferred_playback_backend]
+            others = [item for item in available if item["name"] != self.preferred_playback_backend]
+            return preferred + others
+        return available
+
+    def _run_pipeline_with_backend(self, text, run_id, backend):
+        env = os.environ.copy()
+        env["LD_LIBRARY_PATH"] = self._runtime_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        env["PIPER_DATA_DIR"] = self._runtime_dir
+
+        piper_proc = None
+        playback_proc = None
+        try:
+            piper_proc = subprocess.Popen(
+                [self.piper_path, "--model", self.model_path, "--output_raw"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+            playback_proc = subprocess.Popen(
+                backend["argv"],
+                stdin=piper_proc.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if piper_proc.stdout:
+                piper_proc.stdout.close()
+
+            with self._speak_lock:
+                self._current_processes = [piper_proc, playback_proc]
+
+            if piper_proc.stdin:
+                piper_proc.stdin.write(text.encode("utf-8"))
+                piper_proc.stdin.close()
+
+            playback_proc.wait()
+            piper_proc.wait()
+            interrupted = self.interrupt_event.is_set() or run_id != self._run_id
+            if piper_proc.returncode not in (0, None) and not interrupted:
+                logger.error(f"[TTS] Piper exited with code {piper_proc.returncode}.")
+            elif piper_proc.returncode not in (0, None):
+                logger.debug(f"[TTS] Piper interrupted with code {piper_proc.returncode}.")
+            if playback_proc.returncode not in (0, None) and not interrupted:
+                logger.error(f"[TTS] {backend['name']} exited with code {playback_proc.returncode}.")
+            elif playback_proc.returncode not in (0, None):
+                logger.debug(f"[TTS] {backend['name']} interrupted with code {playback_proc.returncode}.")
+            return interrupted, piper_proc.returncode, playback_proc.returncode
+        finally:
+            self._stop_processes([piper_proc, playback_proc])
+            with self._speak_lock:
+                self._current_processes = []
 
     def _sync_runtime_dir(self, src_dir, dst_dir):
         for entry in os.listdir(src_dir):

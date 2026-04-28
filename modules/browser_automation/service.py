@@ -42,6 +42,20 @@ class BrowserMediaService:
                 reason=f"Failed to open {platform.replace('_', ' ')} in {browser_name}: {exc}",
             )
 
+    def scroll_page(self, platform="browser", pixels=420):
+        page = self._pages.get(platform)
+        if page is None:
+            return f"I don't have an active {platform.replace('_', ' ')} browser page yet."
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+        try:
+            page.mouse.wheel(0, int(pixels))
+        except Exception:
+            page.evaluate("(amount) => window.scrollBy({ top: amount, left: 0, behavior: 'smooth' })", int(pixels))
+        return f"Scrolled {platform.replace('_', ' ')}."
+
     def play_youtube(self, query, browser_name="chrome"):
         return self._play_video(
             query=query,
@@ -87,7 +101,7 @@ class BrowserMediaService:
                 page.keyboard.press("Shift+N")
                 return f"Skipped to next item on {platform.replace('_', ' ')}."
             if action == "previous":
-                page.keyboard.press("Shift+P")
+                page.go_back()
                 return f"Went back on {platform.replace('_', ' ')}."
             if action == "forward":
                 page.keyboard.press("l")

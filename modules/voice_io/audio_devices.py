@@ -13,6 +13,41 @@ class AudioInputDevice:
     is_default: bool = False
 
 
+_STARTUP_INPUT_BUILTIN_HINTS = (
+    "built-in",
+    "analog",
+    "internal mic",
+    "internal microphone",
+    "hda intel",
+    "alc",
+)
+_STARTUP_INPUT_GENERIC_MIC_HINTS = (
+    "microphone",
+    " mic",
+)
+_STARTUP_INPUT_BLUETOOTH_HINTS = (
+    "bluez",
+    "bluetooth",
+    "airpods",
+    "buds",
+    "earbuds",
+    "headset",
+    "hands-free",
+    "nirvana",
+)
+_STARTUP_INPUT_VIRTUAL_HINTS = (
+    "monitor",
+    "loopback",
+    "capture_internal",
+    "stream/input/audio/internal",
+)
+_STARTUP_INPUT_PSEUDO_HINTS = (
+    "default",
+    "pipewire",
+    "sysdefault",
+)
+
+
 def list_audio_input_devices():
     devices = _list_pipewire_inputs()
     if devices:
@@ -49,6 +84,36 @@ def apply_input_device_selection(target):
         return {"device": None, "label": "System default"}
 
     return {"device": target, "label": str(target)}
+
+
+def choose_startup_input_device(devices):
+    if not devices:
+        return None
+    return min(devices, key=_startup_input_rank)
+
+
+def _startup_input_rank(device):
+    label = str(device.label or "").strip().lower()
+    score = 0
+
+    if any(token in label for token in _STARTUP_INPUT_BUILTIN_HINTS):
+        score -= 60
+    elif any(token in label for token in _STARTUP_INPUT_GENERIC_MIC_HINTS):
+        score -= 20
+
+    if device.backend == "pipewire":
+        score -= 8
+    if device.is_default:
+        score -= 6
+
+    if any(token in label for token in _STARTUP_INPUT_BLUETOOTH_HINTS):
+        score += 28
+    if any(token in label for token in _STARTUP_INPUT_VIRTUAL_HINTS):
+        score += 90
+    if label in _STARTUP_INPUT_PSEUDO_HINTS:
+        score += 120
+
+    return (score, label, str(device.id))
 
 
 def parse_wpctl_inputs(status_text):

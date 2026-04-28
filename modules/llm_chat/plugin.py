@@ -27,7 +27,13 @@ class LLMChatPlugin(FridayPlugin):
             "parameters": {
                 "query": "string – the user's question or message"
             }
-        }, self.handle_chat)
+        }, self.handle_chat, capability_meta={
+            "connectivity": "local",
+            "latency_class": "generative",
+            "permission_mode": "always_ok",
+            "side_effect_level": "read",
+            "streaming": True,
+        })
 
         logger.info("LLMChatPlugin loaded.")
 
@@ -69,11 +75,18 @@ class LLMChatPlugin(FridayPlugin):
 
         parts = []
         sentence_buffer = ""
+        first_token_seen = False
         for chunk in stream:
             delta = chunk["choices"][0].get("delta", {})
             content = delta.get("content")
             if not content:
                 continue
+            if not first_token_seen:
+                first_token_seen = True
+                feedback = getattr(self.app, "turn_feedback", None)
+                turn = getattr(self.app, "_active_turn_record", None)
+                if feedback and turn:
+                    feedback.emit_llm_first_token(turn)
             parts.append(content)
             sentence_buffer += content
             spoken_parts = re.split(r"(?<=[.!?])\s+", sentence_buffer)
@@ -91,14 +104,53 @@ class LLMChatPlugin(FridayPlugin):
         return "".join(parts).strip()
 
     def _build_messages(self, new_query):
+        persona = None
+        persona_id = None
+        memory_bundle = {}
+        persona_manager = getattr(self.app, "persona_manager", None)
+        if persona_manager and getattr(self.app, "session_id", None):
+            persona = persona_manager.get_active_persona(self.app.session_id)
+            persona_id = (persona or {}).get("persona_id")
+        memory_broker = getattr(self.app, "memory_broker", None)
+        if memory_broker and getattr(self.app, "session_id", None):
+            memory_bundle = memory_broker.build_context_bundle(new_query, self.app.session_id)
+
         assistant_context = getattr(self.app, "assistant_context", None)
         if assistant_context:
-            return assistant_context.build_chat_messages(
+            messages = assistant_context.build_chat_messages(
                 new_query,
                 dialog_state=getattr(self.app, "dialog_state", None),
             )
+            if messages:
+                persona_header = ""
+                if persona:
+                    persona_header = (
+                        f"Active persona: {persona.get('display_name', 'FRIDAY')} ({persona_id}).\n"
+                        f"Identity: {persona.get('system_identity', '')}\n"
+                        f"Tone traits: {persona.get('tone_traits', '')}\n"
+                        f"Conversation style: {persona.get('conversation_style', '')}\n"
+                        f"Speech style: {persona.get('speech_style', '')}\n"
+                        f"Tool acknowledgement style: {persona.get('tool_ack_style', '')}\n"
+                    )
+                memory_header = ""
+                if memory_bundle:
+                    durable = [item.get("content", "") for item in memory_bundle.get("durable_memories", []) if item.get("content")]
+                    memory_header = (
+                        f"Durable recall: {durable}\n"
+                        f"Semantic recall: {memory_bundle.get('semantic_recall', [])}\n"
+                    )
+                messages[0]["content"] = f"{persona_header}{memory_header}\n{messages[0]['content']}".strip()
+            return messages
 
-        return [{"role": "user", "content": f"{FRIDAY_PERSONA}\n\n{new_query}"}]
+        persona_prefix = ""
+        if persona:
+            persona_prefix = (
+                f"Persona: {persona.get('display_name', 'FRIDAY')}.\n"
+                f"Identity: {persona.get('system_identity', '')}\n"
+                f"Tone: {persona.get('tone_traits', '')}\n"
+                f"Style: {persona.get('conversation_style', '')}\n\n"
+            )
+        return [{"role": "user", "content": f"{persona_prefix}{FRIDAY_PERSONA}\n\n{new_query}"}]
 
 
 def setup(app):

@@ -127,3 +127,15 @@ def test_sanitize_for_speech_strips_markdown_and_emoji():
     result = sanitize_for_speech("**Heading**\n* Item one\n`code`\nDone 😊")
 
     assert result == "Heading\nItem one\ncode\nDone"
+
+
+def test_sanitize_for_speech_makes_links_and_dates_speakable():
+    from modules.voice_io.plugin import sanitize_for_speech
+
+    result = sanitize_for_speech("Source: https://example.com/a/b. Date: 25/04/2026 and 2026-04-28.")
+
+    assert "https://" not in result
+    assert "/a/b" not in result
+    assert "25th April 2026" in result
+    assert "28th April 2026" in result
+    assert "link from example.com" in result

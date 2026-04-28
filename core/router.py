@@ -22,6 +22,7 @@ class RoutingDecision:
 class CommandRouter:
     def __init__(self, event_bus):
         self.event_bus = event_bus
+        self.capability_registry = None
         self.tools = []
         self._tools_by_name = {}
         self._tool_aliases = {}
@@ -81,7 +82,7 @@ class CommandRouter:
     # Primary API: structured tool registration
     # ------------------------------------------------------------------
 
-    def register_tool(self, tool_spec: dict, callback):
+    def register_tool(self, tool_spec: dict, callback, capability_meta=None):
         """
         Register a tool that Gemma can call.
 
@@ -111,6 +112,9 @@ class CommandRouter:
         self._tool_aliases[spec["name"]] = aliases
         self._tool_patterns[spec["name"]] = patterns
         self._tools_prompt_cache = None
+        capability_registry = getattr(self, "capability_registry", None)
+        if capability_registry is not None:
+            capability_registry.register_tool(spec, callback, metadata=capability_meta)
         logger.debug(f"[Router] Registered tool: {tool_spec['name']}")
 
     # ------------------------------------------------------------------
@@ -284,6 +288,22 @@ class CommandRouter:
             args=dict(args or {}),
             spoken_ack=spoken_ack or "",
         )
+
+    # ------------------------------------------------------------------
+    # Public compatibility API for the capability broker
+    # ------------------------------------------------------------------
+
+    def plan_actions(self, text):
+        return self._plan_actions(text)
+
+    def find_best_route(self, text, min_score=20):
+        return self._find_best_route(text, min_score=min_score)
+
+    def continue_active_workflow(self, text):
+        return self._continue_active_workflow(text)
+
+    def finalize_response(self, response):
+        return self._finalize_response(response)
 
     def _should_use_tool_model(self, text_clean, best_route, action_plan):
         if self.llm is not None:
@@ -590,7 +610,15 @@ class CommandRouter:
                 deduped.append(key)
                 seen.add(key)
 
-        return "\n".join(deduped) if deduped else "Done."
+        return self._format_plan_responses(deduped)
+
+    def _format_plan_responses(self, responses):
+        if not responses:
+            return "Done."
+        if len(responses) == 1:
+            return responses[0]
+        lead = "Got both:" if len(responses) == 2 else "Got those:"
+        return f"{lead}\n" + "\n".join(responses)
 
     def _map_tool_to_file_action(self, tool_name):
         mapping = {
@@ -829,7 +857,7 @@ class CommandRouter:
         return sorted(alias for alias in aliases if alias)
 
     def _build_patterns(self, spec):
-        return self._default_patterns_for(spec["name"])
+        return list(spec.get("patterns") or []) + self._default_patterns_for(spec["name"])
 
     def _build_context_terms(self, spec):
         terms = set(spec.get("context_terms", []))

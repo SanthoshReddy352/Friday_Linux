@@ -207,6 +207,272 @@ class ContextStore:
             metadata={"session_id": session_id or "", "kind": "fact", "namespace": namespace, "key": key},
         )
 
+    def save_persona(self, payload):
+        data = dict(payload or {})
+        persona_id = str(data.get("persona_id") or "").strip()
+        if not persona_id:
+            return
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO personas (
+                    persona_id, display_name, system_identity, tone_traits, conversation_style,
+                    speech_style, humor_level, verbosity_preference, formality_level,
+                    empathy_style, tool_ack_style, memory_scope, retrieval_filters,
+                    example_dialogues, enabled_skills, disallowed_behaviors, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(persona_id)
+                DO UPDATE SET
+                    display_name = excluded.display_name,
+                    system_identity = excluded.system_identity,
+                    tone_traits = excluded.tone_traits,
+                    conversation_style = excluded.conversation_style,
+                    speech_style = excluded.speech_style,
+                    humor_level = excluded.humor_level,
+                    verbosity_preference = excluded.verbosity_preference,
+                    formality_level = excluded.formality_level,
+                    empathy_style = excluded.empathy_style,
+                    tool_ack_style = excluded.tool_ack_style,
+                    memory_scope = excluded.memory_scope,
+                    retrieval_filters = excluded.retrieval_filters,
+                    example_dialogues = excluded.example_dialogues,
+                    enabled_skills = excluded.enabled_skills,
+                    disallowed_behaviors = excluded.disallowed_behaviors,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    persona_id,
+                    data.get("display_name", persona_id),
+                    data.get("system_identity", ""),
+                    data.get("tone_traits", ""),
+                    data.get("conversation_style", ""),
+                    data.get("speech_style", ""),
+                    data.get("humor_level", ""),
+                    data.get("verbosity_preference", ""),
+                    data.get("formality_level", ""),
+                    data.get("empathy_style", ""),
+                    data.get("tool_ack_style", ""),
+                    data.get("memory_scope", "shared"),
+                    data.get("retrieval_filters", ""),
+                    data.get("example_dialogues", ""),
+                    data.get("enabled_skills", "*"),
+                    data.get("disallowed_behaviors", ""),
+                    now,
+                ),
+            )
+            conn.commit()
+        if data.get("example_dialogues"):
+            self._upsert_memory_item(
+                item_id=f"persona:{persona_id}:examples",
+                text=str(data.get("example_dialogues")),
+                metadata={"session_id": "", "kind": "persona_style", "persona_id": persona_id},
+            )
+
+    def get_persona(self, persona_id):
+        if not persona_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT persona_id, display_name, system_identity, tone_traits, conversation_style,
+                       speech_style, humor_level, verbosity_preference, formality_level,
+                       empathy_style, tool_ack_style, memory_scope, retrieval_filters,
+                       example_dialogues, enabled_skills, disallowed_behaviors, updated_at
+                FROM personas
+                WHERE persona_id = ?
+                """,
+                (persona_id,),
+            ).fetchone()
+        if not row:
+            return None
+        columns = (
+            "persona_id", "display_name", "system_identity", "tone_traits", "conversation_style",
+            "speech_style", "humor_level", "verbosity_preference", "formality_level",
+            "empathy_style", "tool_ack_style", "memory_scope", "retrieval_filters",
+            "example_dialogues", "enabled_skills", "disallowed_behaviors", "updated_at",
+        )
+        return dict(zip(columns, row))
+
+    def list_personas(self):
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT persona_id, display_name, system_identity, tone_traits, conversation_style,
+                       speech_style, humor_level, verbosity_preference, formality_level,
+                       empathy_style, tool_ack_style, memory_scope, retrieval_filters,
+                       example_dialogues, enabled_skills, disallowed_behaviors, updated_at
+                FROM personas
+                ORDER BY display_name ASC
+                """
+            ).fetchall()
+        columns = (
+            "persona_id", "display_name", "system_identity", "tone_traits", "conversation_style",
+            "speech_style", "humor_level", "verbosity_preference", "formality_level",
+            "empathy_style", "tool_ack_style", "memory_scope", "retrieval_filters",
+            "example_dialogues", "enabled_skills", "disallowed_behaviors", "updated_at",
+        )
+        return [dict(zip(columns, row)) for row in rows]
+
+    def save_session_state(self, session_id, state):
+        if not session_id:
+            return
+        payload = dict(state or {})
+        now = _utc_now()
+        active_persona_id = str(payload.get("active_persona_id") or "")
+        pending_online_json = json.dumps(payload.get("pending_online") or {}, ensure_ascii=True)
+        state_json = json.dumps(payload, ensure_ascii=True)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_sessions (
+                    session_id, active_persona_id, pending_online_json, state_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_id)
+                DO UPDATE SET
+                    active_persona_id = excluded.active_persona_id,
+                    pending_online_json = excluded.pending_online_json,
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (session_id, active_persona_id, pending_online_json, state_json, now),
+            )
+            conn.commit()
+
+    def get_session_state(self, session_id):
+        if not session_id:
+            return {}
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT active_persona_id, pending_online_json, state_json, updated_at
+                FROM conversation_sessions
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        active_persona_id, pending_online_json, state_json, updated_at = row
+        payload = json.loads(state_json or "{}")
+        payload.setdefault("active_persona_id", active_persona_id or "")
+        payload.setdefault("pending_online", json.loads(pending_online_json or "{}"))
+        payload.setdefault("updated_at", updated_at)
+        return payload
+
+    def set_active_persona(self, session_id, persona_id):
+        state = self.get_session_state(session_id)
+        state["active_persona_id"] = persona_id
+        self.save_session_state(session_id, state)
+
+    def get_active_persona_id(self, session_id):
+        return (self.get_session_state(session_id) or {}).get("active_persona_id", "")
+
+    def set_pending_online(self, session_id, payload):
+        state = self.get_session_state(session_id)
+        state["pending_online"] = dict(payload or {})
+        self.save_session_state(session_id, state)
+
+    def clear_pending_online(self, session_id):
+        state = self.get_session_state(session_id)
+        if not state:
+            return
+        state["pending_online"] = {}
+        self.save_session_state(session_id, state)
+
+    def log_online_permission(self, session_id, tool_name, decision, reason=""):
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO online_permission_events (
+                    session_id, tool_name, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (session_id or "", tool_name or "", decision or "", reason or "", now),
+            )
+            conn.commit()
+
+    def store_memory_item(self, session_id, content, memory_type="episodic", persona_id="", sensitivity="safe_auto", metadata=None):
+        if not content:
+            return
+        payload = dict(metadata or {})
+        item_id = str(payload.get("item_id") or uuid.uuid4())
+        now = _utc_now()
+        content_text = str(content).strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_items (
+                    item_id, session_id, persona_id, memory_type, sensitivity,
+                    content, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(item_id)
+                DO UPDATE SET
+                    session_id = excluded.session_id,
+                    persona_id = excluded.persona_id,
+                    memory_type = excluded.memory_type,
+                    sensitivity = excluded.sensitivity,
+                    content = excluded.content,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    item_id,
+                    session_id or "",
+                    persona_id or "",
+                    memory_type or "episodic",
+                    sensitivity or "safe_auto",
+                    content_text,
+                    json.dumps(payload, ensure_ascii=True),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        self._upsert_memory_item(
+            item_id=f"memory:{item_id}",
+            text=content_text,
+            metadata={
+                "session_id": session_id or "",
+                "persona_id": persona_id or "",
+                "kind": memory_type or "episodic",
+                "sensitivity": sensitivity or "safe_auto",
+            },
+        )
+
+    def recent_memory_items(self, session_id, limit=6, persona_id=None):
+        params = [session_id or ""]
+        query = """
+            SELECT item_id, session_id, persona_id, memory_type, sensitivity, content, metadata_json, created_at, updated_at
+            FROM memory_items
+            WHERE session_id = ?
+        """
+        if persona_id:
+            query += " AND (persona_id = ? OR persona_id = '')"
+            params.append(persona_id)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        items = []
+        for row in rows:
+            item_id, sid, pid, memory_type, sensitivity, content, metadata_json, created_at, updated_at = row
+            items.append(
+                {
+                    "item_id": item_id,
+                    "session_id": sid,
+                    "persona_id": pid,
+                    "memory_type": memory_type,
+                    "sensitivity": sensitivity,
+                    "content": content,
+                    "metadata": json.loads(metadata_json or "{}"),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
+        return items
+
     def semantic_recall(self, query, session_id, limit=3):
         if not query:
             return []
@@ -351,6 +617,55 @@ class ContextStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (session_id, namespace, key)
                 );
+
+                CREATE TABLE IF NOT EXISTS personas (
+                    persona_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    system_identity TEXT NOT NULL DEFAULT '',
+                    tone_traits TEXT NOT NULL DEFAULT '',
+                    conversation_style TEXT NOT NULL DEFAULT '',
+                    speech_style TEXT NOT NULL DEFAULT '',
+                    humor_level TEXT NOT NULL DEFAULT '',
+                    verbosity_preference TEXT NOT NULL DEFAULT '',
+                    formality_level TEXT NOT NULL DEFAULT '',
+                    empathy_style TEXT NOT NULL DEFAULT '',
+                    tool_ack_style TEXT NOT NULL DEFAULT '',
+                    memory_scope TEXT NOT NULL DEFAULT 'shared',
+                    retrieval_filters TEXT NOT NULL DEFAULT '',
+                    example_dialogues TEXT NOT NULL DEFAULT '',
+                    enabled_skills TEXT NOT NULL DEFAULT '*',
+                    disallowed_behaviors TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    active_persona_id TEXT NOT NULL DEFAULT '',
+                    pending_online_json TEXT NOT NULL DEFAULT '{}',
+                    state_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS online_permission_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    tool_name TEXT NOT NULL DEFAULT '',
+                    decision TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    item_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    persona_id TEXT NOT NULL DEFAULT '',
+                    memory_type TEXT NOT NULL DEFAULT 'episodic',
+                    sensitivity TEXT NOT NULL DEFAULT 'safe_auto',
+                    content TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -387,4 +702,3 @@ class ContextStore:
                 return
             except Exception:
                 self._vector_available = False
-

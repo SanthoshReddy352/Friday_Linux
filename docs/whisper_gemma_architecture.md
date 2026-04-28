@@ -1,68 +1,159 @@
-# Architecture Document: Local Voice & Intent Recognition Pipeline
+# Architecture Document: Voice-First Local Conversation + MCP-Compatible Capability Layer
 
 ## 1. Overview
-The current FRIDAY AI assistant relies on standard text matching, fuzzy string matching, or regex parsing to extract intent from user commands. To make the assistant more robust, natural, and intelligent, the architecture is being updated to use a completely local AI pipeline:
-1. **Speech-to-Text (STT/ASR)**: OpenAI's Whisper model (base tier).
-2. **Intent Recognition / Function Calling**: Google's Gemma model (Low Parameter, e.g., 2B or 7B).
 
-This decoupled architecture translates raw audio to text, and then uses semantic understanding to map that text to executable Python functions (e.g., `open_application`).
+FRIDAY now targets a voice-first architecture where conversation quality is the primary control plane and tool usage is a capability of that conversation loop. The system keeps reasoning local, uses internal MCP-compatible capability descriptors for tool access, and relies on SQLite + Chroma as a neural-link memory layer.
 
----
+This replaces the older mental model of:
 
-## 2. Component Details
+`audio -> transcript -> intent parser -> tool`
 
-### 2.1 Whisper (Speech to Text)
-Instead of using the default OpenAI Whisper library which is not optimized for real-time latency, we will utilize **`faster-whisper`**. 
-* **Backend**: CTranslate2
-* **Model Size**: `base.en` or `base`
-* **Purpose**: Quickly and accurately transcribe user audio into raw text strings, handling accents and minor background noise effectively.
+with:
 
-### 2.2 Gemma (Intent & Argument Extraction)
-A local Small Language Model (SLM) replaces brittle regex logic. 
-* **Engine**: `llama-cpp-python` (embedded directly within the Python application, avoiding network overhead).
-* **Model Size**: Gemma 2B Instruct, utilizing quantized weights (.gguf) to run smoothly on most consumer hardware with minimal RAM/VRAM footprint (~2-3 GB).
-* **Purpose**: Parse transcribed text, identify the user's goal, and extract necessary arguments. 
-* **Output Format**: Restricted to output valid JSON for seamless integration with Python tool execution.
+`audio -> session-aware turn manager -> conversation agent -> tool / delegation / reply`
 
----
+## 2. Core Runtime Components
 
-## 3. Pros and Cons
+### 2.1 TurnManager
 
-### Pros
-* **Absolute Privacy**: All voice data and processing remain completely local. No internet connection is required, and no API keys are needed.
-* **Semantic Robustness**: Traditional regex fails if the user deviates from a script (e.g., "Can you fire up Chrome?" vs "Open Chrome"). Gemma naturally understands context and intent variations.
-* **Cost Free**: Eliminates the need for paid cloud-based STT or LLM APIs.
-* **Modularity**: The pipeline is strictly divided into transcription, intent parsing, and execution. Components can be swapped easily in the future.
+Owns the active turn lifecycle:
+- open or continue session
+- track pending online permission
+- hand the turn to the conversation agent
 
-### Cons
-* **Hardware Dependent**: Requires a moderate CPU/GPU to run quickly. Without optimization, inferencing an LLM can spike system resources.
-* **Latency Overhead**: Running sequential models (Whisper transcribing, then waiting for Gemma to infer) introduces higher latency than cloud solutions or simple regex matching.
-* **Hallucinations**: Generative models can occasionally hallucinate incorrect tools or arguments if the prompt is not strict enough.
+### 2.2 ConversationAgent
 
----
+The single user-facing reasoning agent.
 
-## 4. Key Lookouts and Challenges
+Responsibilities:
+- decide whether the turn is chat, local tool use, online proposal, delegation, or clarification
+- keep one visible identity and reply style
+- remain the only agent the user “talks to”
 
-* **JSON Formatting Constraints**: LLMs are conversational by nature. It is imperative to enforce "JSON Mode" or grammar-based constraints (supported natively in `llama-cpp-python`) or use strict system prompts to prevent Gemma from outputting conversational filler (e.g., "Sure, here's the parsed JSON: {...}").
-* **Audio Silence & Turn-Taking**: To minimize latency, Voice Activity Detection (VAD) (like Silero VAD) should be used to precisely crop audio. Whisper shouldn't process seconds of dead silence. Furthermore, the microphone must be muted while the text-to-speech (TTS) is speaking to prevent the assistant from transcribing its own voice (echo loops).
-* **Memory Management**: Keep both models loaded into memory (RAM/VRAM) simultaneously. Loading the model from disk per-query will cause massive delays (5-10 seconds).
+### 2.3 CapabilityRegistry and CapabilityExecutor
 
----
+Expose tools through an MCP-compatible internal contract.
 
-## 5. Implementation Plan
+Each capability carries:
+- connectivity (`local` or `online`)
+- latency class
+- permission mode
+- side-effect level
+- schemas and metadata
 
-### Phase 1: Pipeline Setup & Testing
-* [ ] Install `faster-whisper` and replace current STT logic. Measure transcription latency on the local hardware.
-* [ ] Install `llama-cpp-python` and download a quantized `.gguf` file of the `gemma-2b-it` model.
-* [ ] Create sandbox Python scripts to test Whisper transcription and `llama-cpp-python` intent generation separately.
+This lets FRIDAY scale its automation library without hard-coding tool policy into the conversation loop.
 
-### Phase 2: Intent Engineering
-* [ ] Define a standard JSON schema for function execution (e.g., `{"intent": "tool_name", "args": {"arg1": "value"}}`).
-* [ ] Craft an optimized System Prompt for Gemma to force strict classification into available FRIDAY tools (e.g., `open_app`, `system_status`).
-* [ ] Test complex and fuzzy phrasing to ensure Gemma handles edge cases better than the previous regex system.
+### 2.4 DelegationManager
 
-### Phase 3: Integration into FRIDAY
-* [ ] Connect the microphone input stream to `faster-whisper`.
-* [ ] Route the returned text string to the local Gemma instance.
-* [ ] Parse the returned JSON object in the central logic layer and route it to the specific execution modules (e.g., system ops, web search).
-* [ ] Implement Voice Activity Detection (VAD) pre-processing to speed up the Whisper inference by removing silence padding.
+Coordinates specialist agents selectively:
+- Planner Agent
+- Workflow Agent
+- Research Agent
+- Memory Curator Agent
+- Persona Stylist Agent
+
+Delegation stays off the critical path for ordinary turns.
+
+### 2.5 PersonaManager and MemoryBroker
+
+These services build the context bundle for each turn.
+
+- `PersonaManager` loads the active persona and custom persona definitions
+- `MemoryBroker` composes structured and semantic memory from SQLite + Chroma
+
+## 3. Voice and Turn-Taking
+
+The existing voice stack remains local, but it now feeds a richer conversation control plane.
+
+Key direction:
+- local STT remains the speech entrypoint
+- spoken replies remain local
+- follow-up turns should feel session-based rather than like isolated commands
+- interruption should preserve conversational continuity instead of forcing command-only behavior
+
+The architecture is ready for a more advanced future split into dedicated audio frontend, wake-word, VAD, ASR, barge-in, and persistent TTS services.
+
+## 4. Local Models and Tool Use
+
+FRIDAY continues to use local models for reasoning and language generation.
+
+Guiding rules:
+- hosted reasoning models are out of scope
+- tools and online skills are capabilities, not separate assistant identities
+- the conversation layer decides when capabilities are needed
+
+Simple requests should resolve directly.
+Complex multi-step requests may be delegated internally, but the user still hears one coherent FRIDAY voice.
+
+## 5. Neural-Link Memory Design
+
+### SQLite
+
+Used for:
+- personas
+- conversation session state
+- structured profile facts
+- workflow state
+- online permission history
+
+### Chroma
+
+Used for:
+- semantic recall
+- episodic memories
+- persona style examples
+- prior response examples
+
+### Retrieval Flow
+
+For each turn:
+1. load active persona
+2. load structured session/profile state from SQLite
+3. retrieve semantic and episodic recall from Chroma
+4. build a compact context bundle for the conversation agent
+5. curate long-term memories after the response
+
+## 6. Online Capability Policy
+
+FRIDAY is now local-model-first, not offline-only.
+
+Policy:
+- local reasoning remains mandatory
+- online skills are allowed
+- online capabilities are tagged explicitly in the capability registry
+- ask-before-online is the default behavior unless the user explicitly requested online access
+
+Examples:
+- browser automation
+- current weather
+- web lookup
+- future online automations
+
+## 7. Implementation Notes
+
+The current codebase now includes:
+- `CapabilityRegistry`
+- `CapabilityExecutor`
+- `ConversationAgent`
+- `TurnManager`
+- `DelegationManager`
+- `PersonaManager`
+- `MemoryBroker`
+
+These run alongside the existing router and workflow system so FRIDAY can evolve incrementally instead of requiring a destructive rewrite.
+
+## 8. Why This Architecture
+
+This design improves FRIDAY in two ways at once:
+
+### Better conversational flow
+- one visible assistant identity
+- turn-aware behavior
+- persona-guided responses
+- lower architectural pressure to expose routing machinery
+
+### Better automation scale
+- cleaner tool metadata
+- ask-before-online policy
+- capability discovery
+- easier future support for large skill libraries and real MCP-style providers

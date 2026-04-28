@@ -14,12 +14,18 @@ class IntentRecognizer:
             return []
 
         actions = []
+        seen_read_only_actions = set()
         current_context = dict(context or {})
         clauses = self._split_into_clauses(cleaned)
         for clause in clauses:
             action = self._parse_clause(clause, current_context)
             if not action:
                 return []
+            action_key = (action["tool"], self._hashable_args(action.get("args", {})))
+            if action_key in seen_read_only_actions and not action.get("args"):
+                continue
+            if not action.get("args"):
+                seen_read_only_actions.add(action_key)
             actions.append(action)
             current_context = {
                 "tool": action["tool"],
@@ -56,15 +62,28 @@ class IntentRecognizer:
             return [clause.strip()]
 
         lower_clause = clause.lower()
-        marker = " and "
-        idx = lower_clause.find(marker)
-        while idx != -1:
-            left = clause[:idx].strip(" ,")
-            right = clause[idx + len(marker):].strip(" ,")
-            if left and right and self._looks_like_action_start(right):
-                return self._split_on_action_and(left) + self._split_on_action_and(right)
-            idx = lower_clause.find(marker, idx + len(marker))
+        for marker in self._action_connectors_for(lower_clause):
+            idx = lower_clause.find(marker)
+            while idx != -1:
+                left = clause[:idx].strip(" ,")
+                right = clause[idx + len(marker):].strip(" ,")
+                if left and right and self._looks_like_action_start(right):
+                    return self._split_on_action_and(left) + self._split_on_action_and(right)
+                idx = lower_clause.find(marker, idx + len(marker))
         return [clause.strip()]
+
+    def _action_connectors_for(self, lower_clause):
+        connectors = [" and "]
+        # Whisper sometimes hears "and time" as "on time". Only treat "on" as
+        # a connector in short status/time requests so normal phrases like
+        # "play this on YouTube" stay intact.
+        if re.search(
+            r"\b(?:system info|system information|system status|system health|system details|"
+            r"current time|the time|time|current date|date|battery|cpu|ram|memory)\b",
+            lower_clause,
+        ):
+            connectors.append(" on ")
+        return connectors
 
     def _is_multi_app_launch_clause(self, clause):
         clause_lower = clause.lower()
@@ -76,6 +95,9 @@ class IntentRecognizer:
 
     def _looks_like_action_start(self, text):
         normalized = text.lower().strip()
+        normalized = re.sub(r"^(?:the|my|current)\s+", "", normalized)
+        if self._looks_like_short_status_fragment(normalized):
+            return True
         starters = (
             "open", "launch", "start", "bring up", "take", "capture", "find", "search",
             "locate", "set", "save", "write", "append", "add", "read", "show", "list", "get", "check", "tell",
@@ -84,6 +106,25 @@ class IntentRecognizer:
             "play",
         )
         return any(normalized.startswith(starter) for starter in starters)
+
+    def _looks_like_short_status_fragment(self, normalized):
+        fragments = (
+            "time",
+            "date",
+            "system info",
+            "system information",
+            "system status",
+            "system health",
+            "system details",
+            "battery",
+            "battery status",
+        )
+        return any(normalized == fragment or normalized.startswith(f"{fragment} ") for fragment in fragments)
+
+    def _hashable_args(self, args):
+        if not isinstance(args, dict):
+            return ()
+        return tuple(sorted((str(key), repr(value)) for key, value in args.items()))
 
     def _parse_clause(self, clause, context):
         clause_lower = clause.lower().strip()
@@ -330,10 +371,16 @@ class IntentRecognizer:
         return None
 
     def _parse_time_date(self, clause, clause_lower, context):
-        if re.search(r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b", clause_lower):
+        if re.search(
+            r"\b(?:what(?:'s| is)? (?:the )?time|what time is it|current time|tell me(?: the)? time)\b",
+            clause_lower,
+        ) or re.fullmatch(r"(?:the\s+)?time", clause_lower.strip(" .!?")):
             return {"tool": "get_time", "args": {}, "text": clause, "domain": "time"}
 
-        if re.search(r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b", clause_lower):
+        if re.search(
+            r"\b(?:today(?:'s)? date|what(?:'s| is)? (?:the )?date|what day is it|current date|tell me(?: the)? date)\b",
+            clause_lower,
+        ) or re.fullmatch(r"(?:the\s+)?date", clause_lower.strip(" .!?")):
             return {"tool": "get_date", "args": {}, "text": clause, "domain": "date"}
 
         return None
@@ -468,7 +515,22 @@ class IntentRecognizer:
         return None
 
     def _parse_voice_toggle(self, clause, clause_lower, context):
-        if re.search(r"\bfriday\s+wake\s+up\b", clause_lower):
+        mode_match = re.search(
+            r"\b(?:set|switch|change)\s+(?:voice|conversation|listening)\s+mode\s+(?:to\s+)?(persistent|always on|on[-\s]?demand|manual|off)\b",
+            clause_lower,
+        )
+        if mode_match:
+            mode = mode_match.group(1).replace("-", "_").replace(" ", "_")
+            if mode == "always_on":
+                mode = "persistent"
+            if mode == "off":
+                mode = "manual"
+            return {"tool": "set_voice_mode", "args": {"mode": mode}, "text": clause, "domain": "voice"}
+        if re.search(r"\b(?:use|enable)\s+on[-\s]?demand\s+(?:voice|conversation|listening)\b", clause_lower):
+            return {"tool": "set_voice_mode", "args": {"mode": "on_demand"}, "text": clause, "domain": "voice"}
+        if re.search(r"\b(?:use|enable)\s+(?:persistent|always on)\s+(?:voice|conversation|listening)\b", clause_lower):
+            return {"tool": "set_voice_mode", "args": {"mode": "persistent"}, "text": clause, "domain": "voice"}
+        if re.search(r"\bfriday\s+wake\s+up\b", clause_lower) or re.fullmatch(r"wake\s+up", clause_lower.strip()):
             return {"tool": "enable_voice", "args": {"wake_up": True}, "text": clause, "domain": "voice"}
         if re.search(r"\b(?:enable|start|turn on)\s+(?:the\s+)?(?:mic|microphone|voice)\b", clause_lower):
             return {"tool": "enable_voice", "args": {}, "text": clause, "domain": "voice"}

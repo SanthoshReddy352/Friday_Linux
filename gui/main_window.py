@@ -122,6 +122,13 @@ class MainWindow(QMainWindow):
         # Subscribe to State Changes
         self.app_core.event_bus.subscribe("gui_toggle_mic", lambda x: self.set_companion_state("listening" if x else "idle"))
         self.app_core.event_bus.subscribe("voice_response", lambda x: self.set_companion_state("speaking"))
+        self.app_core.event_bus.subscribe("turn_started", lambda x: self.set_companion_state("thinking"))
+        self.app_core.event_bus.subscribe("assistant_ack", lambda x: self.set_companion_state("thinking"))
+        self.app_core.event_bus.subscribe("assistant_progress", lambda x: self.set_companion_state("thinking"))
+        self.app_core.event_bus.subscribe("tool_started", lambda x: self.set_companion_state("executing"))
+        self.app_core.event_bus.subscribe("llm_started", lambda x: self.set_companion_state("thinking"))
+        self.app_core.event_bus.subscribe("turn_completed", lambda x: self.set_companion_state("idle"))
+        self.app_core.event_bus.subscribe("turn_failed", lambda x: self.set_companion_state("idle"))
 
     def set_companion_state(self, state):
         if self.companion_state != state:

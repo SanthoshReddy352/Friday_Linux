@@ -1,220 +1,198 @@
-# FRIDAY — Product Requirements Document (PRD)
+# FRIDAY — Product Requirements Document
 
-> **Project Name**: FRIDAY (Free, Responsive, Intelligent Digital Assistant for You)
-> **Version**: 0.1 (Initial Planning)
+> **Project Name**: FRIDAY (Free, Responsive, Intelligent Digital Assistant for You)  
+> **Version**: 0.2  
 > **Date**: April 2026
 
----
+## 1. Product Overview
 
-## 1. Overview
+FRIDAY is a voice-first desktop assistant that prioritizes natural conversation, local-model reasoning, and scalable automation. It runs its reasoning stack locally, keeps a persistent neural-link memory using SQLite and Chroma, and uses an MCP-compatible capability layer so FRIDAY can grow into a large skill ecosystem without losing conversational flow.
 
-FRIDAY is a modular, offline, AI-powered personal assistant for desktop — inspired by the FRIDAY AI from the Iron Man series. It is designed to run entirely **free of cost**, with **no external API dependencies**, and be lightweight enough for mid-range consumer laptops.
+FRIDAY is not designed as a “tool bot” that happens to chat. The main product goal is a human-feeling assistant that can:
+- talk naturally through short, smooth turns
+- remember preferences and context
+- execute local tasks reliably
+- selectively use online skills for live/current information
+- scale into many automations without becoming architecturally messy
 
-### 1.1 Goals
+## 2. Goals
 
-- Provide a voice-and-text-driven assistant for everyday laptop tasks
-- Run 100% offline — no cloud services, no paid APIs
-- Modular architecture so features can be added/removed independently
-- Cross-platform support (Linux & Windows)
-- Polished PyQt5 GUI with a sci-fi / cyberpunk aesthetic
+- Deliver a voice-first assistant with low-friction conversational turn-taking.
+- Keep all planning and language generation on local models.
+- Support both local and online skills through a unified MCP-compatible capability interface.
+- Preserve a single visible assistant identity even when internal specialist agents are used.
+- Use SQLite + Chroma as a layered neural-link memory for user profile, persona, episodic recall, and style guidance.
+- Support fully custom personas while keeping one active persona visible at a time.
+- Keep the system modular enough for large-scale automation growth.
 
-### 1.2 Non-Goals (for now)
+## 3. Non-Goals
 
-- Mobile/web interface
-- Cloud/online features (weather, web search)
-- GPU-accelerated inference (no discrete GPU available)
+- Hosted reasoning models as a required dependency.
+- Always-on multi-agent fan-out for every user turn.
+- Replacing the main conversational identity with tool- or agent-specific voices.
+- Day-one requirement that every skill be a standalone external MCP server.
 
----
+## 4. Experience Targets
 
-## 2. Target Hardware
+### 4.1 Conversational Flow
 
-| Spec | Value |
-|---|---|
-| **Device** | Lenovo IdeaPad Slim 3i |
-| **CPU** | Intel i5-13th Gen (H-series, 12 threads) |
-| **RAM** | 16 GB |
-| **GPU** | Intel UHD (integrated) — CPU-only inference |
-| **OS** | Dual-boot: Linux + Windows |
+- FRIDAY should feel like one continuous assistant, not a router exposing internal machinery.
+- Short spoken acknowledgements should be available before slow actions.
+- Simple requests should not trigger visible over-planning or multi-agent chatter.
+- Clarifying questions should be short and specific.
 
-> [!NOTE]
-> With 16GB RAM and a 13th-gen i5 H-series, we can comfortably run small LLMs (1-3B params) via `llama-cpp-python` on CPU threads. Expect ~5-15 tokens/sec for TinyLlama 1.1B.
+### 4.2 Automation
 
----
+- Local automations should remain fast and deterministic.
+- Online skills should be available for current information, browser actions, and live services.
+- Online access should be mediated by capability metadata and ask-before-online policy by default.
 
-## 3. Technology Stack
+### 4.3 Memory and Persona
 
-| Layer | Technology | Rationale |
-|---|---|---|
-| **Language** | Python 3.10+ | User preference, rich ecosystem |
-| **GUI** | PyQt5 | Native desktop feel, cross-platform |
-| **Speech-to-Text** | Vosk | Lightweight offline STT (~50MB models) |
-| **Text-to-Speech** | pyttsx3 (initial), Piper TTS (upgrade) | Offline, zero cost |
-| **Local LLM** | llama-cpp-python + GGUF models | CPU-friendly, no GPU required |
-| **System Control** | subprocess, psutil, pyautogui | App launching, system info, automation |
-| **Scheduling** | APScheduler | Reminders, timed tasks |
-| **Data Storage** | SQLite | Local, zero-config, lightweight |
-| **Packaging** | PyInstaller (optional) | Single executable distribution |
+- FRIDAY should persist structured user preferences and facts in SQLite.
+- FRIDAY should retrieve episodic and stylistic memories from Chroma.
+- Personas should affect acknowledgements, chat tone, and tool-result phrasing.
 
----
+## 5. Architecture Requirements
 
-## 4. Feature Requirements
+### 5.1 Main Conversational Agent
 
-### 4.1 Core Framework (Phase 1)
+FRIDAY must expose one main voice-facing agent that:
+- owns tone, persona, and surface replies
+- manages the active conversation session
+- decides among chat, tool execution, clarification, online proposal, or delegation
+- remains the only visible identity the user speaks with
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| C1 | Plugin System | High | Load/unload feature modules dynamically |
-| C2 | Command Router | High | Parse user input → route to correct module |
-| C3 | Config Manager | High | YAML/JSON config, per-module settings |
-| C4 | Logging | Medium | Structured logging to file + console |
-| C5 | Event Bus | Medium | Modules communicate via events |
+### 5.2 MCP-Compatible Capability Layer
 
-### 4.2 GUI (Phase 1)
+FRIDAY must use an internal MCP-compatible capability model for tools, skills, and automations.
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| G1 | Chat Interface | High | Scrollable chat with user/assistant bubbles |
-| G2 | Text Input | High | Type commands, press Enter to send |
-| G3 | Status Indicators | Medium | Mic status, listening state, processing |
-| G4 | System Tray | Medium | Minimize to tray, quick access |
-| G5 | Theme | Medium | Dark/sci-fi theme inspired by Iron Man HUD |
+Every capability should expose:
+- name
+- description
+- connectivity: `local | online`
+- latency class
+- permission policy
+- side-effect level
+- streaming support
+- input schema
+- output schema
 
-### 4.3 System Commands (Phase 2)
+The initial implementation may remain in-process, but the interfaces must be compatible with future external MCP-style providers.
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| S1 | App Launcher | High | Open apps by name ("open Firefox") |
-| S2 | System Info | High | CPU, RAM, battery, disk usage |
-| S3 | File Search | Medium | Find files by name/extension |
-| S4 | Volume Control | Medium | Set/get system volume |
-| S5 | Brightness Control | Medium | Adjust screen brightness |
-| S6 | Screenshot | Low | Capture screen and save |
+### 5.3 Selective Specialist Agents
 
-### 4.4 Voice I/O (Phase 3)
+FRIDAY may use specialist agents behind the main agent, but only selectively.
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| V1 | Speech-to-Text | High | Continuous listening with wake word |
-| V2 | Text-to-Speech | High | Speak responses aloud |
-| V3 | Wake Word | Medium | Activate with "Hey Friday" |
-| V4 | Mic Selector | Low | Choose input device |
+Planned specialist roles:
+- Planner Agent
+- Workflow Agent
+- Research Agent
+- Memory Curator Agent
+- Persona Stylist Agent
 
-### 4.5 Conversational AI (Phase 4)
+Rules:
+- simple chat stays single-agent
+- simple local actions stay single-agent
+- complex workflows or long-running tasks may delegate
+- the main agent always produces the user-facing reply
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| A1 | Local LLM Chat | High | General Q&A via small local model |
-| A2 | Context Memory | Medium | Remember conversation within session |
-| A3 | Persona | Medium | FRIDAY personality in responses |
-| A4 | Intent Extraction | Medium | LLM extracts structured commands from natural speech |
+### 5.4 Neural-Link Memory
 
-### 4.6 Task Automation (Phase 5)
+Use SQLite + Chroma as a layered memory system.
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| T1 | Reminders | High | "Remind me to X in 30 minutes" |
-| T2 | Clipboard Manager | Medium | History of copied text |
-| T3 | Quick Notes | Medium | Save/retrieve text notes |
-| T4 | Scheduled Tasks | Low | Run commands at set times |
+SQLite responsibilities:
+- user profile
+- persona definitions
+- conversation session state
+- structured long-term facts
+- workflow/task state
+- online-permission history
 
-### 4.7 Advanced Features (Phase 6)
+Chroma responsibilities:
+- semantic recall
+- episodic memory
+- persona style examples
+- prior good assistant responses
+- automation summaries
 
-| ID | Feature | Priority | Description |
-|----|---------|----------|-------------|
-| X1 | Window Manager | Low | Move/resize/close windows by voice |
-| X2 | Media Control | Low | Play/pause/next on media players |
-| X3 | Custom Macros | Low | User-defined command chains |
+## 6. Runtime Flow
 
----
+1. Voice stack captures and transcribes speech locally.
+2. `TurnManager` opens or continues the active session.
+3. `ConversationAgent` builds a turn plan.
+4. The plan may choose:
+   - conversational reply
+   - local tool execution
+   - online skill proposal
+   - specialist-agent delegation
+   - clarification
+5. `CapabilityExecutor` runs MCP-compatible capabilities when needed.
+6. `DelegationManager` coordinates specialist agents only for complex cases.
+7. `MemoryCuratorAgent` writes durable memory candidates back to SQLite + Chroma.
 
-## 5. Non-Functional Requirements
+## 7. Core Interfaces
+
+### 7.1 CapabilityDescriptor
+
+- `name`
+- `description`
+- `connectivity`
+- `latency_class`
+- `permission_mode`
+- `side_effect_level`
+- `streaming`
+- `input_schema`
+- `output_schema`
+
+### 7.2 TurnPlan
+
+- `mode`
+- `tool_calls`
+- `delegation`
+- `online_required`
+- `user_ack`
+- `final_response_style`
+
+### 7.3 DelegationRequest
+
+- `agent_type`
+- `task`
+- `context_bundle`
+- `timeout_ms`
+
+### 7.4 DelegationResult
+
+- `summary`
+- `structured_output`
+- `memory_candidates`
+- `confidence`
+
+## 8. Non-Functional Requirements
 
 | Requirement | Target |
 |---|---|
-| **Startup Time** | < 3 seconds to usable GUI |
-| **Memory Usage** | < 500MB idle (without LLM loaded) |
-| **LLM Memory** | < 2GB when LLM is active |
-| **Response Latency** | < 1s for system commands, < 10s for LLM |
-| **Cross-Platform** | Works on both Linux and Windows |
-| **Offline** | 100% functional without internet |
-| **Extensibility** | New modules addable without modifying core |
+| Startup usability | < 3 seconds to usable UI |
+| Local action latency | ~instant to low-latency |
+| Conversation feel | no robotic route-announcing for simple turns |
+| Offline usefulness | core assistant remains useful without internet |
+| Online consent | ask first by default for online capabilities |
+| Extensibility | new capabilities added without rewriting the conversation core |
 
----
+## 9. Implementation Status in This Repo
 
-## 6. Architecture Overview
+The current implementation now includes:
+- internal MCP-compatible capability registry and executor
+- main conversation agent and turn manager
+- selective delegation manager with planner, workflow, research, memory-curation, and persona-styling roles
+- persona management backed by SQLite
+- neural-link memory helpers backed by SQLite + Chroma
+- online ask-before-consent flow
 
-```
-┌──────────────────────────────────────────┐
-│              PyQt5 GUI                   │
-│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │ Chat View│  │ Status   │  │ Tray   │ │
-│  └────┬─────┘  └──────────┘  └────────┘ │
-│       │                                  │
-├───────┴──────────────────────────────────┤
-│           Command Router                 │
-│   (text input → intent → module)         │
-├──────────────────────────────────────────┤
-│              Event Bus                   │
-├─────┬─────┬──────┬──────┬───────┬────────┤
-│Voice│Sys  │LLM   │Tasks │Notes  │  ...   │
-│ IO  │Ctrl │Chat  │Sched │Mgr    │Plugins │
-├─────┴─────┴──────┴──────┴───────┴────────┤
-│         Config  │  Logger  │  DB (SQLite) │
-└──────────────────────────────────────────┘
-```
+## 10. Future Extensions
 
----
-
-## 7. Constraints & Risks
-
-| Risk | Mitigation |
-|---|---|
-| LLM may be slow on CPU | Use quantized GGUF models (Q4_K_M), start with TinyLlama 1.1B |
-| Vosk accuracy may be limited | Allow text fallback, tunable language models |
-| Cross-platform system commands differ | Abstract OS-specific code behind interfaces |
-| 16GB RAM limits model size | Stay within 1-3B param models, lazy-load LLM |
-| No internet by default | Clearly separate online/offline modules |
-
----
-
-## 8. Project Structure (Planned)
-
-```
-FRIDAY/
-├── main.py                   # Entry point
-├── config.yaml               # Global configuration
-├── requirements.txt
-├── core/
-│   ├── __init__.py
-│   ├── app.py                # Application lifecycle
-│   ├── router.py             # Command routing
-│   ├── event_bus.py          # Inter-module events
-│   ├── config.py             # Config loader
-│   ├── logger.py             # Logging setup
-│   └── plugin_manager.py     # Plugin loading
-├── gui/
-│   ├── __init__.py
-│   ├── main_window.py        # Main PyQt5 window
-│   ├── chat_widget.py        # Chat display
-│   ├── input_widget.py       # Text input bar
-│   ├── status_bar.py         # Status indicators
-│   ├── tray.py               # System tray
-│   └── styles/
-│       └── dark_theme.qss    # Stylesheet
-├── modules/
-│   ├── __init__.py
-│   ├── system_control/       # Phase 2
-│   ├── voice_io/             # Phase 3
-│   ├── llm_chat/             # Phase 4
-│   ├── task_manager/         # Phase 5
-│   └── advanced/             # Phase 6
-├── data/
-│   └── friday.db             # SQLite database
-├── models/                   # Downloaded model files
-│   ├── vosk-model-small/
-│   └── tinyllama.gguf
-└── tests/
-    ├── test_router.py
-    ├── test_plugins.py
-    └── ...
-```
+- external MCP server adapters
+- richer wake-word session handling
+- persistent streaming TTS runtime
+- UI for persona creation and selection
+- more online capabilities with explicit permission tiers

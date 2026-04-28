@@ -1,32 +1,37 @@
 import os
 import sys
 
+
 def register():
-    # Paths
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
-    CLAP_DETECTOR = os.path.join(SCRIPT_DIR, "clap_detector.py")
-    VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "bin", "python3")
-    
+    clap_detector = os.path.join(SCRIPT_DIR, "clap_detector.py")
+    venv_python = os.path.join(PROJECT_ROOT, ".venv", "bin", "python3")
+
     AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
     DESKTOP_FILE = os.path.join(AUTOSTART_DIR, "friday_clap.desktop")
 
-    if not os.path.exists(VENV_PYTHON):
-        print(f"Error: Virtual environment not found at {VENV_PYTHON}")
+    if not os.path.exists(venv_python):
+        print(f"Error: Virtual environment not found at {venv_python}")
         return False
 
-    # Create autostart directory if it doesn't exist
     os.makedirs(AUTOSTART_DIR, exist_ok=True)
 
     content = f"""[Desktop Entry]
 Type=Application
-Exec={VENV_PYTHON} {CLAP_DETECTOR}
+Path={PROJECT_ROOT}
+TryExec={venv_python}
+Exec={venv_python} {clap_detector} --start
 Hidden=false
 NoDisplay=false
+StartupNotify=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
+X-GNOME-Autostart-Phase=Application
 Name=Friday Clap Detector
-Comment=Starts Friday on loud clap
+Comment=Starts Friday on double clap
 Icon=utilities-terminal
+Terminal=false
 Categories=Utility;
 """
 
@@ -55,6 +60,7 @@ def unregister():
     else:
         print("Autostart file not found.")
         return True
+
 
 if __name__ == "__main__":
     register()
