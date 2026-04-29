@@ -325,11 +325,17 @@ class STTEngine:
             is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
             is_wake_up = "wake up" in text_clean
 
+        safety_invoked = invoked
+        if media_mode:
+            # In restricted media mode, do not let an earlier wake session keep
+            # arbitrary YouTube/background speech trusted for several seconds.
+            safety_invoked = wake_found or self._has_explicit_activation()
+
         decision = self.safety.evaluate_media_transcript(
             text_clean,
             media_active=self.system_media_active,
             media_control_mode=media_mode,
-            invoked=invoked,
+            invoked=safety_invoked,
             is_media_command=is_media_cmd,
             is_wake_up=is_wake_up,
             is_bluetooth_active=self.is_bluetooth_active,

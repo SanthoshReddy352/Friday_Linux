@@ -178,6 +178,8 @@ def _list_pipewire_inputs():
 
     enriched = []
     for device in devices:
+        if _pipewire_node_is_internal_source(device.target.get("id")):
+            continue
         label = _pipewire_node_description(device.target.get("id"))
         if label:
             device.label = label
@@ -276,6 +278,24 @@ def _pipewire_node_description(node_id):
         if match:
             return match.group(1).strip()
     return ""
+
+
+def _pipewire_node_is_internal_source(node_id):
+    wpctl = shutil.which("wpctl")
+    if not wpctl or node_id is None:
+        return False
+    result = subprocess.run(
+        [wpctl, "inspect", str(node_id)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        if "media.class" in line and "Audio/Source/Internal" in line:
+            return True
+    return False
 
 
 def _resolve_pipewire_sounddevice_input():

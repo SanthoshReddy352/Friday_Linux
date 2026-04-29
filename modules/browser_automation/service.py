@@ -51,10 +51,186 @@ class BrowserMediaService:
         except Exception:
             pass
         try:
-            page.mouse.wheel(0, int(pixels))
+            scrolled = page.evaluate(
+                """
+                (amount) => {
+                    const visibleArea = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        const width = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+                        const height = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+                        return width * height;
+                    };
+                    const candidates = Array.from(document.querySelectorAll("main, #root, .main-content, .panel-content, [class*='panel' i], [class*='content' i], body, html"))
+                        .filter((el) => el.scrollHeight > el.clientHeight + 24)
+                        .map((el) => ({ el, area: visibleArea(el) }))
+                        .filter((item) => item.area > 20000)
+                        .sort((a, b) => b.area - a.area);
+                    const target = candidates[0]?.el;
+                    if (!target) return false;
+                    target.scrollBy({ top: amount, left: 0, behavior: "smooth" });
+                    return true;
+                }
+                """,
+                int(pixels),
+            )
+            if not scrolled:
+                page.mouse.wheel(0, int(pixels))
         except Exception:
             page.evaluate("(amount) => window.scrollBy({ top: amount, left: 0, behavior: 'smooth' })", int(pixels))
         return f"Scrolled {platform.replace('_', ' ')}."
+
+    def scroll_to_top(self, platform="browser"):
+        page = self._pages.get(platform)
+        if page is None:
+            return f"I don't have an active {platform.replace('_', ' ')} browser page yet."
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+        page.evaluate(
+            """
+            () => {
+                window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+                for (const el of document.querySelectorAll("main, #root, .main-content, .panel-content, [class*='panel' i], [class*='content' i]")) {
+                    if (el.scrollHeight > el.clientHeight + 24) {
+                        el.scrollTo({ top: 0, left: 0, behavior: "instant" });
+                    }
+                }
+            }
+            """
+        )
+        return f"Reset {platform.replace('_', ' ')} scroll."
+
+    def extract_visible_sections(self, platform="browser", min_chars=90, max_chars=900, max_sections=3):
+        page = self._pages.get(platform)
+        if page is None:
+            return []
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+        try:
+            sections = page.evaluate(
+                """
+                ({ minChars, maxChars, maxSections }) => {
+                    const normalize = (value) => String(value || "")
+                        .replace(/\\s+/g, " ")
+                        .replace(/\\b(read more|share|source|updated)\\b\\s*:?/ig, "")
+                        .trim();
+                    const viewportTop = 0;
+                    const viewportBottom = window.innerHeight || document.documentElement.clientHeight;
+                    const selector = [
+                        "main section",
+                        "article",
+                        "section",
+                        "main p",
+                        "main li",
+                        "main div",
+                        "#root p",
+                        "#root li",
+                        "#root div",
+                        "[role='article']",
+                        "[data-testid*='summary' i]",
+                        "[class*='summary' i]",
+                        "[class*='brief' i]",
+                        "[class*='insight' i]",
+                        "[class*='content' i]",
+                        "[class*='text' i]",
+                        "[class*='body' i]",
+                        "[class*='card' i]"
+                    ].join(",");
+                    const candidates = Array.from(document.querySelectorAll(selector));
+                    const rows = [];
+                    const seen = new Set();
+                    for (const element of candidates) {
+                        const rect = element.getBoundingClientRect();
+                        if (rect.width < 160 || rect.height < 36) continue;
+                        if (rect.bottom < viewportTop + 24 || rect.top > viewportBottom - 24) continue;
+                        const style = window.getComputedStyle(element);
+                        if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+                        let text = normalize(element.innerText || element.textContent || "");
+                        if (text.length < minChars) continue;
+                        const childTexts = Array.from(element.children || [])
+                            .map((child) => normalize(child.innerText || child.textContent || ""))
+                            .filter((childText) => childText.length >= minChars);
+                        if (childTexts.some((childText) => childText.length > text.length * 0.72)) continue;
+                        if (/^(home|login|menu|navigation|worldmonitor)$/i.test(text)) continue;
+                        if (text.length > maxChars) text = `${text.slice(0, maxChars).trim()}...`;
+                        const key = text.toLowerCase();
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        rows.push({ top: rect.top, text });
+                    }
+                    rows.sort((a, b) => a.top - b.top);
+                    const rowTexts = rows.slice(0, maxSections).map((row) => row.text);
+                    if (rowTexts.length) return rowTexts;
+
+                    const noisyTokens = new Set([
+                        "?", "✕", "⚙", "↻", "▾", "▼", "all", "live", "loading...", "sign in",
+                        "create account", "search", "link", "layers", "legend", "2d", "3d",
+                        "global", "americas", "mena", "europe", "asia", "latin america",
+                        "africa", "oceania", "scanning theaters", "aircraft positions",
+                        "naval vessels", "theater analysis", "connecting to live ads-b & ais streams..."
+                    ]);
+                    const bodyLines = String(document.body?.innerText || "")
+                        .split("\\n")
+                        .map((line) => normalize(line))
+                        .filter(Boolean);
+                    const startLabels = ["AI FORECASTS", "ACTIVE THEATERS", "AI INSIGHTS", "LIVE NEWS"];
+                    let startIndex = -1;
+                    for (const label of startLabels) {
+                        startIndex = bodyLines.findIndex((line) => line.toUpperCase() === label);
+                        if (startIndex >= 0) break;
+                    }
+                    if (startIndex < 0) startIndex = 0;
+                    const chunks = [];
+                    let chunk = "";
+                    for (const line of bodyLines.slice(startIndex)) {
+                        const lowered = line.toLowerCase();
+                        if (noisyTokens.has(lowered)) continue;
+                        if (lowered.startsWith("elapsed:")) continue;
+                        if (lowered.includes("initial load takes")) continue;
+                        if (/^[+\\-⌂⛶]$/.test(line)) continue;
+                        if (/^\\d+$/.test(line)) continue;
+                        if (/^\\d{1,3}%$/.test(line)) continue;
+                        if (/^[\\p{Emoji_Presentation}\\p{Extended_Pictographic}\\s]+$/u.test(line)) continue;
+                        const next = chunk ? `${chunk}. ${line}` : line;
+                        if (next.length > maxChars) {
+                            if (chunk.length >= minChars) chunks.push(chunk);
+                            chunk = line;
+                        } else {
+                            chunk = next;
+                        }
+                        if (chunk.length >= Math.min(maxChars, 520)) {
+                            chunks.push(chunk);
+                            chunk = "";
+                        }
+                        if (chunks.length >= maxSections) break;
+                    }
+                    if (chunk.length >= minChars && chunks.length < maxSections) chunks.push(chunk);
+                    return chunks.slice(0, maxSections);
+                }
+                """,
+                {
+                    "minChars": int(min_chars),
+                    "maxChars": int(max_chars),
+                    "maxSections": int(max_sections),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Visible section extraction failed for %s: %s", platform, exc)
+            return []
+        if not isinstance(sections, list):
+            return []
+        return [str(section).strip() for section in sections if str(section).strip()]
 
     def play_youtube(self, query, browser_name="chrome"):
         return self._play_video(

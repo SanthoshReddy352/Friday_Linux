@@ -348,12 +348,49 @@ class BrowserMediaWorkflow(BaseWorkflow):
         return ""
 
 
+class ReminderWorkflow(BaseWorkflow):
+    name = "reminder_workflow"
+
+    def should_start(self, user_text, context=None):
+        lower_text = (user_text or "").lower()
+        return "remind me" in lower_text or re.search(r"\bset (?:a )?reminder\b", lower_text)
+
+    def can_continue(self, user_text, state, context=None):
+        if not state:
+            return False
+        return state.get("workflow_name") == self.name and bool(state.get("pending_slots"))
+
+    def _handle(self, state):
+        manager = getattr(self.app, "task_manager", None)
+        if manager is None:
+            state["result"] = WorkflowResult(
+                handled=True,
+                workflow_name=self.name,
+                response="Reminder scheduling is not available yet.",
+                state={},
+            )
+            return state
+        user_text = state["user_text"]
+        session_id = state["session_id"]
+        workflow_state = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        response = manager.handle_reminder_followup(user_text, workflow_state)
+        updated = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        state["result"] = WorkflowResult(
+            handled=True,
+            workflow_name=self.name,
+            response=response,
+            state=updated,
+        )
+        return state
+
+
 class WorkflowOrchestrator:
     def __init__(self, app):
         self.app = app
         self.workflows = {}
         self.register(FileWorkflow(app))
         self.register(BrowserMediaWorkflow(app))
+        self.register(ReminderWorkflow(app))
 
     def register(self, workflow):
         self.workflows[workflow.name] = workflow
@@ -384,4 +421,3 @@ class WorkflowOrchestrator:
             if workflow.should_start(user_text, context=context):
                 return workflow.name
         return ""
-

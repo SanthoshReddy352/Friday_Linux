@@ -3,7 +3,7 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: on_demand
+  listening_mode: manual
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8
@@ -51,9 +51,9 @@ voice:
   wake_transcript_fallback: true
   media_max_uninvoked_words: 4
   input_device:
-    id: 55
+    id: 84
     kind: pipewire
-    label: Built-in Audio Analog Stereo
+    label: Nirvana Ion
 modules:
   greeter:
     enabled: true
@@ -72,6 +72,14 @@ browser_automation:
 world_monitor:
   api_base_url: https://api.worldmonitor.app
   web_base_url: https://www.worldmonitor.app
+  feed_api_base_url: https://worldmonitor.app
+  sources:
+    global: https://worldmonitor.app/
+    tech: https://tech.worldmonitor.app/
+    finance: https://finance.worldmonitor.app/
+    commodity: https://commodity.worldmonitor.app/
+    energy: https://energy.worldmonitor.app/
+    good: https://happy.worldmonitor.app/
   api_key: ''
   public_dashboard_fallback: true
   timeout_s: 12

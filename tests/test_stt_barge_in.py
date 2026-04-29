@@ -456,6 +456,37 @@ def test_media_session_rejects_uninvoked_transcript_with_reason():
     assert stt.last_rejected_reason == "long transcript blocked during media"
 
 
+def test_media_mode_does_not_trust_previous_wake_session_for_long_transcript():
+    app = MagicMock()
+    app.is_speaking = False
+    app.assistant_context = AssistantContext()
+    app.media_control_mode = True
+
+    stt = STTEngine(app)
+    stt.system_media_active = True
+    stt._extend_wake_session()
+
+    stt._process_voice_text("for the rest of the month all right thank you so much")
+
+    app.process_input.assert_not_called()
+    assert stt.last_rejected_reason == "long transcript blocked during media"
+
+
+def test_media_mode_allows_short_media_command_during_wake_session():
+    app = MagicMock()
+    app.is_speaking = False
+    app.assistant_context = AssistantContext()
+    app.media_control_mode = True
+
+    stt = STTEngine(app)
+    stt.system_media_active = True
+    stt._extend_wake_session()
+
+    stt._process_voice_text("play")
+
+    app.process_input.assert_called_once_with("play", source="voice")
+
+
 def test_button_invocation_allows_media_session_transcript():
     app = MagicMock()
     app.is_speaking = False

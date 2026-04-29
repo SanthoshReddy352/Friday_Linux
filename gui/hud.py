@@ -3,16 +3,22 @@ import random
 import sys
 import time
 import logging
+from datetime import datetime
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PyQt6.QtCore import QDate, QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication,
+    QCalendarWidget,
     QComboBox,
+    QDateTimeEdit,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QTextEdit,
@@ -27,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 HUD_TEXT_MAX_CHARS = 420
 HUD_TEXT_MAX_LINES = 8
+NELLORE_LAT = 14.4426
+NELLORE_LON = 79.9865
+NELLORE_TZ = "Asia/Kolkata"
+NELLORE_LABEL = "Nellore, AP, India"
 
 BG = "#020104"
 PANEL_BG = "rgba(7, 8, 14, 230)"
@@ -113,6 +123,51 @@ def format_voice_runtime_status(state):
         "rejected": rejected,
         "wake_strategy": state.get("wake_strategy") or "Wake model",
     }
+
+
+def format_weather_status(weather):
+    weather = dict(weather or {})
+    status = str(weather.get("status") or "").lower()
+    if status != "success":
+        return {
+            "temperature": "--.- C",
+            "condition": "Weather unavailable",
+            "details": str(weather.get("message") or "Waiting for update"),
+        }
+    temperature = weather.get("temperature_c")
+    feels_like = weather.get("feels_like_c")
+    humidity = weather.get("humidity")
+    wind = weather.get("wind_kmh")
+    condition = str(weather.get("condition") or "Current conditions")
+
+    def _metric(value, suffix, precision=0):
+        try:
+            numeric = float(value)
+        except Exception:
+            return f"--{suffix}"
+        return f"{numeric:.{precision}f}{suffix}"
+
+    details = (
+        f"Feels {_metric(feels_like, ' C', 1)}  |  "
+        f"Humidity {_metric(humidity, '%')}  |  "
+        f"Wind {_metric(wind, ' km/h')}"
+    )
+    return {
+        "temperature": _metric(temperature, " C", 1),
+        "condition": condition,
+        "details": details,
+    }
+
+
+def format_calendar_event_item(event):
+    event = dict(event or {})
+    title = str(event.get("title") or "").strip() or "Untitled reminder"
+    try:
+        remind_at = datetime.fromisoformat(str(event.get("remind_at") or ""))
+        when = remind_at.strftime("%d %b %I:%M %p").lstrip("0")
+    except Exception:
+        when = "No time"
+    return f"{when}  {title}"
 
 
 def panel_style(border=PANEL_BORDER):
@@ -419,6 +474,315 @@ class CameraStrip(QWidget):
                 painter.drawEllipse(QPointF(rect.right() - 18, rect.top() + 16), 4, 4)
 
 
+WEATHER_CODE_LABELS = {
+    0: "Clear sky",
+    1: "Mostly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Rime fog",
+    51: "Light drizzle",
+    53: "Drizzle",
+    55: "Dense drizzle",
+    61: "Light rain",
+    63: "Rain",
+    65: "Heavy rain",
+    71: "Light snow",
+    73: "Snow",
+    75: "Heavy snow",
+    80: "Rain showers",
+    81: "Heavy showers",
+    82: "Violent showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with hail",
+    99: "Severe thunderstorm",
+}
+
+
+class WeatherFetchThread(QThread):
+    weather_ready = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            import requests
+
+            response = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": NELLORE_LAT,
+                    "longitude": NELLORE_LON,
+                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+                    "timezone": NELLORE_TZ,
+                },
+                timeout=8,
+            )
+            response.raise_for_status()
+            current = (response.json() or {}).get("current") or {}
+            code = int(current.get("weather_code") or 0)
+            self.weather_ready.emit({
+                "status": "success",
+                "temperature_c": current.get("temperature_2m"),
+                "feels_like_c": current.get("apparent_temperature"),
+                "humidity": current.get("relative_humidity_2m"),
+                "wind_kmh": current.get("wind_speed_10m"),
+                "condition": WEATHER_CODE_LABELS.get(code, "Current conditions"),
+            })
+        except Exception as exc:
+            self.weather_ready.emit({
+                "status": "error",
+                "message": str(exc) or exc.__class__.__name__,
+            })
+
+
+class ClockWeatherWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.weather_thread = None
+        self.setMinimumHeight(220)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self.clock_label = QLabel("--:--:--")
+        self.clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.clock_label.setStyleSheet(label_style(TEXT, 34, "bold"))
+        layout.addWidget(self.clock_label)
+
+        self.date_label = QLabel("")
+        self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date_label.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
+        layout.addWidget(self.date_label)
+
+        location = QLabel(NELLORE_LABEL.upper())
+        location.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        location.setStyleSheet(label_style(CYAN, 11, "bold"))
+        layout.addWidget(location)
+
+        self.temperature_label = QLabel("--.- C")
+        self.temperature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.temperature_label.setStyleSheet(label_style(GREEN, 22, "bold"))
+        layout.addWidget(self.temperature_label)
+
+        self.condition_label = QLabel("Weather loading")
+        self.condition_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.condition_label.setStyleSheet(label_style(TEXT, 12, "bold"))
+        self.condition_label.setWordWrap(True)
+        layout.addWidget(self.condition_label)
+
+        self.weather_detail_label = QLabel("Waiting for update")
+        self.weather_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.weather_detail_label.setStyleSheet(label_style(TEXT_DIM, 11))
+        self.weather_detail_label.setWordWrap(True)
+        layout.addWidget(self.weather_detail_label)
+        layout.addStretch(1)
+
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(self.update_clock)
+        self.clock_timer.start(1000)
+        self.update_clock()
+
+        self.weather_timer = QTimer(self)
+        self.weather_timer.timeout.connect(self.refresh_weather)
+        self.weather_timer.start(15 * 60 * 1000)
+        QTimer.singleShot(200, self.refresh_weather)
+
+    def update_clock(self):
+        now = QDateTime.currentDateTime()
+        self.clock_label.setText(now.toString("hh:mm:ss"))
+        self.date_label.setText(now.toString("dddd, dd MMM yyyy") + "  IST")
+
+    def refresh_weather(self):
+        if self.weather_thread and self.weather_thread.isRunning():
+            return
+        self.weather_thread = WeatherFetchThread()
+        self.weather_thread.weather_ready.connect(self.set_weather)
+        self.weather_thread.start()
+
+    def set_weather(self, weather):
+        formatted = format_weather_status(weather)
+        self.temperature_label.setText(formatted["temperature"])
+        self.condition_label.setText(formatted["condition"])
+        self.weather_detail_label.setText(formatted["details"])
+
+
+class CalendarWidget(QWidget):
+    create_requested = pyqtSignal(str, object)
+    delete_requested = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.events = []
+        self.setMinimumHeight(250)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        self.calendar.setSelectedDate(QDate.currentDate())
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.calendar.setStyleSheet(
+            "QCalendarWidget {"
+            "background-color: rgba(0, 0, 0, 88);"
+            f"color: {TEXT};"
+            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "border: 1px solid rgba(77, 234, 255, 70);"
+            "border-radius: 6px;"
+            "}"
+            "QCalendarWidget QWidget#qt_calendar_navigationbar {"
+            "background-color: rgba(8, 38, 52, 210);"
+            "}"
+            "QCalendarWidget QToolButton {"
+            f"color: {TEXT};"
+            "background-color: transparent;"
+            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "font-weight: bold;"
+            "padding: 4px;"
+            "}"
+            "QCalendarWidget QAbstractItemView {"
+            "background-color: rgba(0, 0, 0, 120);"
+            f"color: {TEXT};"
+            f"selection-background-color: {BLUE};"
+            f"selection-color: {TEXT};"
+            "outline: none;"
+            "}"
+        )
+        layout.addWidget(self.calendar)
+
+        self.events_label = QLabel("No scheduled reminders")
+        self.events_label.setStyleSheet(label_style(TEXT_DIM, 11))
+        self.events_label.setWordWrap(True)
+        layout.addWidget(self.events_label)
+
+        self.reminder_title = QLineEdit()
+        self.reminder_title.setPlaceholderText("Reminder")
+        self.reminder_title.setStyleSheet(text_box_style(font_size=11))
+        layout.addWidget(self.reminder_title)
+
+        self.reminder_time = QDateTimeEdit(QDateTime.currentDateTime().addSecs(10 * 60))
+        self.reminder_time.setCalendarPopup(True)
+        self.reminder_time.setDisplayFormat("dd MMM yyyy  hh:mm AP")
+        self.reminder_time.setStyleSheet(combo_style())
+        layout.addWidget(self.reminder_time)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+        self.add_button = QPushButton("ADD")
+        self.add_button.setStyleSheet(button_style())
+        self.add_button.clicked.connect(self._emit_create)
+        action_row.addWidget(self.add_button)
+        self.delete_button = QPushButton("DELETE")
+        self.delete_button.setStyleSheet(button_style(danger=True))
+        self.delete_button.clicked.connect(self._emit_delete)
+        action_row.addWidget(self.delete_button)
+        layout.addLayout(action_row)
+
+        self.events_list = QListWidget()
+        self.events_list.setMinimumHeight(92)
+        self.events_list.setStyleSheet(text_box_style(font_size=11))
+        self.events_list.itemSelectionChanged.connect(self._sync_delete_state)
+        layout.addWidget(self.events_list)
+
+        self.editor_status = QLabel("")
+        self.editor_status.setStyleSheet(label_style(TEXT_DIM, 10))
+        self.editor_status.setWordWrap(True)
+        layout.addWidget(self.editor_status)
+
+        self.calendar.selectionChanged.connect(self._sync_editor_date)
+        self._sync_delete_state()
+
+    def set_events(self, events):
+        self.events = list(events or [])
+        self._render_events()
+
+    def add_event(self, event):
+        event = dict(event or {})
+        if not event.get("id"):
+            return
+        self.events = [item for item in self.events if item.get("id") != event.get("id")]
+        self.events.append(event)
+        self._render_events()
+
+    def remove_event(self, event):
+        event_id = dict(event or {}).get("id")
+        if event_id is None:
+            return
+        self.events = [item for item in self.events if item.get("id") != event_id]
+        self._render_events()
+
+    def mark_event_fired(self, event):
+        self.remove_event(event)
+
+    def set_editor_status(self, message, error=False):
+        color = RED if error else TEXT_DIM
+        self.editor_status.setStyleSheet(label_style(color, 10))
+        self.editor_status.setText(str(message or ""))
+
+    def _render_events(self):
+        self._clear_event_highlights()
+        upcoming = []
+        selected_id = self.selected_event_id()
+        self.events_list.clear()
+        for event in sorted(self.events, key=lambda item: str(item.get("remind_at") or "")):
+            if event.get("status") == "fired":
+                continue
+            remind_at = QDateTime.fromString(str(event.get("remind_at") or ""), Qt.DateFormat.ISODate)
+            if not remind_at.isValid():
+                continue
+            self._highlight_date(remind_at.date())
+            upcoming.append(f"{remind_at.toString('dd MMM hh:mm AP')}  {event.get('title', '')}")
+            item = QListWidgetItem(format_calendar_event_item(event))
+            item.setData(Qt.ItemDataRole.UserRole, event.get("id"))
+            self.events_list.addItem(item)
+            if event.get("id") == selected_id:
+                item.setSelected(True)
+        self.events_label.setText("\n".join(upcoming[:4]) if upcoming else "No scheduled reminders")
+        self._sync_delete_state()
+
+    def _clear_event_highlights(self):
+        empty = QTextCharFormat()
+        for offset in range(-365, 731):
+            self.calendar.setDateTextFormat(QDate.currentDate().addDays(offset), empty)
+
+    def _highlight_date(self, date):
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(77, 234, 255, 80))
+        fmt.setForeground(QColor(TEXT))
+        fmt.setFontWeight(QFont.Weight.Bold)
+        self.calendar.setDateTextFormat(date, fmt)
+
+    def selected_event_id(self):
+        item = self.events_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _emit_create(self):
+        title = self.reminder_title.text().strip()
+        if not title:
+            self.set_editor_status("Enter a reminder title.", error=True)
+            return
+        self.create_requested.emit(title, self.reminder_time.dateTime().toPyDateTime())
+        self.reminder_title.clear()
+
+    def _emit_delete(self):
+        event_id = self.selected_event_id()
+        if event_id is None:
+            self.set_editor_status("Select a reminder to delete.", error=True)
+            return
+        self.delete_requested.emit(int(event_id))
+
+    def _sync_delete_state(self):
+        self.delete_button.setEnabled(self.selected_event_id() is not None)
+
+    def _sync_editor_date(self):
+        selected = self.calendar.selectedDate()
+        current_time = self.reminder_time.time()
+        self.reminder_time.setDateTime(QDateTime(selected, current_time))
+
+
 class PulseBars(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -633,6 +997,9 @@ class JarvisHUD(QMainWindow):
     turn_finished_ready = pyqtSignal(object)
     listening_mode_ready = pyqtSignal(object)
     voice_runtime_ready = pyqtSignal(object)
+    calendar_event_created_ready = pyqtSignal(object)
+    calendar_event_fired_ready = pyqtSignal(object)
+    calendar_event_deleted_ready = pyqtSignal(object)
 
     def __init__(self, app_core):
         super().__init__()
@@ -660,15 +1027,17 @@ class JarvisHUD(QMainWindow):
 
         left = QVBoxLayout()
         left.setSpacing(14)
-        radar_panel = TechPanel("SENSOR FIELD")
-        self.radar = RadarPanel()
-        radar_panel.body.addWidget(self.radar)
-        left.addWidget(radar_panel, stretch=3)
+        clock_panel = TechPanel("NELLORE CLOCK")
+        self.clock_weather = ClockWeatherWidget()
+        clock_panel.indicator.setText("IST")
+        clock_panel.body.addWidget(self.clock_weather)
+        left.addWidget(clock_panel, stretch=3)
 
-        camera_panel = TechPanel("VISUAL FEEDS")
-        self.camera_strip = CameraStrip()
-        camera_panel.body.addWidget(self.camera_strip)
-        left.addWidget(camera_panel, stretch=3)
+        calendar_panel = TechPanel("CALENDAR")
+        calendar_panel.indicator.setText("TODAY")
+        self.calendar_panel = CalendarWidget()
+        calendar_panel.body.addWidget(self.calendar_panel)
+        left.addWidget(calendar_panel, stretch=3)
 
         stream_panel = TechPanel("EVENT STREAM")
         self.event_stream = QTextEdit()
@@ -815,8 +1184,13 @@ class JarvisHUD(QMainWindow):
         self.turn_finished_ready.connect(self._on_turn_finished)
         self.listening_mode_ready.connect(self._on_listening_mode_changed)
         self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
+        self.calendar_event_created_ready.connect(self._on_calendar_event_created)
+        self.calendar_event_fired_ready.connect(self._on_calendar_event_fired)
+        self.calendar_event_deleted_ready.connect(self._on_calendar_event_deleted)
 
         self.reactor.clicked.connect(self.toggle_pause_everything)
+        self.calendar_panel.create_requested.connect(self._create_calendar_event_from_gui)
+        self.calendar_panel.delete_requested.connect(self._delete_calendar_event_from_gui)
         bus = self.app_core.event_bus
         bus.subscribe("gui_toggle_mic", lambda payload: self.mic_toggle_ready.emit(payload))
         bus.subscribe("voice_response", lambda payload: self.voice_response_ready.emit(payload))
@@ -829,7 +1203,11 @@ class JarvisHUD(QMainWindow):
         bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("listening_mode_changed", lambda payload: self.listening_mode_ready.emit(payload))
         bus.subscribe("voice_runtime_state_changed", lambda payload: self.voice_runtime_ready.emit(payload))
+        bus.subscribe("calendar_event_created", lambda payload: self.calendar_event_created_ready.emit(payload))
+        bus.subscribe("calendar_event_fired", lambda payload: self.calendar_event_fired_ready.emit(payload))
+        bus.subscribe("calendar_event_deleted", lambda payload: self.calendar_event_deleted_ready.emit(payload))
         bus.subscribe("system_shutdown", lambda _payload: self.shutdown_signal.emit())
+        self._load_calendar_events()
 
     def toggle_process_panel(self, _checked=False):
         if self.process_panel.isVisible():
@@ -837,6 +1215,47 @@ class JarvisHUD(QMainWindow):
             return
         self.process_panel.show()
         self.process_panel.raise_()
+
+    def _load_calendar_events(self):
+        manager = getattr(self.app_core, "task_manager", None)
+        if manager and hasattr(manager, "list_calendar_events"):
+            self.calendar_panel.set_events(manager.list_calendar_events())
+
+    def _on_calendar_event_created(self, payload):
+        self.calendar_panel.add_event(payload)
+        if isinstance(payload, dict):
+            self._append_event("REMIND", str(payload.get("title") or "")[:90])
+
+    def _on_calendar_event_fired(self, payload):
+        self.calendar_panel.mark_event_fired(payload)
+
+    def _on_calendar_event_deleted(self, payload):
+        self.calendar_panel.remove_event(payload)
+        self.calendar_panel.set_editor_status("Reminder deleted.")
+        self._append_event("REMIND", "deleted")
+
+    def _create_calendar_event_from_gui(self, title, remind_at):
+        manager = getattr(self.app_core, "task_manager", None)
+        if not manager or not hasattr(manager, "create_calendar_event"):
+            self.calendar_panel.set_editor_status("Reminder manager is not available.", error=True)
+            return
+        ok, result = manager.create_calendar_event(title, remind_at)
+        if ok:
+            self.calendar_panel.set_editor_status("Reminder scheduled.")
+            self._append_event("REMIND", str(title)[:90])
+            return
+        self.calendar_panel.set_editor_status(result, error=True)
+
+    def _delete_calendar_event_from_gui(self, event_id):
+        manager = getattr(self.app_core, "task_manager", None)
+        if not manager or not hasattr(manager, "delete_calendar_event"):
+            self.calendar_panel.set_editor_status("Reminder manager is not available.", error=True)
+            return
+        ok, result = manager.delete_calendar_event(event_id)
+        if ok:
+            self.calendar_panel.set_editor_status(result)
+            return
+        self.calendar_panel.set_editor_status(result, error=True)
 
     def on_voice_mode_selected(self, index):
         try:

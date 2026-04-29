@@ -3,7 +3,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gui.hud import format_hud_message, format_voice_mode_label, format_voice_runtime_status
+from gui.hud import (
+    format_calendar_event_item,
+    format_hud_message,
+    format_voice_mode_label,
+    format_voice_runtime_status,
+    format_weather_status,
+)
 
 
 def test_format_hud_message_prefixes_user_text():
@@ -60,3 +66,29 @@ def test_format_voice_runtime_status_exposes_transcript_wake_fallback():
     assert formatted["gate"] == "TRANSCRIPT WAKE"
     assert formatted["wake_strategy"] == "Transcript fallback"
     assert formatted["rejected"] == "None"
+
+
+def test_format_weather_status_formats_nellore_panel_metrics():
+    formatted = format_weather_status({
+        "status": "success",
+        "temperature_c": 31.24,
+        "feels_like_c": 34.8,
+        "humidity": 62,
+        "wind_kmh": 11.9,
+        "condition": "Partly cloudy",
+    })
+
+    assert formatted == {
+        "temperature": "31.2 C",
+        "condition": "Partly cloudy",
+        "details": "Feels 34.8 C  |  Humidity 62%  |  Wind 12 km/h",
+    }
+
+
+def test_format_calendar_event_item_formats_reminder_row():
+    formatted = format_calendar_event_item({
+        "title": "purchase a gift",
+        "remind_at": "2026-04-28T16:10:00",
+    })
+
+    assert formatted == "28 Apr 04:10 PM  purchase a gift"

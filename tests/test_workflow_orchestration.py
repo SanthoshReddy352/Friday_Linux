@@ -2,6 +2,7 @@ import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -11,6 +12,8 @@ from core.dialog_state import DialogState
 from core.router import CommandRouter
 from core.workflow_orchestrator import WorkflowOrchestrator
 from modules.browser_automation.plugin import BrowserAutomationPlugin
+import modules.task_manager.plugin as task_manager_plugin
+from modules.task_manager.plugin import TaskManagerPlugin
 import modules.system_control.file_workspace as file_workspace
 from modules.system_control.plugin import SystemControlPlugin
 
@@ -64,6 +67,258 @@ def test_create_file_continues_with_filename_follow_up(monkeypatch, tmp_path):
     state = app.context_store.get_active_workflow(app.session_id, workflow_name="file_workflow")
     assert state["target"]["filename"] == "coffee"
     assert state["status"] == "active"
+
+
+def test_reminder_prompts_for_missing_date_and_time(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+
+    prompt = app.router.process_text("remind me to purchase a gift")
+
+    assert prompt == "When should I remind you? Please mention the date and time to remind you."
+    state = app.context_store.get_active_workflow(app.session_id, workflow_name="reminder_workflow")
+    assert state["pending_slots"] == ["date", "time"]
+    assert state["target"]["message"] == "purchase a gift"
+
+
+def test_reminder_followup_date_then_time_completes_event(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+
+    first = app.router.process_text("remind me to purchase a gift")
+    second = app.router.process_text("tomorrow")
+    third = app.router.process_text("5 PM")
+
+    assert "When should I remind you" in first
+    assert second == "What time should I remind you?"
+    assert "I'll remind you to purchase a gift" in third
+    state = app.context_store.get_active_workflow(app.session_id, workflow_name="reminder_workflow")
+    assert not state
+
+
+def test_reminder_followup_accepts_spoken_time_transcripts(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    assert plugin._parse_time("today at 4 10") == (4, 10)
+    assert plugin._parse_time("3 40") == (3, 40)
+    assert plugin._parse_time("340") == (3, 40)
+    assert plugin._parse_time("1540") == (15, 40)
+    assert plugin._parse_time("four o clock") == (4, 0)
+    assert plugin._parse_time("4 p m") == (16, 0)
+    assert plugin._parse_time("buy one apple") is None
+    assert plugin._extract_reminder_message("remind me to cook rice at") == "cook rice"
+
+
+def test_reminder_today_infers_afternoon_for_ambiguous_past_hour(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    remind_at = plugin._combine_date_time("2026-04-28", "03:40")
+
+    assert remind_at == FixedDatetime(2026, 4, 28, 15, 40, 0)
+
+
+def test_reminder_accepts_bare_hour_when_context_expects_time(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 36, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+
+    app.router.process_text("remind me to purchase a gift")
+    app.router.process_text("today")
+    result = app.router.process_text("four")
+
+    assert result == "Got it! I'll remind you to purchase a gift on Tuesday, April 28, 2026 at 4:00 PM."
+
+
+def test_reminder_accepts_at_hour_in_date_followup(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 36, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+
+    app.router.process_text("remind me to purchase a gift")
+    result = app.router.process_text("today at 4")
+
+    assert result == "Got it! I'll remind you to purchase a gift on Tuesday, April 28, 2026 at 4:00 PM."
+
+
+def test_reminder_with_date_and_time_in_first_sentence_has_no_followup(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+
+    result = app.router.process_text("remind me to purchase a gift on 2099-04-28 at 5 PM")
+
+    assert result == "Got it! I'll remind you to purchase a gift on Tuesday, April 28, 2099 at 5:00 PM."
+    state = app.context_store.get_active_workflow(app.session_id, workflow_name="reminder_workflow")
+    assert not state
+
+
+def test_calendar_events_briefing_formats_upcoming_times(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+    plugin._create_calendar_event("purchase a gift", FixedDatetime(2026, 4, 28, 16, 10, 0))
+
+    result = plugin.handle_list_calendar_events("", {})
+
+    assert result == "Here are your upcoming reminders:\nToday at 4:10 PM: purchase a gift"
+
+
+def test_calendar_event_fire_sends_desktop_notification(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(task_manager_plugin.shutil, "which", lambda name: "/usr/bin/notify-send")
+    run = MagicMock()
+    monkeypatch.setattr(task_manager_plugin.subprocess, "run", run)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    event_id = plugin._insert_calendar_event("purchase a gift", datetime.now())
+    plugin._fire_calendar_event(event_id, "purchase a gift")
+
+    run.assert_called_once()
+    assert run.call_args.args[0][-2:] == ["FRIDAY Reminder", "purchase a gift"]
+    assert plugin.list_calendar_events() == []
+
+
+def test_completed_calendar_events_are_cleaned_on_startup(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    app = build_test_app(tmp_path)
+    TaskManagerPlugin(app)
+    conn = task_manager_plugin.sqlite3.connect(task_manager_plugin.DB_PATH)
+    conn.execute(
+        "INSERT INTO calendar_events (title, remind_at, status, created_at, fired_at) VALUES (?, ?, 'fired', ?, ?)",
+        ("old task", "2026-04-28T15:40:00", "2026-04-28T15:30:00", "2026-04-28T15:40:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    plugin = TaskManagerPlugin(app)
+
+    assert plugin.list_calendar_events() == []
+
+
+def test_calendar_event_creation_schedules_system_notification(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(task_manager_plugin.shutil, "which", lambda name: f"/usr/bin/{name}")
+    run = MagicMock()
+    run.return_value.returncode = 0
+    run.return_value.stderr = ""
+    run.return_value.stdout = "Running timer"
+    monkeypatch.setattr(task_manager_plugin.subprocess, "run", run)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    event_id = plugin._create_calendar_event("purchase a gift", FixedDatetime(2026, 4, 28, 15, 40, 0))
+
+    assert event_id in plugin._system_notification_event_ids
+    command = run.call_args.args[0]
+    assert command[:2] == ["systemd-run", "--user"]
+    assert "--on-calendar" in command
+    assert "2026-04-28 15:40:00" in command
+    assert command[-2:] == [str(event_id), "purchase a gift"]
+
+
+def test_system_notification_duplicate_unit_is_treated_as_scheduled(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(task_manager_plugin.shutil, "which", lambda name: f"/usr/bin/{name}")
+    run = MagicMock()
+    run.return_value.returncode = 1
+    run.return_value.stdout = ""
+    run.return_value.stderr = (
+        "Failed to start transient timer unit: "
+        "Unit friday-reminder-3.timer was already loaded or has a fragment file."
+    )
+    monkeypatch.setattr(task_manager_plugin.subprocess, "run", run)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    scheduled = plugin._schedule_system_notification(3, "purchase a gift", FixedDatetime(2026, 4, 28, 15, 40, 0))
+
+    assert scheduled is True
+
+
+def test_unfinished_task_briefing_lists_only_future_scheduled_events(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+    plugin._create_calendar_event("purchase a gift", FixedDatetime(2026, 4, 28, 16, 10, 0))
+
+    result = plugin.get_unfinished_task_briefing()
+
+    assert result == "You have 1 unfinished reminder.\nToday at 4:10 PM: purchase a gift"
+
+
+def test_gui_create_and_delete_calendar_event(monkeypatch, tmp_path):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 27, 0)
+
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedDatetime)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    ok, payload = plugin.create_calendar_event("purchase a gift", FixedDatetime(2026, 4, 28, 16, 10, 0))
+    deleted, message = plugin.delete_calendar_event(payload["id"])
+
+    assert ok is True
+    assert payload["title"] == "purchase a gift"
+    assert deleted is True
+    assert message == "Reminder deleted."
+    assert plugin.list_calendar_events() == []
 
 
 def test_write_request_without_content_prompts_and_then_saves(monkeypatch, tmp_path):

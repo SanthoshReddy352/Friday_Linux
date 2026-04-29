@@ -33,6 +33,9 @@ class VoiceSafetyLayer:
         if invoked or is_wake_up:
             return TranscriptDecision(True)
 
+        if media_control_mode and is_media_command and word_count <= self.max_media_uninvoked_words:
+            return TranscriptDecision(True)
+
         if word_count > self.max_media_uninvoked_words:
             return TranscriptDecision(False, "long transcript blocked during media")
 

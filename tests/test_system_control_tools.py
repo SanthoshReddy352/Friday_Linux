@@ -6,6 +6,7 @@ from core.dialog_state import DialogState
 from unittest.mock import MagicMock
 
 import modules.system_control.plugin as system_plugin
+from modules.system_control import screenshot as screenshot_module
 import modules.system_control.file_workspace as file_workspace
 from modules.system_control.app_launcher import extract_app_names, canonicalize_app_name, configure_app_registry
 from modules.system_control.file_search import search_files_raw
@@ -52,6 +53,39 @@ def test_handle_launch_app_passes_multiple_apps(monkeypatch):
 
     assert result == "ok"
     assert captured["names"] == ["firefox", "chrome", "calculator"]
+
+
+def test_take_screenshot_tool_is_registered_and_routable(monkeypatch):
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    plugin = SystemControlPlugin(app)
+    monkeypatch.setattr(system_plugin, "take_screenshot", lambda: "Screenshot saved successfully at: /tmp/shot.png")
+    screenshot_callback = None
+    for call in app.router.register_tool.call_args_list:
+        spec, callback = call.args[:2]
+        if spec["name"] == "take_screenshot":
+            screenshot_callback = callback
+            break
+
+    assert screenshot_callback is not None
+    assert screenshot_callback("take a screenshot", {}) == "Screenshot saved successfully at: /tmp/shot.png"
+
+
+def test_copy_portal_screenshot_uri(tmp_path):
+    source = tmp_path / "portal shot.png"
+    target = tmp_path / "saved.png"
+    source.write_bytes(b"png-data")
+
+    error = screenshot_module._copy_portal_uri(f"file://{str(source).replace(' ', '%20')}", str(target))
+
+    assert error is None
+    assert target.read_bytes() == b"png-data"
+
+
+def test_portal_request_path_matches_xdg_desktop_portal_shape():
+    path = screenshot_module._portal_request_path(":1.6112", "friday_token")
+
+    assert path == "/org/freedesktop/portal/desktop/request/1_6112/friday_token"
 
 
 def test_extract_app_names_fuzzy_spoken_calculator():

@@ -9,6 +9,7 @@ from modules.voice_io.audio_devices import (
     AudioInputDevice,
     apply_input_device_selection,
     choose_startup_input_device,
+    _pipewire_node_is_internal_source,
     parse_wpctl_inputs,
 )
 from core.config import ConfigManager
@@ -52,6 +53,15 @@ def test_parse_wpctl_inputs_includes_bluetooth_filter_source():
     labels = [device.label for device in devices]
     assert "Built-in Audio Analog Stereo" in labels
     assert "Nirvana Ion" in labels
+
+
+def test_pipewire_internal_source_is_detected():
+    inspect_output = 'media.class = "Audio/Source/Internal"\nnode.description = "Internal Capture"'
+    with patch("modules.voice_io.audio_devices.shutil.which", return_value="/usr/bin/wpctl"), \
+         patch("modules.voice_io.audio_devices.subprocess.run") as run:
+        run.return_value = MagicMock(returncode=0, stdout=inspect_output, stderr="")
+
+        assert _pipewire_node_is_internal_source(115) is True
 
 
 def test_apply_input_device_selection_pipewire_sets_default():

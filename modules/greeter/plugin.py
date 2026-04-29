@@ -127,13 +127,11 @@ class GreeterPlugin(FridayPlugin):
 
     def handle_startup(self):
         """Vocal greeting when the app first loads."""
-        startup_phrases = [
-            "Online and ready, sir.",
-            "At your service, sir. All protocols are active.",
-            "Welcome back, sir. Systems are at one hundred percent.",
-            "Hello sir. I am ready to assist you."
-        ]
-        return random.choice(startup_phrases)
+        greeting = f"{self._get_time_of_day_greeting()}, sir. FRIDAY is online and ready."
+        task_briefing = self._get_unfinished_task_briefing()
+        if task_briefing:
+            return f"{greeting}\n{task_briefing}"
+        return greeting
 
     def get_pause_phrase(self):
         """Vocal feedback when pausing (reactor click)."""
@@ -235,12 +233,19 @@ class GreeterPlugin(FridayPlugin):
 
     def _get_time_of_day_greeting(self):
         hour = datetime.now().hour
-        if hour < 12:
+        if 5 <= hour < 12:
             return "Good morning"
-        elif hour < 17:
+        elif 12 <= hour < 17:
             return "Good afternoon"
-        else:
+        elif 17 <= hour < 21:
             return "Good evening"
+        return "Good night"
+
+    def _get_unfinished_task_briefing(self):
+        manager = getattr(self.app, "task_manager", None)
+        if manager and hasattr(manager, "get_unfinished_task_briefing"):
+            return manager.get_unfinished_task_briefing()
+        return ""
 
 def setup(app):
     return GreeterPlugin(app)

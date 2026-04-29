@@ -2,10 +2,12 @@ import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.capability_registry import CapabilityRegistry
+import modules.greeter.plugin as greeter_plugin
 from modules.greeter.plugin import GreeterPlugin
 
 
@@ -45,3 +47,40 @@ def test_greeter_help_uses_registered_capabilities():
     assert "Online actions stay opt-in" in response
     assert "Interrupt me anytime" in response
     assert "shutdown_assistant" not in response
+
+
+def test_startup_greeting_wishes_by_time_then_reads_unfinished_tasks(monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 15, 40, 0)
+
+    monkeypatch.setattr(greeter_plugin, "datetime", FixedDatetime)
+    task_manager = MagicMock()
+    task_manager.get_unfinished_task_briefing.return_value = (
+        "You have 1 unfinished reminder.\nToday at 4:10 PM: purchase a gift"
+    )
+    app = SimpleNamespace(router=MagicMock(), task_manager=task_manager)
+    plugin = GreeterPlugin(app)
+
+    response = plugin.handle_startup()
+
+    assert response.startswith("Good afternoon, sir.")
+    assert "FRIDAY is online and ready." in response
+    assert "You have 1 unfinished reminder." in response
+    assert "Today at 4:10 PM: purchase a gift" in response
+
+
+def test_startup_greeting_supports_night(monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 28, 22, 30, 0)
+
+    monkeypatch.setattr(greeter_plugin, "datetime", FixedDatetime)
+    app = SimpleNamespace(router=MagicMock())
+    plugin = GreeterPlugin(app)
+
+    response = plugin.handle_startup()
+
+    assert response == "Good night, sir. FRIDAY is online and ready."
