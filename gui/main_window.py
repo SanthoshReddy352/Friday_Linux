@@ -1,10 +1,13 @@
 import sys
 import os
+import time
+from html import escape as html_escape
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt5.QtGui import QTextCursor
 
 
 # ------------------------------------------------------------------
@@ -37,6 +40,7 @@ class InputWorker(QObject):
 class MainWindow(QMainWindow):
     # Signal used to safely push text to QTextEdit from a background thread
     message_ready = pyqtSignal(object)
+    route_ready = pyqtSignal(object)
 
     def __init__(self, app_core):
         super().__init__()
@@ -50,6 +54,7 @@ class MainWindow(QMainWindow):
         # Wire GUI callback — will be called from background thread, so use signal
         self.app_core.set_gui_callback(self._on_message_from_thread)
         self.message_ready.connect(self.render_message)
+        self.route_ready.connect(self._on_route_event)
 
     def init_ui(self):
         self.setWindowTitle("FRIDAY")
@@ -125,7 +130,10 @@ class MainWindow(QMainWindow):
         self.app_core.event_bus.subscribe("turn_started", lambda x: self.set_companion_state("thinking"))
         self.app_core.event_bus.subscribe("assistant_ack", lambda x: self.set_companion_state("thinking"))
         self.app_core.event_bus.subscribe("assistant_progress", lambda x: self.set_companion_state("thinking"))
-        self.app_core.event_bus.subscribe("tool_started", lambda x: self.set_companion_state("executing"))
+        self.app_core.event_bus.subscribe("tool_started", lambda x: (
+            self.set_companion_state("executing"),
+            self.route_ready.emit(x),
+        ))
         self.app_core.event_bus.subscribe("llm_started", lambda x: self.set_companion_state("thinking"))
         self.app_core.event_bus.subscribe("turn_completed", lambda x: self.set_companion_state("idle"))
         self.app_core.event_bus.subscribe("turn_failed", lambda x: self.set_companion_state("idle"))
@@ -210,25 +218,72 @@ class MainWindow(QMainWindow):
 
     def render_message(self, payload):
         if isinstance(payload, str):
-            self.add_assistant_message(payload)
+            self._insert_bubble("assistant", payload)
             return
 
         role = payload.get("role", "assistant")
         text = payload.get("text", "")
-        source = payload.get("source", role)
+        if not text:
+            return
+        self._insert_bubble(role, text)
 
+    def _on_route_event(self, payload):
+        if not isinstance(payload, dict):
+            return
+        tool = payload.get("tool_name", "")
+        if not tool:
+            return
+        args = payload.get("args") or {}
+        label = tool.replace("_", " ")
+        key = next((k for k in ("query", "topic", "text", "path", "url", "app") if k in args), None)
+        suffix = f" ({html_escape(str(args[key])[:35])})" if key else ""
+        safe = f"▶ {html_escape(label)}{html_escape(suffix)}"
+        html = (
+            f'<p align="center">'
+            f'<span style="color:#3a5a4a;font-size:11px;">{safe}</span>'
+            f'</p>'
+        )
+        self._insert_raw_html(html)
+
+    def _insert_bubble(self, role: str, text: str):
+        safe = html_escape(text.strip()).replace("\n", "<br/>")
+        ts = time.strftime("%H:%M")
         if role == "user":
-            self.add_user_message(text, source)
+            html = (
+                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
+                '<tr><td width="20%">&nbsp;</td>'
+                '<td align="right" bgcolor="#0d1e38">'
+                f'<span style="color:#8ab4ff;font-size:10px;font-weight:bold;">YOU</span>'
+                f'&nbsp;<span style="color:#3a5a7a;font-size:9px;">{ts}</span><br/>'
+                f'<span style="color:#ccdeff;font-size:13px;">{safe}</span>'
+                '</td></tr></table>'
+                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
+            )
         else:
-            self.add_assistant_message(text, source)
+            html = (
+                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
+                '<tr><td align="left" bgcolor="#061410">'
+                f'<span style="color:#5dffbf;font-size:10px;font-weight:bold;">FRIDAY</span>'
+                f'&nbsp;<span style="color:#2a4a3a;font-size:9px;">{ts}</span><br/>'
+                f'<span style="color:#b0f0cc;font-size:13px;">{safe}</span>'
+                '</td><td width="20%">&nbsp;</td></tr></table>'
+                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
+            )
+        self._insert_raw_html(html)
 
+    def _insert_raw_html(self, html: str):
+        cursor = QTextCursor(self.chat_display.document())
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(html)
+        sb = self.chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # kept for backward compat — internal callers replaced by _insert_bubble
     def add_user_message(self, text, source="gui"):
-        prefix = "👤" if source == "voice" else "❯"
-        self.chat_display.append(f"<span style='color:#a8a8a8;'>{prefix} </span><span style='color:#ffffff;'>{text}</span>")
+        self._insert_bubble("user", text)
 
     def add_assistant_message(self, text, source="friday"):
-        label = "FRIDAY" if source == "friday" else f"FRIDAY ({source.title()})"
-        self.chat_display.append(f"<span style='color:#00ffcc;'>{label} ❯ </span><span style='color:#e0e0e0;'>{text}</span><br>")
+        self._insert_bubble("assistant", text)
 
 
 def start_gui(app_core):

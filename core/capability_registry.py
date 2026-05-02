@@ -1,7 +1,18 @@
+"""Capability registry — MCP-compatible in-process tool store.
+
+Phase 1 addition: register_from_router_spec() is the explicit public entry
+point that future plugins will use directly, instead of going through
+CommandRouter.register_tool(). CommandRouter currently calls this after
+populating its own internal structures, keeping both systems in sync during
+the migration.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable
+
+from core.kernel.permissions import PermissionService
 
 
 Handler = Callable[[str, dict], Any]
@@ -85,6 +96,15 @@ class CapabilityRegistry:
         self._handlers[name] = handler
         return descriptor
 
+    def register_from_router_spec(self, tool_spec: dict, handler: Handler, metadata: dict | None = None) -> "CapabilityDescriptor":
+        """Named entry point for the plugin migration path.
+
+        Semantically identical to register_tool() but is the target signature
+        for Phase 4 plugin rewrites — plugins will call this on ExtensionContext
+        instead of going through CommandRouter.
+        """
+        return self.register_tool(tool_spec, handler, metadata=metadata)
+
     def get_descriptor(self, name: str) -> CapabilityDescriptor | None:
         return self._descriptors.get(name)
 
@@ -130,10 +150,8 @@ class CapabilityRegistry:
     def _infer_side_effect_level(self, tool_spec: dict, metadata: dict) -> str:
         if "side_effect_level" in metadata:
             return str(metadata["side_effect_level"])
-        name = str(tool_spec.get("name") or "").lower()
-        if any(token in name for token in ("open", "launch", "play", "set_", "manage", "write", "create", "delete", "shutdown")):
-            return "write"
-        return "read"
+        name = str(tool_spec.get("name") or "")
+        return PermissionService.infer_side_effect_level(name)
 
 
 class CapabilityExecutor:

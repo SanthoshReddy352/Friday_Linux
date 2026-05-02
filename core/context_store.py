@@ -13,6 +13,33 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Phase 1 (v2): workflow states older than this auto-expire. Prevents stale
+# `calendar_event_workflow` / `file_workflow` rows from surviving a FRIDAY
+# restart and resurrecting half-finished multi-turn flows.
+WORKFLOW_TTL_HOURS = 24
+
+
+def _parse_iso_utc(value):
+    if not value:
+        return None
+    try:
+        # SQLite stores the ISO string we wrote in _utc_now(); fromisoformat
+        # round-trips it, including the +00:00 offset.
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _is_workflow_expired(updated_at, ttl_hours=WORKFLOW_TTL_HOURS):
+    parsed = _parse_iso_utc(updated_at)
+    if parsed is None:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - parsed
+    return age.total_seconds() > ttl_hours * 3600
+
+
 def _project_root():
     return os.path.dirname(os.path.dirname(__file__))
 
@@ -121,7 +148,25 @@ class ContextStore:
             row = conn.execute(query, tuple(params)).fetchone()
         if not row:
             return None
+        # Phase 1 (v2): auto-expire stale workflows. A stale row is treated
+        # as no active workflow and is also marked completed in-place so it
+        # stops shadowing future queries.
+        if _is_workflow_expired(row[7]):
+            try:
+                self._mark_workflow_expired(session_id, row[0])
+            except Exception:
+                pass
+            return None
         return self._row_to_workflow(row)
+
+    def _mark_workflow_expired(self, session_id, workflow_name):
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE workflows SET status = 'expired', updated_at = ? "
+                "WHERE session_id = ? AND workflow_name = ?",
+                (_utc_now(), session_id, workflow_name),
+            )
+            conn.commit()
 
     def save_workflow_state(self, session_id, workflow_name, state):
         if not session_id or not workflow_name:
@@ -529,6 +574,61 @@ class ContextStore:
         state.setdefault("result_summary", result_summary or "")
         state.setdefault("updated_at", updated_at)
         return state
+
+    def prune_old_turns(self, session_id, older_than_days=30):
+        """Delete turns older than *older_than_days* days for *session_id*.
+
+        Phase 7: episodic rolling-window pruning.
+        Returns number of rows deleted.
+        """
+        import datetime as _dt
+        cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=older_than_days)).isoformat()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM turns WHERE session_id = ? AND created_at < ?",
+                (session_id, cutoff),
+            )
+            conn.commit()
+        return cur.rowcount
+
+    def delete_memory_item(self, item_id):
+        """Remove a memory item by its item_id.
+
+        Phase 7: used by SemanticMemory.forget() and prune().
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM memory_items WHERE item_id = ?", (item_id,))
+            conn.commit()
+
+    def prune_low_confidence_memories(self, session_id, min_confidence=0.5):
+        """Remove semantic memory items whose confidence < *min_confidence*.
+
+        Phase 7: floor-pruning for semantic memory store.
+        Returns number of rows deleted.
+        """
+        items = self.recent_memory_items(session_id, limit=500) or []
+        removed = 0
+        for item in items:
+            if item.get("memory_type") != "semantic":
+                continue
+            meta = item.get("metadata") or {}
+            conf = float(meta.get("confidence", 1.0))
+            if conf < min_confidence:
+                self.delete_memory_item(item["item_id"])
+                removed += 1
+        return removed
+
+    def get_facts_by_namespace(self, namespace="general"):
+        """Return all facts in *namespace* as list of {key, value} dicts.
+
+        Phase 7: used by ProceduralMemory to reload persisted success rates.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM facts WHERE namespace = ? ORDER BY updated_at DESC",
+                (namespace,),
+            ).fetchall()
+        return [{"key": k, "value": v} for k, v in rows]
 
     def _fallback_semantic_recall(self, query, session_id, limit=3):
         query_tokens = Counter(_tokenize(query))

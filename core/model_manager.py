@@ -52,6 +52,15 @@ class LocalModelManager:
             "chat": threading.Lock(),
             "tool": threading.Lock(),
         }
+        # Per-domain inference locks. llama.cpp instances are NOT thread-safe;
+        # any caller that runs `create_chat_completion` against a model must
+        # hold the matching domain lock for the duration of the call. Lives
+        # here (not on CommandRouter) so research / chat / tool callers can
+        # share the same lock without depending on the router.
+        self._inference_locks = {
+            "chat": threading.RLock(),
+            "tool": threading.RLock(),
+        }
         self._profiles = {}
         self.refresh_from_config(config)
 
@@ -82,6 +91,10 @@ class LocalModelManager:
 
     def profile(self, role):
         return self._profiles[role]
+
+    def inference_lock(self, role):
+        """Return the inference lock for a model domain ("chat" or "tool")."""
+        return self._inference_locks[role]
 
     def get_chat_model(self):
         return self.get_model("chat")

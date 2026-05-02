@@ -1,23 +1,82 @@
+"""Browser media automation service.
+
+Playwright's sync API is thread-affine: every call must come from the thread
+that started the Playwright loop. Voice commands are dispatched from the
+TaskRunner, which spawns a fresh daemon thread per turn — so before this
+refactor, the second voice command would crash with
+``cannot switch to a different thread (which happens to have exited)``.
+
+To fix that and make media controls feel instant, all Playwright work runs on
+a single dedicated daemon thread (``BrowserMediaService._worker``). Public
+methods enqueue jobs and block on a Future for the result. The same worker
+also services the fast-path media-control invocations from STT, so
+"Friday pause" reaches Playwright in milliseconds without going through the
+router/LLM.
+"""
+from __future__ import annotations
+
 import json
 import os
-import platform
+import platform as _platform
+import queue
 import shutil
 import subprocess
+import threading
 import time
+from concurrent.futures import Future
+from dataclasses import dataclass
+from typing import Callable
 from urllib.parse import quote_plus, urljoin
 
 from core.logger import logger
 
 
+# Init script injected into every page so backgrounded tabs do NOT auto-pause
+# when the user switches focus to a different platform tab. Without this,
+# YouTube pauses video playback when its tab is hidden, which is exactly what
+# the user complained about when starting YouTube Music while a YouTube video
+# was playing.
+_KEEP_PLAYING_SCRIPT = """
+(() => {
+    try {
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.addEventListener('visibilitychange', (event) => event.stopImmediatePropagation(), true);
+    } catch (_) {}
+    try {
+        const origAdd = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+            if (type === 'visibilitychange' || type === 'webkitvisibilitychange') return;
+            return origAdd.call(this, type, listener, options);
+        };
+    } catch (_) {}
+})();
+"""
+
+
+@dataclass
+class _Job:
+    fn: Callable
+    args: tuple
+    kwargs: dict
+    future: Future
+
+
 class BrowserMediaService:
+    # Command timeout (seconds). Long enough for first-time browser launch
+    # (Playwright + Chromium can take 8-15s on a cold cache) but short enough
+    # that a hung worker doesn't lock the conversation.
+    DEFAULT_TIMEOUT_S = 60.0
+    FAST_TIMEOUT_S = 8.0
+
     def __init__(self, app):
         self.app = app
         self.profile_dir = ""
         self._playwright = None
         self._context = None
-        self._pages = {}
-        self._current_platform = None
-        self._current_browser_name = None
+        self._pages: dict[str, object] = {}
+        self._current_platform: str | None = None
+        self._current_browser_name: str | None = None
         self._fallback_profile_root = os.path.join(
             os.path.expanduser("~"),
             ".cache",
@@ -25,7 +84,107 @@ class BrowserMediaService:
             "browser-profile",
         )
 
+        self._jobs: "queue.Queue[_Job | None]" = queue.Queue()
+        self._worker_thread = threading.Thread(
+            target=self._worker_loop,
+            name="friday-browser",
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    # ------------------------------------------------------------------
+    # Public API — every method below dispatches to the worker thread.
+    # ------------------------------------------------------------------
+
     def open_browser_url(self, url, browser_name="chrome", platform="browser"):
+        return self._submit(self._do_open_browser_url, url, browser_name, platform)
+
+    def play_youtube(self, query, browser_name="chrome"):
+        return self._submit(self._do_play_youtube, query, browser_name)
+
+    def play_youtube_music(self, query, browser_name="chrome"):
+        return self._submit(self._do_play_youtube_music, query, browser_name)
+
+    def browser_media_control(self, action, platform=None, query="", seconds=0):
+        return self._submit(self._do_browser_media_control, action, platform, query, seconds)
+
+    def search_google(self, query, browser_name="chrome"):
+        return self._submit(self._do_search_google, query, browser_name)
+
+    def fast_media_command(self, action):
+        """Hot path used by STT for instant pause/resume/next/previous etc.
+
+        Returns a short status string. Does NOT raise — failures are logged
+        and an empty string is returned so the voice pipeline can stay quiet.
+        """
+        try:
+            return self._submit(
+                self._do_browser_media_control,
+                action,
+                None,
+                "",
+                0,
+                timeout=self.FAST_TIMEOUT_S,
+            )
+        except Exception as exc:
+            logger.warning("[browser] fast_media_command(%s) failed: %s", action, exc)
+            return ""
+
+    def scroll_page(self, platform="browser", pixels=420):
+        return self._submit(self._do_scroll_page, platform, pixels)
+
+    def scroll_to_top(self, platform="browser"):
+        return self._submit(self._do_scroll_to_top, platform)
+
+    def extract_visible_sections(self, platform="browser", min_chars=90, max_chars=900, max_sections=3):
+        return self._submit(
+            self._do_extract_visible_sections,
+            platform,
+            min_chars,
+            max_chars,
+            max_sections,
+        )
+
+    def shutdown(self):
+        """Stop the worker thread and tear down Playwright cleanly."""
+        try:
+            self._submit(self._cleanup_playwright, timeout=5.0)
+        except Exception:
+            pass
+        self._jobs.put(None)
+
+    # ------------------------------------------------------------------
+    # Worker plumbing
+    # ------------------------------------------------------------------
+
+    def _submit(self, fn, *args, timeout: float | None = None, **kwargs):
+        """Submit a job and block on the result.
+
+        If we're already on the worker thread (happens when one operation
+        calls another via the public API), run inline to avoid deadlock.
+        """
+        if threading.current_thread() is self._worker_thread:
+            return fn(*args, **kwargs)
+        future: Future = Future()
+        self._jobs.put(_Job(fn=fn, args=args, kwargs=kwargs, future=future))
+        return future.result(timeout=timeout if timeout is not None else self.DEFAULT_TIMEOUT_S)
+
+    def _worker_loop(self):
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                break
+            try:
+                result = job.fn(*job.args, **job.kwargs)
+                job.future.set_result(result)
+            except Exception as exc:
+                job.future.set_exception(exc)
+
+    # ------------------------------------------------------------------
+    # Worker-side implementations (run on the worker thread only)
+    # ------------------------------------------------------------------
+
+    def _do_open_browser_url(self, url, browser_name, platform):
         page = self._get_page(browser_name=browser_name, platform=platform, url=url)
         if isinstance(page, str):
             return self._open_url_fallback(url, browser_name=browser_name, platform=platform, reason=page)
@@ -42,7 +201,135 @@ class BrowserMediaService:
                 reason=f"Failed to open {platform.replace('_', ' ')} in {browser_name}: {exc}",
             )
 
-    def scroll_page(self, platform="browser", pixels=420):
+    def _do_play_youtube(self, query, browser_name):
+        return self._play_video(
+            query=query,
+            browser_name=browser_name,
+            platform="youtube",
+            home_url="https://www.youtube.com",
+            search_url=f"https://www.youtube.com/results?search_query={quote_plus(query)}",
+            first_result_selector="ytd-video-renderer a#video-title",
+        )
+
+    def _do_play_youtube_music(self, query, browser_name):
+        # If a YouTube video is already playing, force it to keep playing
+        # *after* we navigate the new YouTube Music tab — browsers tend to
+        # pause backgrounded video on focus change. We resume it post-launch.
+        was_playing_youtube = self._page_is_playing("youtube")
+
+        result = self._play_video(
+            query=query,
+            browser_name=browser_name,
+            platform="youtube_music",
+            home_url="https://music.youtube.com",
+            search_url=f"https://music.youtube.com/search?q={quote_plus(query)}",
+            first_result_selector="ytmusic-responsive-list-item-renderer a[href*='watch']",
+        )
+
+        if was_playing_youtube:
+            self._resume_play("youtube")
+        return result
+
+    def _do_browser_media_control(self, action, platform, query, seconds=0):
+        platform = platform or self._current_platform or "youtube"
+        page = self._pages.get(platform)
+        if page is None:
+            if action in ("play", "resume") and query:
+                if platform == "youtube_music":
+                    return self._do_play_youtube_music(query, "chrome")
+                return self._do_play_youtube(query, "chrome")
+            return "I don't have an active browser media session yet."
+
+        try:
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+
+            if action in ("pause", "resume", "play"):
+                ok = self._set_media_state(page, "pause" if action == "pause" else "play")
+                if not ok:
+                    # Fallback to keyboard shortcut (YouTube uses "k", YouTube Music uses Space).
+                    self._focus_player(page, platform)
+                    page.keyboard.press(" " if platform == "youtube_music" else "k")
+                verb = "Paused" if action == "pause" else "Resumed"
+                return f"{verb} {platform.replace('_', ' ')}."
+            if action == "next":
+                if not self._click_player_button(page, platform, "next"):
+                    self._focus_player(page, platform)
+                    page.keyboard.press("Shift+N")
+                return f"Skipped to next on {platform.replace('_', ' ')}."
+            if action == "previous":
+                # YouTube Music's previous button restarts the current track
+                # when playback is past a few seconds. Reset currentTime first
+                # so a single press always moves to the previous song.
+                if platform == "youtube_music":
+                    self._seek_absolute(page, 0)
+                if not self._click_player_button(page, platform, "previous"):
+                    self._focus_player(page, platform)
+                    page.keyboard.press("Shift+P")
+                return f"Previous track on {platform.replace('_', ' ')}."
+            if action in ("seek_forward", "seek_backward"):
+                delta = int(seconds or 10)
+                if action == "seek_backward":
+                    delta = -delta
+                self._seek_relative(page, delta)
+                if delta >= 0:
+                    return f"Skipped forward {abs(delta)} seconds on {platform.replace('_', ' ')}."
+                return f"Skipped back {abs(delta)} seconds on {platform.replace('_', ' ')}."
+            if action == "forward":
+                self._seek_relative(page, int(seconds) if seconds else 10)
+                return f"Skipped forward {int(seconds) if seconds else 10} seconds on {platform.replace('_', ' ')}."
+            if action == "backward":
+                self._seek_relative(page, -(int(seconds) if seconds else 10))
+                return f"Skipped back {int(seconds) if seconds else 10} seconds on {platform.replace('_', ' ')}."
+            if action == "mute":
+                page.keyboard.press("m")
+                return f"Toggled mute on {platform.replace('_', ' ')}."
+            return f"I don't know how to '{action}' in the browser yet."
+        except Exception as exc:
+            logger.error("Browser media control failed: %s", exc)
+            if self._is_closed_target_error(exc):
+                self._pages.pop(platform, None)
+                if action in ("play", "resume") and query:
+                    if platform == "youtube_music":
+                        return self._do_play_youtube_music(query, "chrome")
+                    return self._do_play_youtube(query, "chrome")
+                return "The browser tab is no longer open. Ask me to open it again first."
+            return "I couldn't reach the browser playback. Try opening the page again."
+
+    def _do_search_google(self, query, browser_name):
+        query = (query or "").strip()
+        if not query:
+            return "What should I search for, sir?"
+        url = f"https://www.google.com/search?q={quote_plus(query)}"
+        page = self._get_page(browser_name=browser_name, platform="google_search", url=url)
+        if isinstance(page, str):
+            return self._open_url_fallback(
+                url,
+                browser_name=browser_name,
+                platform="google_search",
+                reason=page,
+                action_label=f"Searching Google for {query}",
+            )
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+            return f"Searching Google for {query}."
+        except Exception as exc:
+            logger.error("Google search failed: %s", exc)
+            return self._open_url_fallback(
+                url,
+                browser_name=browser_name,
+                platform="google_search",
+                reason=f"Failed to search Google: {exc}",
+                action_label=f"Searching Google for {query}",
+            )
+
+    def _do_scroll_page(self, platform, pixels):
         page = self._pages.get(platform)
         if page is None:
             return f"I don't have an active {platform.replace('_', ' ')} browser page yet."
@@ -79,7 +366,7 @@ class BrowserMediaService:
             page.evaluate("(amount) => window.scrollBy({ top: amount, left: 0, behavior: 'smooth' })", int(pixels))
         return f"Scrolled {platform.replace('_', ' ')}."
 
-    def scroll_to_top(self, platform="browser"):
+    def _do_scroll_to_top(self, platform):
         page = self._pages.get(platform)
         if page is None:
             return f"I don't have an active {platform.replace('_', ' ')} browser page yet."
@@ -101,7 +388,7 @@ class BrowserMediaService:
         )
         return f"Reset {platform.replace('_', ' ')} scroll."
 
-    def extract_visible_sections(self, platform="browser", min_chars=90, max_chars=900, max_sections=3):
+    def _do_extract_visible_sections(self, platform, min_chars, max_chars, max_sections):
         page = self._pages.get(platform)
         if page is None:
             return []
@@ -134,17 +421,10 @@ class BrowserMediaService:
                         "main p",
                         "main li",
                         "main div",
-                        "#root p",
-                        "#root li",
-                        "#root div",
                         "[role='article']",
                         "[data-testid*='summary' i]",
                         "[class*='summary' i]",
-                        "[class*='brief' i]",
-                        "[class*='insight' i]",
                         "[class*='content' i]",
-                        "[class*='text' i]",
-                        "[class*='body' i]",
                         "[class*='card' i]"
                     ].join(",");
                     const candidates = Array.from(document.querySelectorAll(selector));
@@ -162,7 +442,6 @@ class BrowserMediaService:
                             .map((child) => normalize(child.innerText || child.textContent || ""))
                             .filter((childText) => childText.length >= minChars);
                         if (childTexts.some((childText) => childText.length > text.length * 0.72)) continue;
-                        if (/^(home|login|menu|navigation|worldmonitor)$/i.test(text)) continue;
                         if (text.length > maxChars) text = `${text.slice(0, maxChars).trim()}...`;
                         const key = text.toLowerCase();
                         if (seen.has(key)) continue;
@@ -170,53 +449,7 @@ class BrowserMediaService:
                         rows.push({ top: rect.top, text });
                     }
                     rows.sort((a, b) => a.top - b.top);
-                    const rowTexts = rows.slice(0, maxSections).map((row) => row.text);
-                    if (rowTexts.length) return rowTexts;
-
-                    const noisyTokens = new Set([
-                        "?", "✕", "⚙", "↻", "▾", "▼", "all", "live", "loading...", "sign in",
-                        "create account", "search", "link", "layers", "legend", "2d", "3d",
-                        "global", "americas", "mena", "europe", "asia", "latin america",
-                        "africa", "oceania", "scanning theaters", "aircraft positions",
-                        "naval vessels", "theater analysis", "connecting to live ads-b & ais streams..."
-                    ]);
-                    const bodyLines = String(document.body?.innerText || "")
-                        .split("\\n")
-                        .map((line) => normalize(line))
-                        .filter(Boolean);
-                    const startLabels = ["AI FORECASTS", "ACTIVE THEATERS", "AI INSIGHTS", "LIVE NEWS"];
-                    let startIndex = -1;
-                    for (const label of startLabels) {
-                        startIndex = bodyLines.findIndex((line) => line.toUpperCase() === label);
-                        if (startIndex >= 0) break;
-                    }
-                    if (startIndex < 0) startIndex = 0;
-                    const chunks = [];
-                    let chunk = "";
-                    for (const line of bodyLines.slice(startIndex)) {
-                        const lowered = line.toLowerCase();
-                        if (noisyTokens.has(lowered)) continue;
-                        if (lowered.startsWith("elapsed:")) continue;
-                        if (lowered.includes("initial load takes")) continue;
-                        if (/^[+\\-⌂⛶]$/.test(line)) continue;
-                        if (/^\\d+$/.test(line)) continue;
-                        if (/^\\d{1,3}%$/.test(line)) continue;
-                        if (/^[\\p{Emoji_Presentation}\\p{Extended_Pictographic}\\s]+$/u.test(line)) continue;
-                        const next = chunk ? `${chunk}. ${line}` : line;
-                        if (next.length > maxChars) {
-                            if (chunk.length >= minChars) chunks.push(chunk);
-                            chunk = line;
-                        } else {
-                            chunk = next;
-                        }
-                        if (chunk.length >= Math.min(maxChars, 520)) {
-                            chunks.push(chunk);
-                            chunk = "";
-                        }
-                        if (chunks.length >= maxSections) break;
-                    }
-                    if (chunk.length >= minChars && chunks.length < maxSections) chunks.push(chunk);
-                    return chunks.slice(0, maxSections);
+                    return rows.slice(0, maxSections).map((row) => row.text);
                 }
                 """,
                 {
@@ -232,67 +465,9 @@ class BrowserMediaService:
             return []
         return [str(section).strip() for section in sections if str(section).strip()]
 
-    def play_youtube(self, query, browser_name="chrome"):
-        return self._play_video(
-            query=query,
-            browser_name=browser_name,
-            platform="youtube",
-            home_url="https://www.youtube.com",
-            search_url=f"https://www.youtube.com/results?search_query={quote_plus(query)}",
-            first_result_selector="ytd-video-renderer a#video-title",
-        )
-
-    def play_youtube_music(self, query, browser_name="chrome"):
-        return self._play_video(
-            query=query,
-            browser_name=browser_name,
-            platform="youtube_music",
-            home_url="https://music.youtube.com",
-            search_url=f"https://music.youtube.com/search?q={quote_plus(query)}",
-            first_result_selector="ytmusic-responsive-list-item-renderer a[href*='watch']",
-        )
-
-    def browser_media_control(self, action, platform=None, query=""):
-        platform = platform or self._current_platform or "youtube"
-        page = self._pages.get(platform)
-        if page is None:
-            if action == "play" and query:
-                if platform == "youtube_music":
-                    return self.play_youtube_music(query)
-                return self.play_youtube(query)
-            return "I don't have an active browser media session yet."
-
-        try:
-            page.bring_to_front()
-            # Click the body or some safe area to ensure the player window is focused for shortcuts
-            try:
-                page.mouse.click(10, 10)
-            except:
-                pass
-
-            if action in ("pause", "resume"):
-                page.keyboard.press("k")
-                return f"{action.capitalize()}d {platform.replace('_', ' ')}."
-            if action == "next":
-                page.keyboard.press("Shift+N")
-                return f"Skipped to next item on {platform.replace('_', ' ')}."
-            if action == "previous":
-                page.go_back()
-                return f"Went back on {platform.replace('_', ' ')}."
-            if action == "forward":
-                page.keyboard.press("l")
-                return f"Skipped forward on {platform.replace('_', ' ')}."
-            if action == "backward":
-                page.keyboard.press("j")
-                return f"Reverted back on {platform.replace('_', ' ')}."
-            if action == "play" and query:
-                if platform == "youtube_music":
-                    return self.play_youtube_music(query)
-                return self.play_youtube(query)
-            return f"I don't know how to '{action}' in the browser yet."
-        except Exception as exc:
-            logger.error("Browser media control failed: %s", exc)
-            return f"Failed to control browser playback: {exc}"
+    # ------------------------------------------------------------------
+    # Internal helpers (worker thread only)
+    # ------------------------------------------------------------------
 
     def _play_video(self, query, browser_name, platform, home_url, search_url, first_result_selector):
         page = self._get_page(browser_name=browser_name, platform=platform, url=home_url)
@@ -332,6 +507,150 @@ class BrowserMediaService:
                 action_label=f"Opening search results for {query} on {platform.replace('_', ' ')}",
             )
 
+    def _page_is_playing(self, platform):
+        page = self._pages.get(platform)
+        if page is None:
+            return False
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    () => {
+                        const media = document.querySelector("video, audio");
+                        if (!media) return false;
+                        return !media.paused && !media.ended && media.readyState >= 2;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _set_media_state(self, page, target):
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    (target) => {
+                        const media = document.querySelector("video, audio");
+                        if (!media) return false;
+                        if (target === 'pause') {
+                            if (!media.paused) media.pause();
+                            return true;
+                        }
+                        if (media.paused) media.play().catch(() => {});
+                        return true;
+                    }
+                    """,
+                    target,
+                )
+            )
+        except Exception as exc:
+            logger.warning("Browser media state %s failed: %s", target, exc)
+            return False
+
+    def _click_player_button(self, page, platform, action):
+        if platform == "youtube_music":
+            selectors = (
+                ".next-button" if action == "next" else ".previous-button",
+                f"ytmusic-player-bar tp-yt-paper-icon-button[aria-label*='{ 'Next' if action == 'next' else 'Previous'}' i]",
+                f"ytmusic-player-bar button[aria-label*='{ 'Next' if action == 'next' else 'Previous'}' i]",
+                f"button[aria-label*='{ 'Next' if action == 'next' else 'Previous'}' i]",
+            )
+        else:
+            selectors = (
+                ".ytp-next-button" if action == "next" else ".ytp-prev-button",
+                f"button[aria-label*='{ 'Next' if action == 'next' else 'Previous'}' i]",
+            )
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    (selectors) => {
+                        for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (el && !el.disabled) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    """,
+                    list(selectors),
+                )
+            )
+        except Exception as exc:
+            logger.warning("Click %s button failed on %s: %s", action, platform, exc)
+            return False
+
+    def _focus_player(self, page, platform):
+        try:
+            selector = (
+                "ytmusic-player-bar"
+                if platform == "youtube_music"
+                else ".html5-video-player"
+            )
+            page.evaluate(
+                """
+                (selector) => {
+                    const el = document.querySelector(selector);
+                    if (el && typeof el.focus === 'function') el.focus({preventScroll: true});
+                }
+                """,
+                selector,
+            )
+        except Exception:
+            pass
+
+    def _seek_absolute(self, page, seconds):
+        try:
+            page.evaluate(
+                """
+                (target) => {
+                    const media = document.querySelector("video, audio");
+                    if (!media) return;
+                    media.currentTime = Math.max(0, target);
+                }
+                """,
+                int(seconds),
+            )
+        except Exception:
+            pass
+
+    def _seek_relative(self, page, delta_seconds):
+        try:
+            page.evaluate(
+                """
+                (delta) => {
+                    const media = document.querySelector("video, audio");
+                    if (!media) return;
+                    const current = media.currentTime || 0;
+                    const target = Math.max(0, Math.min((media.duration || current + delta), current + delta));
+                    media.currentTime = target;
+                }
+                """,
+                int(delta_seconds),
+            )
+        except Exception as exc:
+            logger.warning("Browser seek by %ss failed: %s", delta_seconds, exc)
+
+    def _resume_play(self, platform):
+        page = self._pages.get(platform)
+        if page is None:
+            return
+        try:
+            page.evaluate(
+                """
+                () => {
+                    const media = document.querySelector("video, audio");
+                    if (media && media.paused) media.play().catch(() => {});
+                }
+                """
+            )
+        except Exception:
+            pass
+
     def _get_page(self, browser_name, platform, url):
         page = self._pages.get(platform)
         try:
@@ -348,6 +667,10 @@ class BrowserMediaService:
                 return context
             try:
                 page = context.new_page()
+                try:
+                    page.add_init_script(_KEEP_PLAYING_SCRIPT)
+                except Exception:
+                    pass
                 self._pages[platform] = page
                 return page
             except Exception as exc:
@@ -515,7 +838,6 @@ class BrowserMediaService:
             return False
 
     def _resolve_profile_settings(self, browser_name):
-        config = getattr(self.app, "config", None)
         use_system_profile = self._config_get(
             "browser_automation.use_system_profile",
             browser_name in {"chrome", "chromium"},
@@ -552,7 +874,6 @@ class BrowserMediaService:
         profile_settings = self._resolve_profile_settings(browser_name)
         if profile_settings.get("mode") != "system":
             return profile_settings
-
         try:
             return self._clone_profile_settings(profile_settings, browser_name)
         except Exception as exc:
@@ -690,8 +1011,12 @@ class BrowserMediaService:
         }
 
     def _default_launch_args(self):
-        args = ["--start-maximized"]
-        if platform.system() == "Linux":
+        args = [
+            "--start-maximized",
+            "--autoplay-policy=no-user-gesture-required",
+            "--disable-features=AutoplayIgnoreWebAudio,MediaSessionService",
+        ]
+        if _platform.system() == "Linux":
             args.extend(["--disable-vulkan", "--ozone-platform=x11"])
         return args
 
@@ -732,8 +1057,6 @@ class BrowserMediaService:
             self._focus_browser_window(platform_name, fullscreen=False)
 
     def _start_media_playback(self, page):
-        # Force playback via JavaScript instead of toggling keys.
-        # This ensures the video starts if paused, but does nothing if already playing.
         try:
             page.evaluate(
                 """
@@ -747,22 +1070,6 @@ class BrowserMediaService:
             )
         except Exception:
             pass
-
-    def _media_paused(self, page):
-        try:
-            return page.evaluate(
-                """
-                () => {
-                    const media = document.querySelector("video, audio");
-                    if (!media) return null;
-                    // If the video is still in a pending/loading state, don't assume it's paused
-                    if (media.readyState < 2) return false; 
-                    return media.paused;
-                }
-                """
-            )
-        except Exception:
-            return None
 
     def _enter_fullscreen(self, page):
         for _ in range(3):
@@ -781,27 +1088,15 @@ class BrowserMediaService:
     def _exit_fullscreen(self, page):
         try:
             is_fullscreen = bool(
-                page.evaluate(
-                    """
-                    () => !!document.fullscreenElement
-                    """
-                )
+                page.evaluate("() => !!document.fullscreenElement")
             )
         except Exception:
             is_fullscreen = False
-
         if not is_fullscreen:
             return
-
         try:
             page.evaluate(
-                """
-                async () => {
-                    if (document.fullscreenElement) {
-                        await document.exitFullscreen();
-                    }
-                }
-                """
+                "async () => { if (document.fullscreenElement) { await document.exitFullscreen(); } }"
             )
             page.wait_for_timeout(400)
         except Exception:
@@ -827,18 +1122,12 @@ class BrowserMediaService:
             return False
 
     def _click_youtube_fullscreen_button(self, page):
-        # Hovering the player is usually enough to reveal the controls.
-        # We avoid clicking the 'video' element directly because that toggles play/pause on YouTube.
         try:
             page.locator(".html5-video-player").first.hover(timeout=2000)
             page.wait_for_timeout(400)
         except Exception:
             pass
-        selectors = (
-            "button.ytp-fullscreen-button",
-            ".ytp-fullscreen-button",
-        )
-        for selector in selectors:
+        for selector in ("button.ytp-fullscreen-button", ".ytp-fullscreen-button"):
             try:
                 locator = page.locator(selector).first
                 locator.wait_for(state="attached", timeout=2500)
@@ -849,7 +1138,7 @@ class BrowserMediaService:
         return False
 
     def _focus_browser_window(self, platform_name, fullscreen=False):
-        if platform.system() != "Linux":
+        if _platform.system() != "Linux":
             return
         if not shutil.which("wmctrl"):
             return

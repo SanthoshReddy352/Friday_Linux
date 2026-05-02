@@ -32,7 +32,7 @@ class AssistantContext:
     then appends live turn context.
     """
 
-    def __init__(self, max_messages=16):
+    def __init__(self, max_messages=32):
         self.history = deque(maxlen=max_messages)
         self.last_user_tone = "neutral"
         self.last_tool_name = None
@@ -157,34 +157,36 @@ class AssistantContext:
         )
 
     def build_chat_messages(self, query, dialog_state=None):
+        is_short = len((query or "").split()) <= 6
         session_summary = ""
         workflow_summary = ""
         semantic_recall = []
         if self.context_store and self.session_id:
-            session_summary = self.context_store.summarize_session(self.session_id, limit=6)
             workflow_summary = self.context_store.get_workflow_summary(self.session_id)
-            semantic_recall = self.context_store.semantic_recall(query, self.session_id, limit=3)
+            if not is_short:
+                session_summary = self.context_store.summarize_session(self.session_id, limit=4)
+                semantic_recall = self.context_store.semantic_recall(query, self.session_id, limit=2)
 
         persona = (
-            "You are FRIDAY, a local desktop assistant inspired by the smooth helpfulness of a great human operator. "
-            "You run offline using Whisper for voice input and Gemma for reasoning. "
-            "Be concise, warm, and capable. Avoid sounding robotic or overly formal. "
-            "If the user sounds frustrated, stay calm and reassuring. "
-            "If the request is ambiguous, ask only one short clarifying question."
+            "You are FRIDAY, a personal AI assistant. "
+            "You are intelligent, warm, and speak like a real person — not a formal assistant. "
+            "Match the user's energy and give responses as long as the topic deserves. "
+            "No preamble, no chain-of-thought, no emoji unless the user uses one first."
         )
-        state_snapshot = json.dumps(self._dialog_state_snapshot(dialog_state), ensure_ascii=True)
-        guidance = (
-            f"{persona}\n"
-            f"Current assistant context: {state_snapshot}\n"
-            f"User tone: {self.detect_user_tone(query)}\n"
-            f"Active workflow: {workflow_summary or 'none'}\n"
-            f"Session summary: {session_summary or 'none'}\n"
-            f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
-        )
+        if is_short:
+            guidance = persona
+        else:
+            guidance = (
+                f"{persona}\n"
+                f"Active workflow: {workflow_summary or 'none'}\n"
+                f"Session summary: {session_summary or 'none'}\n"
+                f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
+            )
 
+        recent_limit = 6 if is_short else 12
         recent = [
             {"role": item.get("role"), "content": item.get("text", "")}
-            for item in list(self.history)[-8:]
+            for item in list(self.history)[-recent_limit:]
         ]
         alternating = self._coerce_alternating_history(recent)
 

@@ -176,7 +176,9 @@ def format_search_results(matches, filename):
 
     result = [f"SUCCESS: Found {len(matches)} matching file(s):"]
     for match in matches:
-        result.append(f"- {match}")
+        basename = os.path.basename(match)
+        parent = os.path.basename(os.path.dirname(match)) or "/"
+        result.append(f"- {basename} (in {parent})")
     return "\n".join(result)
 
 

@@ -27,6 +27,11 @@ class BaseWorkflow:
         self.app = app
         self._compiled_graph = None
 
+    def _memory(self):
+        """Return MemoryService when wired (production); fall back to the
+        raw ContextStore for tests that mount workflows on partial apps."""
+        return getattr(self.app, "memory_service", None) or self.app.context_store
+
     def should_start(self, user_text, context=None):
         return False
 
@@ -73,7 +78,7 @@ class FileWorkflow(BaseWorkflow):
     def _handle(self, state):
         user_text = state["user_text"]
         session_id = state["session_id"]
-        workflow_state = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        workflow_state = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
         controller = getattr(self.app, "file_controller", None)
         if controller is None:
             state["result"] = WorkflowResult(
@@ -107,7 +112,7 @@ class FileWorkflow(BaseWorkflow):
                 handled=True,
                 workflow_name=self.name,
                 response=response,
-                state=self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {},
+                state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or {},
             )
             return state
 
@@ -138,7 +143,7 @@ class FileWorkflow(BaseWorkflow):
                 handled=True,
                 workflow_name=self.name,
                 response=response,
-                state=self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {},
+                state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or {},
             )
             return state
 
@@ -156,7 +161,7 @@ class FileWorkflow(BaseWorkflow):
                 handled=True,
                 workflow_name=self.name,
                 response=response,
-                state=self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or workflow_state,
+                state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or workflow_state,
             )
             return state
 
@@ -202,7 +207,7 @@ class BrowserMediaWorkflow(BaseWorkflow):
         user_text = state["user_text"]
         session_id = state["session_id"]
         context = dict(state.get("context") or {})
-        workflow_state = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        workflow_state = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
         intent = self._parse_intent(user_text, workflow_state, context)
         if not intent:
             state["result"] = WorkflowResult(handled=False, workflow_name=self.name, state=workflow_state)
@@ -231,6 +236,9 @@ class BrowserMediaWorkflow(BaseWorkflow):
                 response = service.play_youtube_music(query, browser_name=browser_name)
             else:
                 response = service.play_youtube(query, browser_name=browser_name)
+        elif action in ("seek_forward", "seek_backward"):
+            seconds = int(intent.get("seconds") or 10)
+            response = service.browser_media_control(action, platform=platform, query=query, seconds=seconds)
         else:
             response = service.browser_media_control(action, platform=platform, query=query)
 
@@ -244,7 +252,7 @@ class BrowserMediaWorkflow(BaseWorkflow):
             "platform": platform,
             "query": query,
         }
-        self.app.context_store.save_workflow_state(session_id, self.name, updated_state)
+        self._memory().save_workflow_state(session_id, self.name, updated_state)
         state["result"] = WorkflowResult(
             handled=True,
             workflow_name=self.name,
@@ -278,7 +286,7 @@ class BrowserMediaWorkflow(BaseWorkflow):
                 "query": workflow_state.get("query", ""),
             }
 
-        play_music = re.search(r"\bplay\s+(.+?)\s+in\s+youtube music\b", lower_text)
+        play_music = re.search(r"\bplay\s+(.+?)\s+(?:in|on)\s+youtube music\b", lower_text)
         if play_music:
             return {
                 "action": "play",
@@ -287,7 +295,7 @@ class BrowserMediaWorkflow(BaseWorkflow):
                 "query": play_music.group(1).strip(),
             }
 
-        play_video = re.search(r"\bplay\s+(.+?)\s+in\s+youtube\b", lower_text)
+        play_video = re.search(r"\bplay\s+(.+?)\s+(?:in|on)\s+youtube\b", lower_text)
         if play_video:
             return {
                 "action": "play",
@@ -301,6 +309,46 @@ class BrowserMediaWorkflow(BaseWorkflow):
         if re.search(r"\bopen\s+youtube\b", lower_text):
             return {"action": "open", "platform": "youtube", "browser_name": browser_name}
 
+        # "play <subject>" without a matching "in/on youtube" suffix is a fresh
+        # search — do NOT collapse it to a media-control resume. Bail out so
+        # the planner can route it to play_youtube/play_youtube_music with the
+        # extracted subject.
+        if re.match(r"^play\s+\S+", lower_text):
+            return None
+
+        # Seek-with-seconds: "skip 30 seconds forward", "forward 10 seconds",
+        # "go back 15 seconds", etc. Direction defaults to forward unless a
+        # backward keyword is present.
+        seek_seconds = self._extract_seek_seconds(lower_text)
+        if seek_seconds is not None:
+            backward_words = ("back", "backward", "backwards", "rewind", "behind", "previous")
+            direction = "seek_backward" if any(w in lower_text for w in backward_words) else "seek_forward"
+            return {
+                "action": direction,
+                "platform": workflow_state.get("platform") or "youtube",
+                "browser_name": browser_name,
+                "query": workflow_state.get("query", ""),
+                "seconds": seek_seconds,
+            }
+
+        # Order matters: a phrase that mentions "forward" or "backward" alongside
+        # "skip" should be treated as a seek, not "next". So check directions
+        # before the generic skip→next mapping.
+        if re.search(r"\b(forward|ahead)\b", lower_text):
+            return {
+                "action": "forward",
+                "platform": workflow_state.get("platform") or "youtube",
+                "browser_name": browser_name,
+                "query": workflow_state.get("query", ""),
+            }
+        if re.search(r"\b(backward|backwards|rewind|go back)\b", lower_text):
+            return {
+                "action": "backward",
+                "platform": workflow_state.get("platform") or "youtube",
+                "browser_name": browser_name,
+                "query": workflow_state.get("query", ""),
+            }
+
         media_map = {
             "pause": "pause",
             "resume": "resume",
@@ -308,10 +356,7 @@ class BrowserMediaWorkflow(BaseWorkflow):
             "next": "next",
             "skip": "next",
             "previous": "previous",
-            "forward": "forward",
-            "backward": "backward",
             "revert": "backward",
-            "rewind": "backward",
         }
         for keyword, cmd in media_map.items():
             if keyword in lower_text:
@@ -339,6 +384,23 @@ class BrowserMediaWorkflow(BaseWorkflow):
             }
 
         return None
+
+    def _extract_seek_seconds(self, lower_text):
+        match = re.search(
+            r"(\d+)\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)\b",
+            lower_text,
+        )
+        if not match:
+            return None
+        unit_match = re.search(
+            r"\d+\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes)\b",
+            lower_text,
+        )
+        unit = (unit_match.group(1) if unit_match else "s").lower()
+        value = int(match.group(1))
+        if unit.startswith("m"):
+            value *= 60
+        return value
 
     def _extract_browser_name(self, text):
         if "chromium" in text:
@@ -372,9 +434,9 @@ class ReminderWorkflow(BaseWorkflow):
             return state
         user_text = state["user_text"]
         session_id = state["session_id"]
-        workflow_state = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        workflow_state = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
         response = manager.handle_reminder_followup(user_text, workflow_state)
-        updated = self.app.context_store.get_active_workflow(session_id, workflow_name=self.name) or {}
+        updated = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
         state["result"] = WorkflowResult(
             handled=True,
             workflow_name=self.name,
@@ -384,6 +446,54 @@ class ReminderWorkflow(BaseWorkflow):
         return state
 
 
+class CalendarEventWorkflow(BaseWorkflow):
+    name = "calendar_event_workflow"
+
+    def can_continue(self, user_text, state, context=None):
+        if not state:
+            return False
+        return state.get("workflow_name") == self.name and bool(state.get("pending_slots"))
+
+    def _handle(self, state):
+        user_text = state["user_text"]
+        session_id = state["session_id"]
+        workflow_state = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
+
+        ext = self._get_workspace_extension()
+        if ext is None:
+            state["result"] = WorkflowResult(
+                handled=True,
+                workflow_name=self.name,
+                response="Calendar event creation requires the workspace agent to be loaded.",
+            )
+            return state
+
+        pending_slots = list(workflow_state.get("pending_slots") or [])
+        saved_summary = workflow_state.get("summary", "")
+        description = workflow_state.get("description", "")
+
+        # Inject the saved summary so the handler doesn't ask for it again.
+        args = {}
+        if "start_dt" in pending_slots and saved_summary:
+            args = {"summary": saved_summary, "description": description}
+
+        response = ext._handle_create_event(user_text, args)
+        updated = self._memory().get_active_workflow(session_id, workflow_name=self.name) or {}
+        state["result"] = WorkflowResult(
+            handled=True,
+            workflow_name=self.name,
+            response=response,
+            state=updated,
+        )
+        return state
+
+    def _get_workspace_extension(self):
+        loader = getattr(self.app, "extension_loader", None)
+        if loader is None:
+            return None
+        return loader.get_extension("WorkspaceAgent")
+
+
 class WorkflowOrchestrator:
     def __init__(self, app):
         self.app = app
@@ -391,6 +501,13 @@ class WorkflowOrchestrator:
         self.register(FileWorkflow(app))
         self.register(BrowserMediaWorkflow(app))
         self.register(ReminderWorkflow(app))
+        self.register(CalendarEventWorkflow(app))
+        try:
+            from core.reasoning.workflows import ResearchWorkflow, FocusModeWorkflow  # noqa: PLC0415
+            self.register(ResearchWorkflow(app))
+            self.register(FocusModeWorkflow(app))
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[workflow] Could not load reasoning workflows: %s", exc)
 
     def register(self, workflow):
         self.workflows[workflow.name] = workflow
@@ -403,7 +520,7 @@ class WorkflowOrchestrator:
         return workflow.run(user_text, session_id, context=context)
 
     def continue_active(self, user_text, session_id, context=None):
-        active = self.app.context_store.get_active_workflow(session_id)
+        active = (getattr(self.app, "memory_service", None) or self.app.context_store).get_active_workflow(session_id)
         if not active:
             return WorkflowResult(handled=False)
         workflow = self.workflows.get(active.get("workflow_name"))
@@ -412,7 +529,7 @@ class WorkflowOrchestrator:
         return workflow.run(user_text, session_id, context=context)
 
     def detect_workflow(self, user_text, session_id, context=None):
-        active = self.app.context_store.get_active_workflow(session_id)
+        active = (getattr(self.app, "memory_service", None) or self.app.context_store).get_active_workflow(session_id)
         if active:
             workflow = self.workflows.get(active.get("workflow_name"))
             if workflow and workflow.can_continue(user_text, active, context=context):

@@ -1,4 +1,4 @@
-from .plugin import GreeterPlugin
+from .extension import GreeterExtension
 
-def setup(app):
-    return GreeterPlugin(app)
+def setup():
+    return GreeterExtension()

@@ -1,7 +1,14 @@
 import re
 import os
 
-from modules.system_control.app_launcher import extract_app_names
+def _get_extract_app_names():
+    try:
+        from modules.system_control.app_launcher import extract_app_names  # noqa: PLC0415
+        return extract_app_names
+    except Exception:
+        return lambda _text: []
+
+extract_app_names = _get_extract_app_names()
 
 
 class IntentRecognizer:
@@ -59,6 +66,15 @@ class IntentRecognizer:
         if self._is_multi_app_launch_clause(clause):
             return [clause.strip()]
         if re.search(r"\bopen\s+youtube(?:\s+music)?\b.*\band\s+play\b", clause, re.IGNORECASE):
+            return [clause.strip()]
+        # Don't split when both halves act on a shared pronoun like "it":
+        # "open and read it to me" describes two actions on the same target.
+        # The downstream file controller can detect both verbs in one clause.
+        if re.search(
+            r"\b(?:open|read|summarize|preview|show|play)\s+and\s+(?:open|read|summarize|preview|show|play)\b.*?\b(?:it|this|that|the file|to me|out loud)\b",
+            clause,
+            re.IGNORECASE,
+        ):
             return [clause.strip()]
 
         lower_clause = clause.lower()
@@ -131,6 +147,10 @@ class IntentRecognizer:
 
         for parser in (
             self._parse_pending_selection,
+            self._parse_dictation,
+            self._parse_focus_session,
+            self._parse_research_topic,
+            self._parse_google_search,
             self._parse_browser_media,
             self._parse_volume,
             self._parse_system,
@@ -151,6 +171,134 @@ class IntentRecognizer:
             if action:
                 return action
 
+        return None
+
+    def _parse_focus_session(self, clause, clause_lower, context):
+        tools = getattr(self.router, "_tools_by_name", {})
+        if "start_focus_session" not in tools:
+            return None
+        if re.search(
+            r"\b(?:end|stop|exit|cancel|disable)\s+(?:my\s+)?(?:focus(?:\s+session|\s+mode)?|pomodoro|do\s+not\s+disturb)\b",
+            clause_lower,
+        ):
+            return {"tool": "end_focus_session", "args": {}, "text": clause, "domain": "focus"}
+        if re.search(
+            r"\b(?:focus|pomodoro|do\s+not\s+disturb)\s+(?:status|left|remaining|time)\b",
+            clause_lower,
+        ):
+            return {"tool": "focus_session_status", "args": {}, "text": clause, "domain": "focus"}
+        if re.search(
+            r"\bhow\s+much\s+(?:focus|time)\s+(?:is\s+)?(?:left|remaining)\b",
+            clause_lower,
+        ):
+            return {"tool": "focus_session_status", "args": {}, "text": clause, "domain": "focus"}
+        if re.search(
+            r"\b(?:start|begin|enter|kick\s+off)\s+(?:a\s+|the\s+)?(?:focus(?:\s+session|\s+mode)?|pomodoro|do\s+not\s+disturb)\b",
+            clause_lower,
+        ):
+            return {"tool": "start_focus_session", "args": {}, "text": clause, "domain": "focus"}
+        if re.search(
+            r"\b(?:focus|pomodoro)\s+(?:for\s+\d+|mode)\b",
+            clause_lower,
+        ):
+            return {"tool": "start_focus_session", "args": {}, "text": clause, "domain": "focus"}
+        if re.search(
+            r"\bdo\s+not\s+disturb\s+(?:for\s+\d+\s*(?:minutes?|mins?|hours?))\b",
+            clause_lower,
+        ):
+            return {"tool": "start_focus_session", "args": {}, "text": clause, "domain": "focus"}
+        return None
+
+    def _parse_dictation(self, clause, clause_lower, context):
+        tools = getattr(self.router, "_tools_by_name", {})
+        if {"start_dictation", "end_dictation", "cancel_dictation"} - set(tools):
+            return None
+        if re.search(r"\b(?:cancel|discard|throw away)\s+(?:the\s+)?(?:memo|dictation|recording)\b", clause_lower):
+            return {"tool": "cancel_dictation", "args": {}, "text": clause, "domain": "dictation"}
+        if re.search(
+            r"\b(?:end|stop|finish|save|close)\s+(?:the\s+)?(?:memo|dictation|recording|note(?:\s+taking)?|writing)\b",
+            clause_lower,
+        ):
+            return {"tool": "end_dictation", "args": {}, "text": clause, "domain": "dictation"}
+        if re.search(r"\b(?:end|stop|finish)\s+dictating\b", clause_lower):
+            return {"tool": "end_dictation", "args": {}, "text": clause, "domain": "dictation"}
+        start_match = re.search(
+            r"\b(?:take|start|begin|record|capture)\s+(?:a\s+|new\s+|the\s+)?(?:memo|dictation|note(?:\s+taking)?|recording|journal entry)(?:\s+(?:called|named|titled)\s+(.+))?$",
+            clause_lower,
+        )
+        if start_match:
+            label = (start_match.group(1) or "").strip(" .!?'\"")
+            args = {"label": label} if label else {}
+            return {"tool": "start_dictation", "args": args, "text": clause, "domain": "dictation"}
+        if re.search(r"\b(?:dictation\s+mode\s+on|enter\s+dictation|dictate(?:\s+for\s+me)?)\b", clause_lower):
+            return {"tool": "start_dictation", "args": {}, "text": clause, "domain": "dictation"}
+        return None
+
+    def _parse_research_topic(self, clause, clause_lower, context):
+        if "research_topic" not in getattr(self.router, "_tools_by_name", {}):
+            return None
+
+        # "research X", "do a deep dive on X", "find research papers on X",
+        # "put together a briefing on X", "give me a literature review of X",
+        # "brief me on X", "investigate X", "look into X". The pattern is
+        # ordered most-specific → least-specific so generic verbs ("look up")
+        # don't swallow more specific phrasings.
+        topic_patterns = (
+            r"^(?:please\s+)?do\s+(?:a\s+)?(?:deep\s+dive|literature\s+review)\s+(?:on|about|into|for)\s+(.+)$",
+            r"^(?:please\s+)?(?:put\s+together|prepare|write|draft|generate)\s+(?:me\s+)?"
+            r"(?:a\s+)?(?:research\s+)?briefing\s+(?:on|about|for)\s+(.+)$",
+            r"^(?:please\s+)?brief\s+me\s+(?:on|about)\s+(.+)$",
+            r"^(?:please\s+)?(?:find|gather|fetch|pull|collect|surface|dig\s+up)\s+(?:me\s+)?"
+            r"(?:some\s+)?(?:research\s+(?:papers|articles)|articles|papers|sources|references)"
+            r"(?:\s+(?:on|about|for))?\s+(.+)$",
+            r"^(?:please\s+)?give\s+me\s+(?:a\s+)?(?:literature\s+review|deep\s+dive|briefing)"
+            r"\s+(?:on|about|of)\s+(.+)$",
+            r"^(?:please\s+)?research\s+(?:the\s+latest\s+(?:on|about)\s+|on\s+|about\s+|into\s+)?(.+)$",
+            r"^(?:please\s+)?(?:investigate|study)\s+(.+)$",
+        )
+        for pattern in topic_patterns:
+            match = re.match(pattern, clause_lower)
+            if not match:
+                continue
+            topic = match.group(1).strip(" .!?:'\"")
+            if not topic or len(topic) < 2:
+                continue
+            return {
+                "tool": "research_topic",
+                "args": {"topic": topic},
+                "text": clause,
+                "domain": "research",
+            }
+        return None
+
+    def _parse_google_search(self, clause, clause_lower, context):
+        if "search_google" not in getattr(self.router, "_tools_by_name", {}):
+            return None
+        # "search google for X", "google search X", "google for X", "look up X"
+        patterns = (
+            r"\bsearch\s+google\s+for\s+(.+)$",
+            r"\bgoogle\s+search\s+for\s+(.+)$",
+            r"\bgoogle\s+(?:for\s+)?(.+)$",
+            r"\bsearch\s+(?:on|in)\s+google\s+for\s+(.+)$",
+            r"\bsearch\s+(?:the\s+)?(?:web|internet)\s+for\s+(.+)$",
+            r"\blook\s+up\s+(.+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, clause_lower)
+            if match:
+                query = match.group(1).strip(" ?.!,")
+                # Avoid intercepting "google calendar" / "google drive" / etc.
+                if query.split()[:1] and query.split()[0] in {"calendar", "drive", "docs", "sheets", "tasks", "keep"}:
+                    return None
+                if not query:
+                    return None
+                browser_name = "chromium" if "chromium" in clause_lower else "chrome"
+                return {
+                    "tool": "search_google",
+                    "args": {"query": query, "browser_name": browser_name},
+                    "text": clause,
+                    "domain": "browser",
+                }
         return None
 
     def _parse_browser_media(self, clause, clause_lower, context):
@@ -393,6 +541,18 @@ class IntentRecognizer:
     def _parse_file_action(self, clause, clause_lower, context):
         active_file = self._active_file_reference()
         pending = getattr(getattr(self.router, "dialog_state", None), "pending_file_request", None)
+        # Multi-action on the pending file: "open and read it", "read and summarize it".
+        # Prefer the most informative downstream verb so a single tool fires; the
+        # file controller still picks up secondary verbs from text via _detect_requested_actions.
+        if pending and re.search(
+            r"\b(?:open|read|summarize)\s+and\s+(?:open|read|summarize)\s+(?:it|this|that|the file|to me|out loud)\b",
+            clause_lower,
+        ):
+            if "summarize" in clause_lower:
+                return {"tool": "summarize_file", "args": {}, "text": clause, "domain": "files"}
+            if "read" in clause_lower:
+                return {"tool": "read_file", "args": {}, "text": clause, "domain": "files"}
+            return {"tool": "open_file", "args": {}, "text": clause, "domain": "files"}
         if pending and re.search(r"\bopen\s+(?:it|this|that|the file)\b", clause_lower):
             return {"tool": "open_file", "args": {}, "text": clause, "domain": "files"}
         if pending and re.search(r"\bread\s+(?:it|this|that|the file)\b", clause_lower):
@@ -469,11 +629,12 @@ class IntentRecognizer:
             action = "write"
 
         filename = ""
+        det = r"(?:(?:the|a|an|new)\s+)?"
         patterns = (
-            r"\b(?:to|into|in)\s+(?:the\s+)?file\s+([a-z0-9][a-z0-9 _\-.]*)$",
-            r"\b(?:to|into|in)\s+(?:the\s+)?([a-z0-9][a-z0-9 _\-.]*)\s+file$",
+            rf"\b(?:to|into|in)\s+{det}file\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*)$",
+            rf"\b(?:to|into|in)\s+{det}([a-z0-9][a-z0-9 _\-.]*)\s+file$",
             r"\b(?:file\s+)?(?:named|called)\s+([a-z0-9][a-z0-9 _\-.]*)$",
-            r"\b(?:create|make)\s+(?:a\s+)?file\s+([a-z0-9][a-z0-9 _\-.]*)$",
+            rf"\b(?:create|make)\s+{det}file\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*)$",
         )
         for pattern in patterns:
             match = re.search(pattern, clause_lower)
@@ -503,6 +664,42 @@ class IntentRecognizer:
         }
 
     def _parse_reminder(self, clause, clause_lower, context):
+        tools = getattr(self.router, "_tools_by_name", {})
+
+        if "create_calendar_event" in tools and re.search(
+            r"\b(?:create|add|schedule|set\s+up|book)\b.*\b(?:calendar\s+event|event|meeting|appointment)\b",
+            clause_lower,
+        ):
+            return {"tool": "create_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+        if "create_calendar_event" in tools and re.search(
+            r"\badd\s+(?:.+?)\s+to\s+(?:my\s+)?calendar\b",
+            clause_lower,
+        ):
+            return {"tool": "create_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+
+        if "move_calendar_event" in tools and re.search(
+            r"\b(?:move|reschedule|shift|push|change)\b.*\b(?:reminder|event|meeting|appointment|standup|gym|focus|block|the\s+next|the\s+\d{1,2}(?:\s*(?:am|pm))?)\b.*\b(?:to|by|until|forward|back|ahead|earlier|later)\b",
+            clause_lower,
+        ):
+            return {"tool": "move_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+        # "move my 3 PM to 4 PM", "shift my 9 AM by an hour" — clock-time targets.
+        if "move_calendar_event" in tools and re.search(
+            r"\b(?:move|reschedule|shift|push|change)\s+(?:my\s+|the\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+(?:to|by)\b",
+            clause_lower,
+        ):
+            return {"tool": "move_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+        if "move_calendar_event" in tools and re.search(
+            r"\b(?:move|reschedule|shift|push|change)\s+(?:the\s+|my\s+)?(?:next|upcoming)\b",
+            clause_lower,
+        ):
+            return {"tool": "move_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+
+        if "cancel_calendar_event" in tools and re.search(
+            r"\b(?:cancel|delete|remove|drop)\b.*\b(?:reminder|calendar\s+event|event|meeting|appointment|block|standup|gym\s+block|focus\s+block)\b",
+            clause_lower,
+        ):
+            return {"tool": "cancel_calendar_event", "args": {}, "text": clause, "domain": "calendar"}
+
         if "remind me" in clause_lower or re.search(r"\bset (?:a )?reminder\b", clause_lower):
             return {"tool": "set_reminder", "args": {}, "text": clause, "domain": "reminder"}
         return None

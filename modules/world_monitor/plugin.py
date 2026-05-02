@@ -130,9 +130,9 @@ class WorldMonitorPlugin(FridayPlugin):
             )
 
     def _present_digest(self, digest):
-        router = getattr(self.app, "router", None)
-        if router is not None and hasattr(router, "_voice_already_spoken"):
-            router._voice_already_spoken = True
+        routing_state = getattr(self.app, "routing_state", None)
+        if routing_state is not None:
+            routing_state.mark_voice_spoken()
 
         max_segments = self._safe_int(self._config_get("world_monitor.spoken_limit", 9), 9)
         max_segments = max(1, min(12, max_segments))

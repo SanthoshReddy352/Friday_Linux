@@ -473,6 +473,8 @@ def test_media_mode_does_not_trust_previous_wake_session_for_long_transcript():
 
 
 def test_media_mode_allows_short_media_command_during_wake_session():
+    """During an active browser media session, a bare "play" should fast-path
+    straight to the browser worker without going through the LLM router."""
     app = MagicMock()
     app.is_speaking = False
     app.assistant_context = AssistantContext()
@@ -484,7 +486,15 @@ def test_media_mode_allows_short_media_command_during_wake_session():
 
     stt._process_voice_text("play")
 
-    app.process_input.assert_called_once_with("play", source="voice")
+    # The new fast path dispatches to the browser worker on its own thread
+    # and bypasses process_input entirely.
+    app.process_input.assert_not_called()
+    # Give the daemon thread a moment to call into the service.
+    for _ in range(20):
+        if app.browser_media_service.fast_media_command.called:
+            break
+        time.sleep(0.01)
+    app.browser_media_service.fast_media_command.assert_called_once_with("resume")
 
 
 def test_button_invocation_allows_media_session_transcript():

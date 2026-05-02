@@ -4,10 +4,11 @@ import re
 
 
 FRIDAY_PERSONA = (
-    "You are FRIDAY, an offline AI assistant inspired by the Iron Man AI. "
-    "You are helpful, concise, and occasionally witty. "
-    "You run entirely locally — no internet. "
-    "Keep answers short (2-4 sentences) unless the user asks for details."
+    "You are FRIDAY, a personal AI assistant. "
+    "You are intelligent, warm, witty, and speak like a real person — not a formal assistant. "
+    "Match the user's energy: casual when they're casual, detailed when they want depth. "
+    "Never refuse to discuss human topics like relationships, health, or personal questions. "
+    "You run entirely locally — no internet access."
 )
 
 class LLMChatPlugin(FridayPlugin):
@@ -50,7 +51,11 @@ class LLMChatPlugin(FridayPlugin):
 
         logger.debug(f"[LLMChat] Sending chat prompt for: '{query}'")
         try:
-            answer = self._generate_reply(llm, messages)
+            # Hold the chat-inference lock so concurrent users of the chat
+            # model (e.g. the research agent's background summarizer) don't
+            # crash llama.cpp.
+            with self.app.router.chat_inference_lock:
+                answer = self._generate_reply(llm, messages)
 
             logger.info(f"[LLMChat] Response: {answer[:80]}...")
             return answer
@@ -59,15 +64,23 @@ class LLMChatPlugin(FridayPlugin):
             logger.error(f"[LLMChat] Inference error: {e}")
             return "I ran into an issue generating a response. Please try again."
 
+    def _chat_max_tokens(self) -> int:
+        config = getattr(self.app, "config", None)
+        if config and hasattr(config, "get"):
+            return int(config.get("routing.chat_max_tokens", 512) or 512)
+        return 512
+
     def _generate_reply(self, llm, messages):
+        max_tokens = self._chat_max_tokens()
         if not hasattr(llm, "create_chat_completion"):
-            res = llm(messages[-1]["content"], max_tokens=200, temperature=0.7)
+            res = llm(messages[-1]["content"], max_tokens=max_tokens, temperature=0.7, top_p=0.9)
             return res["choices"][0]["text"].strip()
 
         stream = llm.create_chat_completion(
             messages=messages,
-            max_tokens=200,
+            max_tokens=max_tokens,
             temperature=0.7,
+            top_p=0.9,
             stream=True,
         )
         if isinstance(stream, dict):
@@ -94,27 +107,16 @@ class LLMChatPlugin(FridayPlugin):
                 spoken_text = " ".join(part for part in spoken_parts[:-1] if part).strip()
                 if spoken_text:
                     self.app.event_bus.publish("voice_response", spoken_text)
-                    self.app.router._voice_already_spoken = True
+                    self.app.routing_state.mark_voice_spoken()
                 sentence_buffer = spoken_parts[-1]
 
         if sentence_buffer.strip():
             self.app.event_bus.publish("voice_response", sentence_buffer.strip())
-            self.app.router._voice_already_spoken = True
+            self.app.routing_state.mark_voice_spoken()
 
         return "".join(parts).strip()
 
     def _build_messages(self, new_query):
-        persona = None
-        persona_id = None
-        memory_bundle = {}
-        persona_manager = getattr(self.app, "persona_manager", None)
-        if persona_manager and getattr(self.app, "session_id", None):
-            persona = persona_manager.get_active_persona(self.app.session_id)
-            persona_id = (persona or {}).get("persona_id")
-        memory_broker = getattr(self.app, "memory_broker", None)
-        if memory_broker and getattr(self.app, "session_id", None):
-            memory_bundle = memory_broker.build_context_bundle(new_query, self.app.session_id)
-
         assistant_context = getattr(self.app, "assistant_context", None)
         if assistant_context:
             messages = assistant_context.build_chat_messages(
@@ -122,35 +124,8 @@ class LLMChatPlugin(FridayPlugin):
                 dialog_state=getattr(self.app, "dialog_state", None),
             )
             if messages:
-                persona_header = ""
-                if persona:
-                    persona_header = (
-                        f"Active persona: {persona.get('display_name', 'FRIDAY')} ({persona_id}).\n"
-                        f"Identity: {persona.get('system_identity', '')}\n"
-                        f"Tone traits: {persona.get('tone_traits', '')}\n"
-                        f"Conversation style: {persona.get('conversation_style', '')}\n"
-                        f"Speech style: {persona.get('speech_style', '')}\n"
-                        f"Tool acknowledgement style: {persona.get('tool_ack_style', '')}\n"
-                    )
-                memory_header = ""
-                if memory_bundle:
-                    durable = [item.get("content", "") for item in memory_bundle.get("durable_memories", []) if item.get("content")]
-                    memory_header = (
-                        f"Durable recall: {durable}\n"
-                        f"Semantic recall: {memory_bundle.get('semantic_recall', [])}\n"
-                    )
-                messages[0]["content"] = f"{persona_header}{memory_header}\n{messages[0]['content']}".strip()
-            return messages
-
-        persona_prefix = ""
-        if persona:
-            persona_prefix = (
-                f"Persona: {persona.get('display_name', 'FRIDAY')}.\n"
-                f"Identity: {persona.get('system_identity', '')}\n"
-                f"Tone: {persona.get('tone_traits', '')}\n"
-                f"Style: {persona.get('conversation_style', '')}\n\n"
-            )
-        return [{"role": "user", "content": f"{persona_prefix}{FRIDAY_PERSONA}\n\n{new_query}"}]
+                return messages
+        return [{"role": "user", "content": f"{FRIDAY_PERSONA}\n\n{new_query}"}]
 
 
 def setup(app):

@@ -24,7 +24,7 @@ class OrderedToolExecutor:
 
     def execute(self, plan: ToolPlan, user_text: str, turn=None):
         if plan.mode in {"reply", "clarify"}:
-            self.app.router._set_routing_decision("deterministic", tool_name="", args={})
+            self.app.routing_state.set_decision("deterministic", tool_name="", args={})
             return plan.reply
 
         if plan.mode == "delegate":
@@ -35,7 +35,7 @@ class OrderedToolExecutor:
                 timeout_ms=int(plan.delegation.get("timeout_ms", 3000)),
             )
             result = self.app.delegation_manager.delegate(request)
-            self.app.router._set_routing_decision("workflow", tool_name=request.agent_type, args=result.structured_output)
+            self.app.routing_state.set_decision("workflow", tool_name=request.agent_type, args=result.structured_output)
             return result.summary
 
         if plan.mode == "planner":
@@ -49,8 +49,23 @@ class OrderedToolExecutor:
         return "I need a bit more detail before I can do that."
 
     def _execute_steps(self, plan: ToolPlan, user_text: str, turn=None):
+        cache = getattr(self.app, "result_cache", None)
+        memory = getattr(self.app, "memory_service", None) or self.app.context_store
         responses = []
         for step in plan.steps:
+            # Phase 10: check cache before executing
+            cached_output = None
+            if cache is not None:
+                descriptor = getattr(self.app.capability_registry, "get_descriptor", lambda n: None)(step.capability_name)
+                cached_output = cache.get(step.capability_name, step.args, step.raw_text or user_text)
+
+            if cached_output is not None:
+                self.app.response_finalizer.remember_tool_use(step.capability_name, step.args)
+                self.app.routing_state.set_decision("deterministic", tool_name=step.capability_name, args=step.args)
+                responses.append(self.app.response_finalizer.finalize(cached_output))
+                memory.clear_pending_online(self.app.session_id)
+                continue
+
             started_at = time.monotonic()
             if turn is not None:
                 if step.capability_name == "llm_chat":
@@ -61,10 +76,21 @@ class OrderedToolExecutor:
             if turn is not None:
                 self.app.turn_feedback.emit_tool_finished(turn, step.capability_name, result.ok, duration_ms, error=result.error)
             if result.ok:
-                self.app.router._remember_tool_use(step.capability_name, step.args)
-                self.app.router._set_routing_decision("deterministic", tool_name=step.capability_name, args=step.args)
-                responses.append(self.app.router._finalize_response(result.output))
-                self.app.context_store.clear_pending_online(self.app.session_id)
+                # Phase 10: cache successful read results
+                if cache is not None:
+                    descriptor = getattr(self.app.capability_registry, "get_descriptor", lambda n: None)(step.capability_name)
+                    cache.set(step.capability_name, step.args, result.output, descriptor=descriptor, raw_text=step.raw_text or user_text)
+                self.app.response_finalizer.remember_tool_use(step.capability_name, step.args)
+                self.app.routing_state.set_decision("deterministic", tool_name=step.capability_name, args=step.args)
+                responses.append(self.app.response_finalizer.finalize(result.output))
+                memory.clear_pending_online(self.app.session_id)
+                # Phase 7: record procedural outcome
+                memory_broker = getattr(self.app, "memory_broker", None)
+                if memory_broker and hasattr(memory_broker, "record_capability_outcome"):
+                    memory_broker.record_capability_outcome(step.capability_name, None, True)
             else:
                 responses.append(f"Error running command: {result.error}")
+                memory_broker = getattr(self.app, "memory_broker", None)
+                if memory_broker and hasattr(memory_broker, "record_capability_outcome"):
+                    memory_broker.record_capability_outcome(step.capability_name, None, False)
         return "\n".join(str(item) for item in responses if item)

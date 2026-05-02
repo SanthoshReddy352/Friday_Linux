@@ -16,6 +16,13 @@ numpy
 sounddevice
 pyttsx3
 
+# --- RESEARCH AGENT ---
+trafilatura
+feedparser
+html2text
+beautifulsoup4
+lxml
+
 # --- AGENTIC FRAMEWORK & STORAGE ---
 langgraph
 langchain-core

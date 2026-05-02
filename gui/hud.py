@@ -4,9 +4,10 @@ import sys
 import time
 import logging
 from datetime import datetime
+from html import escape as html_escape
 
 from PyQt6.QtCore import QDate, QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QTextCharFormat
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QCalendarWidget,
@@ -31,8 +32,9 @@ from modules.voice_io.audio_devices import list_audio_input_devices
 
 logger = logging.getLogger(__name__)
 
-HUD_TEXT_MAX_CHARS = 420
-HUD_TEXT_MAX_LINES = 8
+HUD_TEXT_MAX_CHARS = 420   # kept for legacy callers
+HUD_TEXT_MAX_LINES = 8     # kept for legacy callers
+_EVENT_STREAM_MAX_LINES = 25
 NELLORE_LAT = 14.4426
 NELLORE_LON = 79.9865
 NELLORE_TZ = "Asia/Kolkata"
@@ -987,6 +989,24 @@ def combo_style():
     )
 
 
+class _InputWorker(QThread):
+    """Runs app_core.process_input off the GUI thread so the HUD stays responsive."""
+    finished = pyqtSignal()
+
+    def __init__(self, app_core, text: str, parent=None):
+        super().__init__(parent)
+        self._app_core = app_core
+        self._text = text
+
+    def run(self):
+        try:
+            self._app_core.process_input(self._text, source="gui")
+        except Exception:
+            pass
+        finally:
+            self.finished.emit()
+
+
 class JarvisHUD(QMainWindow):
     message_ready = pyqtSignal(object)
     shutdown_signal = pyqtSignal()
@@ -995,6 +1015,7 @@ class JarvisHUD(QMainWindow):
     turn_started_ready = pyqtSignal(object)
     turn_processing_ready = pyqtSignal(object)
     turn_finished_ready = pyqtSignal(object)
+    tool_finished_ready = pyqtSignal(object)
     listening_mode_ready = pyqtSignal(object)
     voice_runtime_ready = pyqtSignal(object)
     calendar_event_created_ready = pyqtSignal(object)
@@ -1008,6 +1029,8 @@ class JarvisHUD(QMainWindow):
         self.voice_runtime_state = {}
         self.drag_pos = None
         self._speaking_until = 0.0
+        self._chat_html_parts: list[str] = []
+        self._input_worker: _InputWorker | None = None
 
         self.setWindowTitle("FRIDAY")
         self.resize(1500, 920)
@@ -1071,11 +1094,10 @@ class JarvisHUD(QMainWindow):
         self.subtitle_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.subtitle_label.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.subtitle_label.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.subtitle_label.setMinimumHeight(150)
-        self.subtitle_label.setMaximumHeight(220)
-        self.subtitle_label.setStyleSheet(text_box_style(font_size=15))
+        self.subtitle_label.setMinimumHeight(220)
+        self.subtitle_label.setStyleSheet(text_box_style(font_size=14))
         transcript_panel.body.addWidget(self.subtitle_label)
-        center.addWidget(transcript_panel, stretch=0)
+        center.addWidget(transcript_panel, stretch=3)
         root.addLayout(center, 1, 1)
 
         right = QVBoxLayout()
@@ -1182,6 +1204,7 @@ class JarvisHUD(QMainWindow):
         self.turn_started_ready.connect(self._on_turn_started)
         self.turn_processing_ready.connect(self._on_turn_processing)
         self.turn_finished_ready.connect(self._on_turn_finished)
+        self.tool_finished_ready.connect(self._on_tool_finished)
         self.listening_mode_ready.connect(self._on_listening_mode_changed)
         self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
         self.calendar_event_created_ready.connect(self._on_calendar_event_created)
@@ -1199,6 +1222,7 @@ class JarvisHUD(QMainWindow):
         bus.subscribe("assistant_progress", lambda payload: self.turn_processing_ready.emit(payload))
         bus.subscribe("tool_started", lambda payload: self.turn_processing_ready.emit(payload))
         bus.subscribe("llm_started", lambda payload: self.turn_processing_ready.emit(payload))
+        bus.subscribe("tool_finished", lambda payload: self.tool_finished_ready.emit(payload))
         bus.subscribe("turn_completed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("listening_mode_changed", lambda payload: self.listening_mode_ready.emit(payload))
@@ -1315,8 +1339,7 @@ class JarvisHUD(QMainWindow):
             phrase = "Voice gate opening."
             self.app_core.event_bus.publish("voice_response", phrase)
             QTimer.singleShot(1200, lambda: self.app_core.event_bus.publish("voice_activation_requested", {"source": "button"}))
-        self._set_transcript_text("assistant", phrase)
-        QTimer.singleShot(2500, lambda: self.subtitle_label.clear())
+        self._append_chat_bubble("system", phrase)
 
     def check_status(self):
         try:
@@ -1336,11 +1359,18 @@ class JarvisHUD(QMainWindow):
 
             router = getattr(self.app_core, "router", None)
             capabilities = getattr(self.app_core, "capabilities", None)
+            routing_state = getattr(self.app_core, "routing_state", None)
             route_source = getattr(router, "current_route_source", "idle") if router else "idle"
             lane = getattr(router, "current_model_lane", "idle") if router else "idle"
             disabled_count = len(capabilities.disabled_skills()) if capabilities else 0
             mode = getattr(self.app_core, "get_listening_mode", lambda: "persistent")()
-            self.status_label.setText(f"route: {route_source} | lane: {lane} | voice: {mode} | disabled: {disabled_count}")
+            last_tool = ""
+            if routing_state:
+                last_tool = getattr(routing_state.last_decision, "tool_name", "") or ""
+            tool_part = f" → {last_tool}" if last_tool and last_tool != "idle" else ""
+            self.status_label.setText(
+                f"route: {route_source}{tool_part} | lane: {lane} | voice: {mode} | disabled: {disabled_count}"
+            )
         except Exception as exc:
             logger.exception("HUD status refresh failed: %s", exc)
 
@@ -1361,11 +1391,43 @@ class JarvisHUD(QMainWindow):
     def _on_turn_processing(self, payload):
         self.turn_state = "processing"
         self.reactor.set_state("processing")
-        if isinstance(payload, dict):
-            self._append_event("RUN", str(payload.get("tool") or payload.get("text") or "")[:90])
+        if not isinstance(payload, dict):
+            return
+        if "tool_name" in payload:
+            tool = payload["tool_name"]
+            args = payload.get("args") or {}
+            # Show route line in dialog
+            self._append_route_line(tool, args)
+            # Show in event stream with key arg preview
+            key = next((k for k in ("query", "topic", "text", "path", "url", "app", "command") if k in args), None)
+            summary = tool
+            if key:
+                summary += f": {str(args[key])[:35]}"
+            self._append_event("RUN", summary[:90])
+        elif "lane" in payload:
+            self._append_event("LLM", str(payload["lane"])[:30])
+        elif payload.get("text"):
+            self._append_event("INFO", str(payload["text"])[:90])
 
-    def _on_turn_finished(self, _payload):
+    def _on_turn_finished(self, payload):
         self.turn_state = "idle"
+        if isinstance(payload, dict) and payload.get("metrics"):
+            metrics = payload["metrics"]
+            dur = metrics.get("duration_ms", 0)
+            ok = payload.get("ok", True)
+            status = "OK" if ok else "FAIL"
+            self._append_event("DONE", f"{status} {dur:.0f}ms")
+
+    def _on_tool_finished(self, payload):
+        if not isinstance(payload, dict):
+            return
+        tool = payload.get("tool_name", "?")
+        ok = payload.get("ok", True)
+        dur = payload.get("duration_ms", 0)
+        status = "OK" if ok else "FAIL"
+        err = payload.get("error", "")
+        detail = f" — {err[:40]}" if err else ""
+        self._append_event("DONE", f"{tool} [{status}] {dur:.0f}ms{detail}")
 
     def stop_speaking(self, _checked=False):
         if getattr(self.app_core, "tts", None):
@@ -1382,16 +1444,14 @@ class JarvisHUD(QMainWindow):
             self._report_option_error("MIC", exc)
             return
         label = getattr(stt, "device_label", "selected device")
-        self._set_transcript_text("assistant", f"Microphone switched to {label}")
+        self._append_chat_bubble("system", f"Microphone switched to {label}")
         self._append_event("MIC", label)
-        QTimer.singleShot(2000, lambda: self.subtitle_label.clear())
 
     def _report_option_error(self, label, exc):
         message = str(exc) or exc.__class__.__name__
         logger.exception("HUD %s option failed: %s", label, exc)
         self._append_event(label, f"FAILED: {message}"[:90])
-        self._set_transcript_text("assistant", f"{label.title()} option failed: {message}")
-        QTimer.singleShot(3500, lambda: self.subtitle_label.clear())
+        self._append_chat_bubble("system", f"{label.title()} option failed: {message}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1416,23 +1476,81 @@ class JarvisHUD(QMainWindow):
 
     def render_message(self, payload):
         if not isinstance(payload, dict):
-            self._set_transcript_text("assistant", str(payload))
+            self._append_chat_bubble("assistant", str(payload))
             return
         text = payload.get("text", "")
         role = payload.get("role", "assistant")
-        self._set_transcript_text(role, text)
+        if not text:
+            return
+        self._append_chat_bubble(role, text)
         self._append_event(role.upper(), text[:90])
 
-    def _set_transcript_text(self, role, text):
-        self.subtitle_label.setPlainText(format_hud_message(role, text))
-        self.subtitle_label.verticalScrollBar().setValue(0)
+    def _append_chat_bubble(self, role: str, text: str):
+        """Append a message to the DIALOG as a styled HTML chat bubble."""
+        if not text or not text.strip():
+            return
+        safe = (html_escape(text.strip())
+                .replace("\n", "<br/>"))
+        ts = time.strftime("%H:%M")
+        if role == "user":
+            html = (
+                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
+                '<tr><td width="20%">&nbsp;</td>'
+                '<td align="right" bgcolor="#0d1e38">'
+                f'<span style="color:#8ab4ff;font-size:10px;font-weight:bold;">YOU</span>'
+                f'&nbsp;<span style="color:#3a5a7a;font-size:9px;">{ts}</span><br/>'
+                f'<span style="color:#ccdeff;font-size:13px;">{safe}</span>'
+                '</td></tr></table>'
+                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
+            )
+        elif role == "assistant":
+            html = (
+                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
+                '<tr><td align="left" bgcolor="#061410">'
+                f'<span style="color:#5dffbf;font-size:10px;font-weight:bold;">FRIDAY</span>'
+                f'&nbsp;<span style="color:#2a4a3a;font-size:9px;">{ts}</span><br/>'
+                f'<span style="color:#b0f0cc;font-size:13px;">{safe}</span>'
+                '</td><td width="20%">&nbsp;</td></tr></table>'
+                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
+            )
+        else:
+            html = (
+                f'<p align="center"><span style="color:#4a5a5a;font-size:10px;">[{safe}]</span></p>'
+            )
+        self._chat_html_parts.append(html)
+        cursor = QTextCursor(self.subtitle_label.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(html)
+        sb = self.subtitle_label.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
-    def _append_event(self, label, text):
+    def _append_route_line(self, tool_name: str, args: dict | None = None):
+        """Insert a dim route indicator between messages in the DIALOG."""
+        label = tool_name.replace("_", " ")
+        parts = [f"▶ {label}"]
+        if args:
+            key = next((k for k in ("query", "topic", "text", "path", "url", "app", "command") if k in args), None)
+            if key:
+                val = html_escape(str(args[key])[:40])
+                parts.append(f"({val})")
+        safe = " ".join(parts)
+        html = f'<p align="center"><span style="color:#3a5a4a;font-size:10px;">{safe}</span></p>'
+        cursor = QTextCursor(self.subtitle_label.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(html)
+        sb = self.subtitle_label.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _set_transcript_text(self, role: str, text: str):
+        """Legacy helper — appends a system note to the chat log."""
+        self._append_chat_bubble("system", text)
+
+    def _append_event(self, label: str, text: str):
         if not hasattr(self, "event_stream"):
             return
         line = f"{time.strftime('%H:%M:%S')}  {label:<7} {text}".rstrip()
         existing = self.event_stream.toPlainText().splitlines()
-        next_lines = (existing + [line])[-9:]
+        next_lines = (existing + [line])[-_EVENT_STREAM_MAX_LINES:]
         self.event_stream.setPlainText("\n".join(next_lines))
         self.event_stream.verticalScrollBar().setValue(self.event_stream.verticalScrollBar().maximum())
 

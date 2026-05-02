@@ -1,21 +1,34 @@
 import argparse
-import sys
-import os
 import logging
+import signal
 
-# Adjust sys.path to load local dependencies from 'libs' due to NTFS execution restrictions
-# (DEPRECATED: We now use a virtual environment for better dependency management)
-# CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# LIBS_DIR = os.path.join(CURRENT_DIR, 'libs')
-# if os.path.exists(LIBS_DIR) and LIBS_DIR not in sys.path:
-#     # Insert at position 1 (after current directory) so they take precedence over system packages,
-#     # but local project files still take top priority.
-#     sys.path.insert(1, LIBS_DIR)
-
-from core.app import FridayApp
+from core.kernel import RuntimeKernel
 from core.logger import set_console_logging
 from cli import start_cli
 from gui.hud import start_hud
+
+
+def _install_signal_handlers(kernel: RuntimeKernel) -> None:
+    """Route SIGINT / SIGTERM to kernel.shutdown() for clean exit.
+
+    On SIGINT (Ctrl-C) Python normally raises KeyboardInterrupt in the main
+    thread. For GUI mode Qt swallows it, so the signal handler is the only
+    reliable hook. For CLI mode it gives a clean "goodbye" instead of a
+    traceback.
+    """
+
+    def _handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        print(f"\n[main] Received {sig_name} — shutting down…", flush=True)
+        kernel.shutdown()
+
+    signal.signal(signal.SIGINT, _handler)
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (AttributeError, OSError):
+        # SIGTERM not available on all platforms (e.g. Windows)
+        pass
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run the FRIDAY local assistant.")
@@ -24,27 +37,29 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show startup and runtime logs in the terminal.")
     args = parser.parse_args()
 
-    # Default to INFO logs in terminal unless --verbose is used for DEBUG
     log_level = logging.DEBUG if args.verbose else logging.INFO
     set_console_logging(enabled=True, level=log_level)
 
-    # 1. Initialize core system (config, logger, plugin manager, etc.)
-    app = FridayApp()
-    app.initialize()
+    # Phase 6 (v2): RuntimeKernel.boot() owns service construction.
+    # The underlying FridayApp is reachable via `kernel.app` so the CLI,
+    # HUD, and existing extensions need no changes.
+    kernel = RuntimeKernel.boot()
+    _install_signal_handlers(kernel)
+    kernel.initialize()
+    app = kernel.app
 
-    # Trigger startup greeting after a slight delay to let hardware settle
     import time
-    time.sleep(2.5) 
-    greeter = next((p for p in app.plugin_manager.plugins if p.name == "Greeter"), None)
+    time.sleep(2.5)
+    greeter = app.extension_loader.get_extension("Greeter")
     if greeter:
         greeting = greeter.handle_startup()
         app.event_bus.publish("voice_response", greeting)
 
-    # 2. Start the requested interface
     if args.text:
         start_cli(app)
         return
     start_hud(app)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

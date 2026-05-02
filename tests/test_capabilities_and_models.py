@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.system_capabilities import SystemCapabilities
 from core.router import CommandRouter
-from modules.jarvis_skills.plugin import JarvisSkillsPlugin
+from core.extensions.loader import ExtensionLoader
 from modules.system_control.app_launcher import configure_app_registry, canonicalize_app_name, extract_app_names
 
 
@@ -95,14 +95,15 @@ def test_jarvis_skills_plugin_disables_missing_optional_skills():
     app.capabilities.binaries = {}
     app.capabilities.skill_status = {}
 
-    plugin = JarvisSkillsPlugin(app)
+    loader = ExtensionLoader(app)
+    loader._load_skills()
 
     disabled = app.capabilities.disabled_skills()
     assert "camera_skill" in disabled
     assert "detection_skill" in disabled
     assert "Missing Python modules" in disabled["camera_skill"]
     assert "Missing Python modules" in disabled["detection_skill"]
-    assert plugin.skills
+    assert loader.extensions
 
 
 def test_simple_commands_do_not_invoke_tool_model():

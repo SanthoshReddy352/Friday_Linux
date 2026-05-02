@@ -3,15 +3,12 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: manual
+  listening_mode: persistent
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8
   delegate_multi_action_threshold: 2
-  progress_delays_s:
-  - 2.5
-  - 6
-  - 12
+  progress_delays_s: []
 capabilities:
   registry_mode: internal_mcp_compatible
   allow_external_mcp: false
@@ -33,12 +30,15 @@ models:
     n_batch: 256
     temperature: 0.1
 routing:
+  orchestrator: v2
   policy: selective_executor
   tool_timeout_ms: 2500
   tool_max_tokens: 96
   tool_target_max_tokens: 64
   tool_top_p: 0.2
   tool_json_response: true
+  execution_engine: parallel
+  chat_max_tokens: 512
 gui:
   window_width: 500
   window_height: 700

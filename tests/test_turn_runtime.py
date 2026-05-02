@@ -50,8 +50,12 @@ def test_chat_turn_speaks_ack_and_progress_before_final_response():
     app.event_bus.subscribe("voice_response", spoken.append)
 
     result = app.process_input("what are we doing", source="voice")
+    # Voice dispatch is async — wait for the TaskRunner thread to finish
+    assert result == ""
+    t = app.task_runner._thread
+    if t and t.is_alive():
+        t.join(timeout=10.0)
 
-    assert result == "We are improving the architecture."
     assert spoken[0] == "Let me think that through."
     assert "I'm working on it." in spoken
     assert spoken[-1] == "We are improving the architecture."

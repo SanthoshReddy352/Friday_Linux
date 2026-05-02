@@ -136,6 +136,47 @@ class TaskManagerPlugin(FridayPlugin):
         }, self.handle_read_notes)
 
         self.app.router.register_tool({
+            "name": "create_calendar_event",
+            "description": (
+                "Create a calendar event or scheduled reminder for a specific date and time. "
+                "Use when the user says things like 'create a calendar event titled standup tomorrow at 10', "
+                "'schedule a meeting on Friday at 3pm', or 'add an event called dinner tonight at 8'."
+            ),
+            "parameters": {
+                "title": "string – event title",
+                "datetime": "string – ISO timestamp or natural-language date and time",
+                "minutes": "integer – minutes from now",
+            },
+            "context_terms": ["create calendar event", "add calendar event", "schedule event", "schedule meeting", "add to calendar"],
+        }, self.handle_create_calendar_event)
+
+        self.app.router.register_tool({
+            "name": "move_calendar_event",
+            "description": (
+                "Reschedule a previously-scheduled reminder or calendar event to a new date/time. "
+                "Use for 'move my 3 PM to 4', 'reschedule the standup to tomorrow morning', "
+                "'shift the gym block by 2 hours'."
+            ),
+            "parameters": {
+                "title": "string – partial title of the event to move (or 'next')",
+                "datetime": "string – new ISO timestamp or natural-language date and time",
+                "minutes": "integer – minutes from now",
+            },
+            "context_terms": ["move event", "reschedule", "shift event", "change time"],
+        }, self.handle_move_calendar_event)
+
+        self.app.router.register_tool({
+            "name": "cancel_calendar_event",
+            "description": (
+                "Cancel or delete a previously scheduled reminder/calendar event by title or by saying 'the next one'."
+            ),
+            "parameters": {
+                "title": "string – partial title of the event to cancel",
+            },
+            "context_terms": ["cancel reminder", "delete reminder", "cancel calendar event", "remove event"],
+        }, self.handle_cancel_calendar_event)
+
+        self.app.router.register_tool({
             "name": "list_calendar_events",
             "description": "Read upcoming reminders and calendar events with their scheduled date and time.",
             "parameters": {
@@ -211,6 +252,276 @@ class TaskManagerPlugin(FridayPlugin):
         if missing == ["date"]:
             return "What date should I remind you?"
         return "Please mention the date and time to remind you."
+
+    def handle_create_calendar_event(self, text, args):
+        args = dict(args or {})
+        raw_text = str(text or "")
+        title = str(args.get("title") or "").strip() or self._extract_event_title(raw_text)
+        if not title:
+            return "What should I title the event?"
+
+        parsed = self._parse_datetime_parts(
+            " ".join(part for part in [raw_text, str(args.get("datetime") or "")] if part)
+        )
+        minutes = args.get("minutes")
+        if minutes is not None and not parsed.get("remind_at"):
+            try:
+                parsed["remind_at"] = datetime.now() + timedelta(minutes=float(minutes))
+            except Exception:
+                pass
+
+        remind_at = parsed.get("remind_at") or self._combine_date_time(parsed.get("date"), parsed.get("time"))
+        if not remind_at:
+            return f"When should '{title}' be scheduled? Tell me a date and time."
+        if remind_at <= datetime.now():
+            return "That time has already passed. Please mention a future date and time."
+
+        ok, payload = self.create_calendar_event(title, remind_at)
+        if not ok:
+            return payload if isinstance(payload, str) else "I couldn't create that event."
+        return self._format_confirmation(title, remind_at, payload.get("id"))
+
+    def handle_move_calendar_event(self, text, args):
+        args = dict(args or {})
+        raw_text = str(text or "")
+        target = (args.get("title") or "").strip().lower() or self._extract_move_target(raw_text)
+
+        events = [event for event in self.list_calendar_events(limit=50) if event.get("status") == "scheduled"]
+        now = datetime.now()
+        upcoming = []
+        for event in events:
+            remind_at = self._parse_iso_datetime(event.get("remind_at"))
+            if remind_at and remind_at >= now:
+                upcoming.append((remind_at, event))
+        upcoming.sort(key=lambda item: item[0])
+        if not upcoming:
+            return "You don't have any upcoming reminders to move."
+
+        chosen = None
+        if target in {"", "next", "the next one", "next one", "upcoming"}:
+            chosen = upcoming[0]
+        else:
+            time_target = self._extract_clock_target(target)
+            for remind_at, event in upcoming:
+                if target and target in (event.get("title") or "").lower():
+                    chosen = (remind_at, event)
+                    break
+                if time_target is not None:
+                    if remind_at.hour == time_target[0] and remind_at.minute == time_target[1]:
+                        chosen = (remind_at, event)
+                        break
+        if chosen is None:
+            return f"I couldn't find a reminder matching '{target}'."
+
+        old_remind_at, event = chosen
+
+        new_remind_at = self._parse_move_target_time(raw_text, args, old_remind_at)
+        if new_remind_at is None:
+            return f"When should I move '{event.get('title', 'that')}' to?"
+        if new_remind_at <= datetime.now():
+            return "That time has already passed. Please pick a future time."
+
+        ok, reschedule_message = self._reschedule_calendar_event(event, new_remind_at)
+        if not ok:
+            return reschedule_message
+        return (
+            f"Moved '{event.get('title', 'reminder')}' from {self._format_event_time(old_remind_at)} "
+            f"to {self._format_event_time(new_remind_at)}."
+        )
+
+    def _extract_move_target(self, text):
+        for pattern in (
+            r"\b(?:move|reschedule|shift|push|change)\s+(?:the\s+|my\s+)?(.+?)\s+(?:to|by|until|forward|back|ahead)\b",
+            r"\b(?:move|reschedule|shift|push)\s+(?:the\s+)?(next|upcoming)\b",
+        ):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip(" .!?").lower()
+        return ""
+
+    def _extract_clock_target(self, text):
+        match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text, re.IGNORECASE)
+        if not match:
+            return None
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        meridiem = (match.group(3) or "").lower()
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+        return hour, minute
+
+    def _parse_move_target_time(self, raw_text, args, anchor):
+        # Direct datetime string from args wins.
+        explicit = str(args.get("datetime") or "").strip()
+        if explicit:
+            parsed = self._parse_iso_datetime(explicit)
+            if parsed:
+                return parsed
+
+        minutes = args.get("minutes")
+        if minutes is not None:
+            try:
+                return datetime.now() + timedelta(minutes=float(minutes))
+            except Exception:
+                pass
+
+        lowered = raw_text.lower()
+
+        # "shift X by N minutes/hours"
+        shift_match = re.search(
+            r"\bby\s+(\d+(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?)\b",
+            lowered,
+        )
+        if shift_match:
+            amount = float(shift_match.group(1))
+            unit = shift_match.group(2).lower()
+            delta = timedelta(minutes=amount) if unit.startswith("min") else timedelta(hours=amount)
+            if re.search(r"\bback\b|\bearlier\b", lowered):
+                return anchor - delta
+            return anchor + delta
+
+        # "to N pm" / "to 4" — keep the original date, change the clock time.
+        to_match = re.search(
+            r"\bto\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?!\w)",
+            lowered,
+        )
+        if to_match:
+            hour = int(to_match.group(1))
+            minute = int(to_match.group(2) or 0)
+            meridiem = (to_match.group(3) or "").lower()
+            if not meridiem and 1 <= hour <= 7:
+                # Voice "to 4" usually means PM if the original was PM.
+                if anchor.hour >= 12:
+                    hour += 12
+            elif meridiem == "pm" and hour < 12:
+                hour += 12
+            elif meridiem == "am" and hour == 12:
+                hour = 0
+            return anchor.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        # Full "to <natural date>" — let the date/time parser try.
+        parsed = self._parse_datetime_parts(raw_text)
+        candidate = parsed.get("remind_at") or self._combine_date_time(
+            parsed.get("date"), parsed.get("time")
+        )
+        return candidate
+
+    def _reschedule_calendar_event(self, event, new_remind_at):
+        try:
+            event_id = int(event.get("id"))
+        except Exception:
+            return False, "I couldn't identify that reminder to move."
+
+        timer = self._reminder_timers.pop(event_id, None)
+        if timer:
+            timer.cancel()
+        self._cancel_system_notification(event_id)
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "UPDATE calendar_events SET remind_at = ? WHERE id = ?",
+                (new_remind_at.isoformat(timespec="seconds"), event_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            logger.warning("[TaskManager] Failed to reschedule reminder %s: %s", event_id, exc)
+            return False, "I couldn't reschedule that reminder."
+
+        title = event.get("title") or ""
+        if self._schedule_system_notification(event_id, title, new_remind_at):
+            self._system_notification_event_ids.add(event_id)
+        self._schedule_calendar_timer(event_id, title, new_remind_at)
+        self.app.event_bus.publish(
+            "calendar_event_updated",
+            {
+                "id": event_id,
+                "title": title,
+                "remind_at": new_remind_at.isoformat(timespec="seconds"),
+                "status": "scheduled",
+            },
+        )
+        return True, ""
+
+    def handle_cancel_calendar_event(self, text, args):
+        args = dict(args or {})
+        raw_text = str(text or "")
+        target = (args.get("title") or "").strip().lower() or self._extract_cancel_target(raw_text)
+        events = [event for event in self.list_calendar_events(limit=50) if event.get("status") == "scheduled"]
+        if not events:
+            return "You don't have any scheduled reminders to cancel."
+
+        upcoming = []
+        now = datetime.now()
+        for event in events:
+            remind_at = self._parse_iso_datetime(event.get("remind_at"))
+            if remind_at and remind_at >= now:
+                upcoming.append((remind_at, event))
+        upcoming.sort(key=lambda item: item[0])
+        if not upcoming:
+            return "There are no upcoming reminders to cancel."
+
+        chosen = None
+        if target in {"", "next", "the next one", "next one", "upcoming"}:
+            chosen = upcoming[0][1]
+        else:
+            for _, event in upcoming:
+                if target in (event.get("title") or "").lower():
+                    chosen = event
+                    break
+        if chosen is None:
+            return f"I couldn't find a reminder matching '{target}'."
+
+        ok, message = self.delete_calendar_event(chosen.get("id"))
+        if not ok:
+            return message if isinstance(message, str) else "I couldn't cancel that reminder."
+        return f"Cancelled '{chosen.get('title', 'that reminder')}'."
+
+    def _extract_event_title(self, text):
+        for pattern in (
+            r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?(?:event|meeting|reminder|appointment)\s+(?:titled|called|named)\s+(.+)",
+            r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?(?:event|meeting|reminder|appointment)\s+(?:for\s+|to\s+)?(.+)",
+            r"\b(?:add\s+to\s+(?:my\s+)?calendar)\s*[:\-]?\s*(.+)",
+        ):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if not match:
+                continue
+            title = match.group(1).strip(" .!?")
+            title = self._strip_temporal_suffix(title)
+            if title:
+                return title
+        return ""
+
+    def _extract_cancel_target(self, text):
+        for pattern in (
+            r"\b(?:cancel|delete|remove|drop)\s+(?:the\s+|my\s+)?(?:event|reminder|meeting|appointment)\s+(?:titled|called|named|for|about)\s+(.+)",
+            r"\b(?:cancel|delete|remove|drop)\s+(?:the\s+|my\s+)?(.+?)\s+(?:event|reminder|meeting|appointment)",
+            r"\b(?:cancel|delete|remove|drop)\s+(?:the\s+)?(next|upcoming)\s+(?:event|reminder|meeting|appointment)?",
+        ):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                value = match.group(1).strip(" .!?").lower()
+                return self._strip_temporal_suffix(value)
+        return ""
+
+    def _strip_temporal_suffix(self, text):
+        if not text:
+            return text
+        cleaned = text
+        for pattern in (
+            r"\s+\bin\s+\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?)\b.*$",
+            r"\s+\b(?:today|tomorrow|tonight)\b.*$",
+            r"\s+\bat\s+\d.*$",
+            r"\s+\bon\s+\d.*$",
+            r"\s+\bon\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*$",
+            r"\s+\bnext\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b.*$",
+            r"\s+\bfrom\s+\d.*$",
+        ):
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip(" .!?")
 
     def handle_save_note(self, text, args):
         content = args.get("content", "").strip()
@@ -517,10 +828,13 @@ class TaskManagerPlugin(FridayPlugin):
         message = re.sub(r"\s+\b(?:at|on|by|in|for)\b$", "", message, flags=re.IGNORECASE).strip(" .!?")
         return message
 
+    def _memory(self):
+        return getattr(self.app, "memory_service", None) or getattr(self.app, "context_store", None)
+
     def _save_reminder_workflow(self, message, parsed, missing):
-        store = getattr(self.app, "context_store", None)
+        memory = self._memory()
         session_id = getattr(self.app, "session_id", None)
-        if not store or not session_id:
+        if not memory or not session_id:
             return
         target = {"message": message}
         for key in ("date", "time"):
@@ -528,7 +842,7 @@ class TaskManagerPlugin(FridayPlugin):
                 target[key] = parsed[key]
         if parsed.get("remind_at"):
             target["remind_at"] = parsed["remind_at"].isoformat(timespec="seconds")
-        store.save_workflow_state(session_id, REMINDER_WORKFLOW, {
+        memory.save_workflow_state(session_id, REMINDER_WORKFLOW, {
             "status": "pending",
             "pending_slots": missing,
             "last_action": "set_reminder",
@@ -537,10 +851,10 @@ class TaskManagerPlugin(FridayPlugin):
         })
 
     def _clear_reminder_workflow(self):
-        store = getattr(self.app, "context_store", None)
+        memory = self._memory()
         session_id = getattr(self.app, "session_id", None)
-        if store and session_id:
-            store.clear_workflow_state(session_id, REMINDER_WORKFLOW)
+        if memory and session_id:
+            memory.clear_workflow_state(session_id, REMINDER_WORKFLOW)
 
     def _create_calendar_event(self, message, remind_at):
         event_id = self._insert_calendar_event(message, remind_at)

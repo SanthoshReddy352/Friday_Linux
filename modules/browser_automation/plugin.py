@@ -4,12 +4,29 @@ from core.plugin_manager import FridayPlugin
 from .service import BrowserMediaService
 
 
+class _BrowserShutdown:
+    """Tiny adapter so LifecycleManager (which expects .stop()) can drive
+    BrowserMediaService.shutdown() during graceful teardown."""
+
+    def __init__(self, service):
+        self._service = service
+
+    def stop(self):
+        self._service.shutdown()
+
+
 class BrowserAutomationPlugin(FridayPlugin):
     def __init__(self, app):
         super().__init__(app)
         self.name = "BrowserAutomation"
         self.service = BrowserMediaService(app)
         self.app.browser_media_service = self.service
+        lifecycle = getattr(app, "lifecycle", None)
+        if lifecycle and hasattr(lifecycle, "register"):
+            try:
+                lifecycle.register(_BrowserShutdown(self.service), name="browser-media")
+            except Exception:
+                pass
         self.on_load()
 
     def on_load(self):
@@ -68,7 +85,22 @@ class BrowserAutomationPlugin(FridayPlugin):
         }, self.handle_browser_media_control, capability_meta={
             "connectivity": "online",
             "latency_class": "interactive",
-            "permission_mode": "ask_first",
+            "permission_mode": "always_ok",
+            "side_effect_level": "write",
+        })
+
+        self.app.router.register_tool({
+            "name": "search_google",
+            "description": "Search Google for the given query and open the results in a new browser tab.",
+            "parameters": {
+                "query": "string - what to search for",
+                "browser_name": "string - preferred browser, usually chrome",
+            },
+            "context_terms": ["search google", "google search", "look up", "google for"],
+        }, self.handle_search_google, capability_meta={
+            "connectivity": "online",
+            "latency_class": "interactive",
+            "permission_mode": "always_ok",
             "side_effect_level": "write",
         })
 
@@ -127,6 +159,23 @@ class BrowserAutomationPlugin(FridayPlugin):
             if result.handled:
                 return result.response
         return self.service.play_youtube_music(query, browser_name=browser_name)
+
+    def handle_search_google(self, text, args):
+        disabled_reason = self._disabled_reason()
+        if disabled_reason:
+            return disabled_reason
+        query = (args.get("query") or "").strip()
+        if not query:
+            # Pull the search subject out of the raw transcript.
+            lowered = (text or "").lower()
+            for prefix in ("search google for", "google search for", "google for", "look up", "search for", "search google"):
+                if prefix in lowered:
+                    query = lowered.split(prefix, 1)[-1].strip(" ?.!")
+                    break
+        if not query:
+            return "What should I search for, sir?"
+        browser_name = args.get("browser_name") or "chrome"
+        return self.service.search_google(query, browser_name=browser_name)
 
     def handle_browser_media_control(self, text, args):
         disabled_reason = self._disabled_reason()

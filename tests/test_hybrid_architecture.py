@@ -10,6 +10,7 @@ from core.capability_registry import CapabilityRegistry
 from core.context_store import ContextStore
 from core.conversation_agent import ConversationAgent
 from core.delegation import DelegationManager
+from core.kernel.consent import ConsentService
 from core.memory_broker import MemoryBroker
 from core.persona_manager import PersonaManager
 from core.router import CommandRouter
@@ -45,6 +46,7 @@ def build_conversation_app(tmp_path):
     app.persona_manager = persona_manager
     app.memory_broker = MemoryBroker(store, persona_manager)
     app.capability_registry = registry
+    app.consent_service = ConsentService(app.config)
     app.router = CommandRouter(MagicMock())
     app.router.capability_registry = registry
     app.router.assistant_context = assistant_context
@@ -128,6 +130,7 @@ def test_conversation_agent_asks_before_online_current_info(tmp_path):
     app.persona_manager = persona_manager
     app.memory_broker = MemoryBroker(store, persona_manager)
     app.capability_registry = registry
+    app.consent_service = ConsentService()
     app.router = CommandRouter(MagicMock())
     app.router.capability_registry = registry
     app.assistant_context = None

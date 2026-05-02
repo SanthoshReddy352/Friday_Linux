@@ -16,8 +16,10 @@ from .audio_devices import (
 from .safety import VoiceSafetyLayer
 from .wake_detector import WakeWordDetector
 
-# Words that trigger an immediate TTS interrupt (barge-in)
-BARGE_IN_WORDS = {"stop", "wait", "cancel", "enough", "quiet", "silence", "pause"}
+# Words that stop TTS speech only (barge-in)
+BARGE_IN_WORDS = {"stop", "wait", "enough", "quiet", "silence", "pause"}
+# Words that cancel the running TaskRunner turn (separate from TTS barge-in)
+TASK_CANCEL_WORDS = {"cancel", "abort", "terminate", "stop", "nevermind"}
 FILLER_ONLY_WORDS = {"please", "yeah", "yes", "okay", "ok", "go", "uh", "um", "hmm", "hm"}
 LOW_SIGNAL_TRANSCRIPTS = {"you", "yo", "uh", "um", "hmm", "hm", "mm", "mmm", "ah", "oh"}
 MEDIA_NOISE_PHRASES = {
@@ -242,19 +244,33 @@ class STTEngine:
             ):
                 audio_buffer = []
                 silence_frames = 0
+                empty_polls = 0
                 frames_per_second = self.stream_samplerate / self.stream_blocksize
 
                 while self._loop_active:
                     try:
                         # We still wait on the queue, but the callback only fills it if is_listening is True
                         data = self.q.get(timeout=0.1)
+                        empty_polls = 0
                     except queue.Empty:
+                        # During TTS speech, audio_callback drops sub-threshold
+                        # frames so silence_frames never increments via the
+                        # normal path. Treat ~250ms of empty polls as
+                        # end-of-utterance so "Friday stop" finalizes fast.
+                        if audio_buffer and self._tts_is_actively_speaking():
+                            empty_polls += 1
+                            if empty_polls >= 3:
+                                self._transcribe_buffer(audio_buffer)
+                                audio_buffer = []
+                                silence_frames = 0
+                                empty_polls = 0
                         continue
-                        
+
                     # If we somehow got data while not listening, clear it
                     if not self.is_listening:
                         audio_buffer = []
                         silence_frames = 0
+                        empty_polls = 0
                         continue
 
                     rms = float(np.sqrt(np.mean(data ** 2)))
@@ -270,8 +286,16 @@ class STTEngine:
                             audio_buffer.append(data)
 
                     buffer_duration = len(audio_buffer) / frames_per_second if frames_per_second else 0.0
-                    has_enough_audio = buffer_duration >= self.min_utterance_duration
-                    hit_silence_boundary = silence_frames > (self.silence_duration * frames_per_second)
+                    # While TTS is speaking, react faster so "Friday stop"
+                    # cuts speech with minimal latency.
+                    if self._tts_is_actively_speaking():
+                        min_dur = 0.2
+                        silence_dur = 0.3
+                    else:
+                        min_dur = self.min_utterance_duration
+                        silence_dur = self.silence_duration
+                    has_enough_audio = buffer_duration >= min_dur
+                    hit_silence_boundary = silence_frames > (silence_dur * frames_per_second)
                     hit_max_duration = buffer_duration >= self.max_utterance_duration
 
                     if has_enough_audio and (hit_silence_boundary or hit_max_duration):
@@ -289,13 +313,60 @@ class STTEngine:
             self._reject_transcript("empty transcript", log_level="debug")
             return
 
-        wake_found = self._contains_wake_word(text_clean)
-        has_voice_session = self._has_active_wake_session()
-        invoked = wake_found or has_voice_session or self._has_explicit_activation()
-        text_clean = self._clean_command_text(text_clean)
+        # ── DICTATION OVERRIDE ──────────────────────────────────────────────
+        # When a dictation session is active, send transcripts straight to its
+        # buffer and skip wake-word / media gating. Only "end memo" / "cancel
+        # memo" control phrases are routed to the normal pipeline.
+        dictation = getattr(self.app_core, "dictation_service", None)
+        # Strict identity check so MagicMock-wrapped tests don't accidentally
+        # take this branch — only a real DictationService.is_active() returns
+        # a literal True.
+        dictation_active = (
+            dictation is not None
+            and hasattr(dictation, "is_active")
+            and dictation.is_active() is True
+        )
+        if dictation_active:
+            control = dictation.detect_control_phrase(text_clean)
+            if control:
+                residue = dictation.strip_control_phrase(text_clean)
+                if residue:
+                    dictation.append(residue)
+                # Fall through to normal pipeline so the end/cancel tool runs.
+                text_clean = (
+                    "friday end memo" if control == "end" else "friday cancel memo"
+                )
+                wake_found = True
+                has_voice_session = True
+                invoked = True
+                text_clean = self._clean_command_text(text_clean)
+            else:
+                logger.info("[dictation] captured: %s", text_clean[:80])
+                dictation.append(text_clean)
+                self._extend_wake_session()
+                return
+        else:
+            wake_found = self._contains_wake_word(text_clean)
+            has_voice_session = self._has_active_wake_session()
+            invoked = wake_found or has_voice_session or self._has_explicit_activation()
+            text_clean = self._clean_command_text(text_clean)
         if not text_clean:
             self._reject_transcript("empty command after cleanup", log_level="debug")
             return
+
+        # ── TRACK 1: Task cancellation ──────────────────────────────────────
+        # "cancel / abort / terminate" cancels the TaskRunner turn, not just TTS.
+        if self._is_task_cancel_command(text_clean):
+            task_runner = getattr(self.app_core, "task_runner", None)
+            if task_runner and task_runner.is_busy():
+                logger.info("[STT] Task cancel command: '%s'", text_clean)
+                tts = getattr(self.app_core, "tts", None)
+                if tts:
+                    tts.stop()
+                self._clear_audio_queue()
+                self.app_core.cancel_current_task(announce=True)
+                return
+            # No task running → treat as normal barge-in / command
 
         if self._current_mode() == "wake_word" and not invoked:
             self._reject_transcript("waiting for wake word", text_clean, log_level="debug")
@@ -316,14 +387,10 @@ class STTEngine:
         media_mode = getattr(self.app_core, "media_control_mode", False)
         if not isinstance(media_mode, bool):
             media_mode = False
-        if media_mode:
-            words = set(text_clean.split())
-            is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
-            is_wake_up = "wake up" in text_clean
-        else:
-            words = set(text_clean.split())
-            is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
-            is_wake_up = "wake up" in text_clean
+
+        words = set(text_clean.split())
+        is_media_cmd = bool(words & MEDIA_COMMAND_WHITELIST)
+        is_wake_up = "wake up" in text_clean
 
         safety_invoked = invoked
         if media_mode:
@@ -344,31 +411,30 @@ class STTEngine:
             self._reject_transcript(decision.reason, text_clean)
             return
 
-        # Basic barge-in logic
+        # ── TRACK 2: TTS barge-in (stop speech, maybe continue as command) ──
         if self._tts_is_actively_speaking():
-            text_clean_barge = text_clean
-            # In Speaker mode, we strictly require the 'Friday' keyword to avoid
-            # accidental triggers from speaker reflections or room noise.
             is_friday = "friday" in text_clean or any(
                 w in text_clean for w in WAKE_WORD_VARIANTS[1:]
             )
+            # Speaker (non-BT): require wake word or obvious command to avoid echo triggers
             if not self.is_bluetooth_active and not is_friday and not self._looks_like_fresh_command(text_clean):
                 self._reject_transcript("speaker echo during speech", text_clean, log_level="debug")
                 return
 
-            words = set(text_clean.split())
-            if bool(words & BARGE_IN_WORDS) or "friday" in text_clean or self._looks_like_fresh_command(text_clean):
-                logger.info(f"[STT] Barge-in detected during speech: '{text_clean}'")
+            barge_words = set(text_clean.split())
+            if bool(barge_words & (BARGE_IN_WORDS | TASK_CANCEL_WORDS)) or is_friday or self._looks_like_fresh_command(text_clean):
+                logger.info("[STT] Barge-in detected during speech: '%s'", text_clean)
                 if self.app_core.tts:
                     self.app_core.tts.stop()
                 self._clear_audio_queue()
                 self._drop_audio_until = time.monotonic() + 0.15
 
-                for word in BARGE_IN_WORDS | {"friday", "hey"}:
+                # Strip barge-in words; if nothing remains it was a pure TTS-stop
+                for word in BARGE_IN_WORDS | TASK_CANCEL_WORDS | {"friday", "hey"}:
                     text_clean = text_clean.replace(word, "")
                 text_clean = self._clean_command_text(text_clean)
                 if not text_clean or text_clean in FILLER_ONLY_WORDS:
-                    self._reject_transcript("barge-in command empty after cleanup", text_clean, log_level="debug")
+                    self._reject_transcript("barge-in TTS-stop only", text_clean, log_level="debug")
                     return
             else:
                 self._reject_transcript("ignored during speech", text_clean, log_level="debug")
@@ -400,6 +466,16 @@ class STTEngine:
         self.last_rejected_reason = ""
         self._emit_runtime_state()
         self._clear_explicit_activation()
+
+        # ── TRACK 3a: Instant media-control fast path ────────────────────────
+        # When a short utterance is purely a media command (pause/resume/next/
+        # previous/forward/backward/mute), bypass the LLM router and call the
+        # browser worker directly. This is the same idea as voice barge-in:
+        # detect intent locally and react in milliseconds.
+        if self._try_fast_media_command(text_clean):
+            return
+
+        # ── TRACK 3b: Normal command through TaskRunner pipeline ─────────────
         self.app_core.process_input(text_clean, source="voice")
 
     def _maybe_interrupt_for_live_speech(self, rms):
@@ -448,6 +524,113 @@ class STTEngine:
             "show", "launch", "start", "stop",
         )
         return any(text.startswith(starter) for starter in command_starters)
+
+    def _is_task_cancel_command(self, text):
+        """Return True only when the transcript is a *pure* cancellation with no follow-up.
+
+        "cancel" / "friday stop" → True.
+        "friday stop open calculator" → False (has follow-up content).
+        """
+        words = text.split()
+        if not set(words) & TASK_CANCEL_WORDS:
+            return False
+        # Strip wake/cancel/filler words and see if anything substantive remains.
+        _STRIP = TASK_CANCEL_WORDS | {"friday", "hey", "that", "it", "please"}
+        remaining = [w for w in words if w not in _STRIP]
+        return len(remaining) == 0 and len(words) <= 6
+
+    def _try_fast_media_command(self, text):
+        """Send a short pure media-control phrase straight to the browser worker.
+
+        Returns True if the command was handled (caller should not fall through
+        to the LLM router). The fast path only fires when:
+          • there is an active browser media session (media_control_mode), and
+          • the cleaned utterance is short (<=4 words) and is a known
+            media-control verb with no extra content.
+        """
+        media_mode = bool(getattr(self.app_core, "media_control_mode", False))
+        if not media_mode:
+            return False
+
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        words = normalized.split()
+        if len(words) > 4:
+            return False
+
+        # Map short verbs to canonical actions. Order matters: "stop" should
+        # match before "pause" because the user often says "stop the music".
+        action = None
+        if "pause" in words or "stop" in words:
+            action = "pause"
+        elif "resume" in words or "continue" in words or "unpause" in words:
+            action = "resume"
+        elif words == ["play"] or words[:2] == ["play", "it"] or normalized in {"keep playing", "play it"}:
+            action = "resume"
+        elif "next" in words or "skip" in words:
+            action = "next"
+        elif "previous" in words or "back" in words or "rewind" in words or "backward" in words:
+            action = "previous"
+        elif "forward" in words:
+            action = "forward"
+        elif "mute" in words or "unmute" in words:
+            action = "mute"
+        else:
+            return False
+
+        # Reject if the utterance carries non-control nouns ("play closer on
+        # youtube music" must NOT fast-path — it should go through the
+        # play_youtube_music tool).
+        leftover = [
+            w for w in words
+            if w not in {
+                "pause", "stop", "resume", "continue", "unpause", "play", "it",
+                "next", "skip", "previous", "back", "rewind", "backward",
+                "forward", "mute", "unmute", "the", "music", "video", "song",
+                "please", "now",
+            }
+        ]
+        if leftover:
+            return False
+
+        service = getattr(self.app_core, "browser_media_service", None)
+        if service is None or not hasattr(service, "fast_media_command"):
+            return False
+
+        logger.info("[STT] Fast media command: %s", action)
+        threading.Thread(
+            target=service.fast_media_command,
+            args=(action,),
+            daemon=True,
+            name="friday-fastmedia",
+        ).start()
+        return True
+
+    def _dispatch_media_command(self, text):
+        """Publish a media_command event for short media-control phrases."""
+        normalized = text.strip()
+        if any(w in normalized for w in ("pause", "stop it")):
+            action = "pause"
+        elif any(w in normalized for w in ("play", "resume")):
+            action = "play"
+        elif any(w in normalized for w in ("next", "skip")):
+            action = "next"
+        elif any(w in normalized for w in ("previous", "back", "rewind", "backward", "revert")):
+            action = "previous"
+        elif any(w in normalized for w in ("forward",)):
+            action = "forward"
+        else:
+            # Unrecognised — fall through to the full pipeline
+            self.app_core.process_input(normalized, source="voice")
+            return
+
+        event_bus = getattr(self.app_core, "event_bus", None)
+        if event_bus:
+            event_bus.publish("media_command", {"action": action, "text": text})
+        else:
+            # Fallback: normal pipeline
+            self.app_core.process_input(normalized, source="voice")
 
     def _looks_like_short_media_command(self, text):
         normalized = self._sanitize_text(text).strip()

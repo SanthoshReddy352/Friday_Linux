@@ -253,6 +253,11 @@ class WorkspaceFileController:
             if not content:
                 return "I don't have a recent assistant response to save yet."
 
+        if request.action in {"write", "append"} and content and self._looks_like_topic_phrase(content):
+            generated = self._generate_topic_content(content)
+            if generated:
+                content = generated
+
         if request.action in {"write", "append"} and not content:
             self._save_file_workflow_state({
                 "status": "pending",
@@ -448,27 +453,68 @@ class WorkspaceFileController:
             return False
         return query in {basename, stem}
 
+    def _looks_like_topic_phrase(self, content):
+        text = (content or "").strip()
+        if not text:
+            return False
+        if any(ch in text for ch in ".!?\n"):
+            return False
+        words = text.split()
+        if len(words) > 10:
+            return False
+        return True
+
+    def _generate_topic_content(self, topic):
+        topic_clean = re.sub(r"^(?:the|a|an|some|about|on)\s+", "", topic.strip(), flags=re.IGNORECASE)
+        if not topic_clean:
+            return ""
+        router = getattr(self.app, "router", None)
+        llm = router.get_llm() if router and hasattr(router, "get_llm") else None
+        if llm is None:
+            return ""
+        prompt = (
+            f"Write a clear, well-structured short article about {topic_clean}. "
+            "Use a brief title on the first line, then 2-4 short paragraphs. "
+            "Keep it under 350 words. Plain text only, no markdown."
+        )
+        try:
+            if hasattr(llm, "create_chat_completion"):
+                response = llm.create_chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=600,
+                    temperature=0.6,
+                )
+                return (response["choices"][0]["message"]["content"] or "").strip()
+            response = llm(prompt, max_tokens=600, temperature=0.6)
+            return (response["choices"][0].get("text") or "").strip()
+        except Exception as exc:
+            logger.warning("LLM topic-content generation failed for '%s': %s", topic_clean, exc)
+            return ""
+
     def _latest_assistant_text(self):
         assistant_context = getattr(self.app, "assistant_context", None)
         if assistant_context and hasattr(assistant_context, "latest_assistant_text"):
             return assistant_context.latest_assistant_text()
         return ""
 
+    def _memory(self):
+        return getattr(self.app, "memory_service", None) or getattr(self.app, "context_store", None)
+
     def _workflow_state(self):
-        store = getattr(self.app, "context_store", None)
+        memory = self._memory()
         session_id = getattr(self.app, "session_id", None)
-        if not store or not session_id:
+        if not memory or not session_id:
             return {}
-        return store.get_active_workflow(session_id, workflow_name="file_workflow") or {}
+        return memory.get_active_workflow(session_id, workflow_name="file_workflow") or {}
 
     def _save_file_workflow_state(self, state):
-        store = getattr(self.app, "context_store", None)
+        memory = self._memory()
         session_id = getattr(self.app, "session_id", None)
-        if not store or not session_id:
+        if not memory or not session_id:
             return
         payload = dict(state or {})
         payload.setdefault("workflow_name", "file_workflow")
-        store.save_workflow_state(session_id, "file_workflow", payload)
+        memory.save_workflow_state(session_id, "file_workflow", payload)
 
     def _target_payload(self, target_path, extension):
         return {
@@ -511,13 +557,14 @@ class WorkspaceFileController:
 
     def _extract_manage_filename(self, text_lower):
         boundary = r"(?:inside\b|in\b|from\b|within\b|and then\b|then\b|also\b|after that\b|afterwards\b|plus\b|and\b)"
+        det = r"(?:(?:the|a|an|new)\s+)?"
         patterns = (
-            rf"\b(?:to|into|in)\s+(?:the\s+)?file\s+([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
-            rf"\b(?:to|into|in)\s+(?:the\s+)?([a-z0-9][a-z0-9 _\-.]*?)\s+file(?=\s+{boundary}|$)",
+            rf"\b(?:to|into|in)\s+{det}file\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
+            rf"\b(?:to|into|in)\s+{det}([a-z0-9][a-z0-9 _\-.]*?)\s+file(?=\s+{boundary}|$)",
             rf"\b(?:file|document)\s+(?:named|called)\s+([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
-            rf"\b(?:create|make)\s+(?:a\s+)?file\s+(?:named|called)?\s*([a-z0-9][a-z0-9 _\-.]*?)(?=\s+with\s+content|\s+{boundary}|$)",
-            rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+(?:the\s+)?(?:file|document)\s+([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
-            rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+(?:the\s+)?([a-z0-9][a-z0-9 _\-.]*?)\s+(?:file|document)(?=\s+{boundary}|$)",
+            rf"\b(?:create|make)\s+{det}file\s+(?:named|called)?\s*([a-z0-9][a-z0-9 _\-.]*?)(?=\s+with\s+content|\s+{boundary}|$)",
+            rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+{det}(?:file|document)\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
+            rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+{det}([a-z0-9][a-z0-9 _\-.]*?)\s+(?:file|document)(?=\s+{boundary}|$)",
         )
         for pattern in patterns:
             match = re.search(pattern, text_lower)
@@ -526,12 +573,13 @@ class WorkspaceFileController:
         return ""
 
     def _extract_manage_content(self, text):
+        det = r"(?:(?:the|a|an|new)\s+)?"
         patterns = (
             r"\bwith content\b[:\s]+(.+)$",
             r"\bthat says\b[:\s]+(.+)$",
-            r"\bwrite\b[:\s]+(.+?)\s+\b(?:to|into|in)\s+(?:the\s+)?(?:file|document)\b",
-            r"\bappend\b[:\s]+(.+?)\s+\b(?:to|into|in)\s+(?:the\s+)?(?:file|document)\b",
-            r"\badd\b[:\s]+(.+?)\s+\bto\s+(?:the\s+)?(?:file|document)\b",
+            rf"\bwrite\b[:\s]+(.+?)\s+\b(?:to|into|in)\s+{det}(?:file|document)\b",
+            rf"\bappend\b[:\s]+(.+?)\s+\b(?:to|into|in)\s+{det}(?:file|document)\b",
+            rf"\badd\b[:\s]+(.+?)\s+\bto\s+{det}(?:file|document)\b",
             r"\badd\b[:\s]+(.+)$",
             r"\bappend\b[:\s]+(.+)$",
         )

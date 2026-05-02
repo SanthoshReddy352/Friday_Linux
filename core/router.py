@@ -9,14 +9,8 @@ from dataclasses import dataclass
 from core.intent_recognizer import IntentRecognizer
 from core.logger import logger
 from core.model_manager import LocalModelManager
-
-
-@dataclass
-class RoutingDecision:
-    source: str
-    tool_name: str = ""
-    args: dict | None = None
-    spoken_ack: str = ""
+# Re-export RoutingDecision from its new home for backward compatibility.
+from core.routing_state import RoutingDecision, RoutingState
 
 
 class CommandRouter:
@@ -33,9 +27,9 @@ class CommandRouter:
         self.tool_llm = None
         self._llm_lock = threading.Lock()
         self._tool_llm_lock = threading.Lock()
-        # Set to True when voice_response was already published during routing,
-        # so that emit_assistant_message can skip redundant TTS.
-        self._voice_already_spoken = False
+        # Inference locks now live on LocalModelManager (the model owner).
+        # Exposed on the router as @property for backward compatibility with
+        # callers like LLMChatPlugin and ResearchAgentService.
         self._llm_load_failed = False
         self._tool_llm_load_failed = False
         self._last_context = {}
@@ -43,9 +37,11 @@ class CommandRouter:
         self.context_store = None
         self.workflow_orchestrator = None
         self.session_id = None
-        self.current_route_source = "idle"
-        self.current_model_lane = "idle"
-        self.last_routing_decision = RoutingDecision(source="idle", args={})
+        # routing_state and response_finalizer are injected by FridayApp after
+        # construction. A local fallback RoutingState is created so the router
+        # works stand-alone in tests (e.g. test_router_tools.py).
+        self.routing_state: RoutingState = RoutingState()
+        self.response_finalizer = None
         # Use LLM for tool routing by default, but allow override.
         self.enable_llm_tool_routing = os.getenv("FRIDAY_USE_LLM_TOOL_ROUTER", "1") == "1"
         self.routing_policy = "selective_executor"
@@ -65,6 +61,52 @@ class CommandRouter:
             logger.info("[router] Tool model available for loading: %s", self.tool_model_path)
         else:
             logger.warning("Tool model not found at %s. Selective tool reasoning will be unavailable.", self.tool_model_path)
+
+    # ------------------------------------------------------------------
+    # Compatibility properties bridging to routing_state
+    # These let existing callers (e.g. tests) read/write router.*
+    # without knowing about RoutingState yet.
+    # ------------------------------------------------------------------
+
+    @property
+    def _voice_already_spoken(self) -> bool:
+        return self.routing_state.voice_already_spoken
+
+    @_voice_already_spoken.setter
+    def _voice_already_spoken(self, value: bool) -> None:
+        self.routing_state.voice_already_spoken = value
+
+    @property
+    def last_routing_decision(self) -> RoutingDecision:
+        return self.routing_state.last_decision
+
+    @last_routing_decision.setter
+    def last_routing_decision(self, value: RoutingDecision) -> None:
+        self.routing_state.last_decision = value
+
+    @property
+    def current_route_source(self) -> str:
+        return self.routing_state.current_route_source
+
+    @current_route_source.setter
+    def current_route_source(self, value: str) -> None:
+        self.routing_state.current_route_source = value
+
+    @property
+    def current_model_lane(self) -> str:
+        return self.routing_state.current_model_lane
+
+    @current_model_lane.setter
+    def current_model_lane(self, value: str) -> None:
+        self.routing_state.current_model_lane = value
+
+    @property
+    def chat_inference_lock(self):
+        return self.model_manager.inference_lock("chat")
+
+    @property
+    def tool_inference_lock(self):
+        return self.model_manager.inference_lock("tool")
 
     def refresh_runtime_settings(self, config=None):
         self.model_manager.refresh_from_config(config)
@@ -226,12 +268,6 @@ class CommandRouter:
             and (is_complex_action or self._should_use_tool_model(text_clean, best_route, action_plan))
         )
         if should_use_tool_model and self.get_tool_llm():
-            if is_complex_action:
-                tool_label = best_route['spec']['name'].replace('_', ' ')
-                self.event_bus.publish("voice_response", f"Sure, preparing to {tool_label}...")
-            else:
-                self.event_bus.publish("voice_response", "Just a moment...")
-
             result = self._infer_with_tool_llm(text, target_tool=best_route if is_complex_action else None)
             if result is not None:
                 return result
@@ -273,21 +309,7 @@ class CommandRouter:
     # ------------------------------------------------------------------
 
     def _set_routing_decision(self, source, tool_name="", args=None, spoken_ack=""):
-        self.current_route_source = source
-        if source == "gemma_chat":
-            self.current_model_lane = "chat"
-        elif source == "qwen_tool":
-            self.current_model_lane = "tool"
-        elif source == "fallback_clarify":
-            self.current_model_lane = "tool"
-        else:
-            self.current_model_lane = "deterministic"
-        self.last_routing_decision = RoutingDecision(
-            source=source,
-            tool_name=tool_name or "",
-            args=dict(args or {}),
-            spoken_ack=spoken_ack or "",
-        )
+        self.routing_state.set_decision(source, tool_name=tool_name, args=args, spoken_ack=spoken_ack)
 
     # ------------------------------------------------------------------
     # Public compatibility API for the capability broker
@@ -376,8 +398,12 @@ class CommandRouter:
                 ]
             }
 
+        def _call_locked():
+            with self.tool_inference_lock:
+                return _call()
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_call)
+            future = executor.submit(_call_locked)
             try:
                 return future.result(timeout=max(1, self.tool_timeout_ms) / 1000)
             except FutureTimeout as exc:
@@ -637,11 +663,18 @@ class CommandRouter:
         self._remember_tool_use(action["route"]["spec"]["name"], action.get("args", {}))
 
     def _remember_tool_use(self, tool_name, args):
-        assistant_context = getattr(self, "assistant_context", None)
-        if assistant_context:
-            assistant_context.remember_tool_use(tool_name, args)
+        finalizer = getattr(self, "response_finalizer", None)
+        if finalizer:
+            finalizer.remember_tool_use(tool_name, args)
+        else:
+            assistant_context = getattr(self, "assistant_context", None)
+            if assistant_context:
+                assistant_context.remember_tool_use(tool_name, args)
 
     def _finalize_response(self, response):
+        finalizer = getattr(self, "response_finalizer", None)
+        if finalizer:
+            return finalizer.finalize(response)
         if not isinstance(response, str):
             return response
         assistant_context = getattr(self, "assistant_context", None)

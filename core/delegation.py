@@ -130,12 +130,14 @@ class MemoryCuratorAgent:
             else:
                 item_key = key
                 item_value = match.group(1).strip()
-            self.app.context_store.store_fact(item_key, item_value, session_id=session_id, namespace="profile")
+            (getattr(self.app, "memory_service", None) or self.app.context_store).store_fact(
+                item_key, item_value, session_id=session_id, namespace="profile",
+            )
             candidates.append({"key": item_key, "value": item_value, "memory_type": "profile"})
 
         explicit = self.EXPLICIT_MEMORY_PATTERN.search(text)
         if explicit and explicit.group(1).strip():
-            self.app.context_store.store_memory_item(
+            (getattr(self.app, "memory_service", None) or self.app.context_store).store_memory_item(
                 session_id=session_id,
                 content=explicit.group(1).strip(),
                 memory_type="episodic",
