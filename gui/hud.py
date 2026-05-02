@@ -1097,6 +1097,25 @@ class JarvisHUD(QMainWindow):
         self.subtitle_label.setMinimumHeight(220)
         self.subtitle_label.setStyleSheet(text_box_style(font_size=14))
         transcript_panel.body.addWidget(self.subtitle_label)
+
+        # Chat input and send/stop button
+        input_layout = QHBoxLayout()
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(10)
+        
+        self.input_field = QLineEdit()
+        self.input_field.setPlaceholderText("Type a command...")
+        self.input_field.setStyleSheet(text_box_style(font_size=14))
+        self.input_field.returnPressed.connect(self.handle_return_pressed)
+        input_layout.addWidget(self.input_field)
+
+        self.send_button = QPushButton("ENTER")
+        self.send_button.setStyleSheet(button_style())
+        self.send_button.clicked.connect(self.handle_send_button_clicked)
+        input_layout.addWidget(self.send_button)
+
+        transcript_panel.body.addLayout(input_layout)
+
         center.addWidget(transcript_panel, stretch=3)
         root.addLayout(center, 1, 1)
 
@@ -1385,11 +1404,15 @@ class JarvisHUD(QMainWindow):
 
     def _on_turn_started(self, payload):
         self.turn_state = "processing"
+        self.is_processing = True
+        self.update_send_button_state()
         self.reactor.set_state("processing")
         self._append_event("TURN", str((payload or {}).get("text", ""))[:90] if isinstance(payload, dict) else "")
 
     def _on_turn_processing(self, payload):
         self.turn_state = "processing"
+        self.is_processing = True
+        self.update_send_button_state()
         self.reactor.set_state("processing")
         if not isinstance(payload, dict):
             return
@@ -1411,6 +1434,8 @@ class JarvisHUD(QMainWindow):
 
     def _on_turn_finished(self, payload):
         self.turn_state = "idle"
+        self.is_processing = False
+        self.update_send_button_state()
         if isinstance(payload, dict) and payload.get("metrics"):
             metrics = payload["metrics"]
             dur = metrics.get("duration_ms", 0)
@@ -1428,6 +1453,29 @@ class JarvisHUD(QMainWindow):
         err = payload.get("error", "")
         detail = f" — {err[:40]}" if err else ""
         self._append_event("DONE", f"{tool} [{status}] {dur:.0f}ms{detail}")
+
+    def update_send_button_state(self):
+        if not hasattr(self, "send_button"):
+            return
+        if getattr(self, "is_processing", False):
+            self.send_button.setText("■ STOP")
+            self.send_button.setStyleSheet(button_style(danger=True))
+        else:
+            self.send_button.setText("ENTER")
+            self.send_button.setStyleSheet(button_style())
+
+    def handle_return_pressed(self):
+        text = self.input_field.text().strip()
+        if not text:
+            return
+        self.input_field.clear()
+        self.app_core.process_input(text, source="gui")
+
+    def handle_send_button_clicked(self):
+        if getattr(self, "is_processing", False):
+            self.app_core.cancel_current_task(announce=False)
+        else:
+            self.handle_return_pressed()
 
     def stop_speaking(self, _checked=False):
         if getattr(self.app_core, "tts", None):

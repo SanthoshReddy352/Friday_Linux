@@ -225,11 +225,12 @@ class FridayApp:
         self.routing_state.clear_voice_spoken()
         self.emit_message("user", text, source=source)
 
-        if source == "voice":
-            # Pause mic right away; TaskRunner thread resumes it when done.
-            self.event_bus.publish("gui_toggle_mic", False)
-            if self.stt and hasattr(self.stt, "set_processing_state"):
-                self.stt.set_processing_state(True)
+        if source in ("voice", "gui"):
+            if source == "voice":
+                # Pause mic right away; TaskRunner thread resumes it when done.
+                self.event_bus.publish("gui_toggle_mic", False)
+                if self.stt and hasattr(self.stt, "set_processing_state"):
+                    self.stt.set_processing_state(True)
             self.task_runner.submit(text, source)
             return ""
 

@@ -11,29 +11,6 @@ from PyQt5.QtGui import QTextCursor
 
 
 # ------------------------------------------------------------------
-# Background worker — runs process_input() off the main thread
-# ------------------------------------------------------------------
-
-class InputWorker(QObject):
-    """Runs FridayApp.process_input in a QThread to avoid blocking the GUI."""
-    finished = pyqtSignal()
-
-    def __init__(self, app_core, text, source="gui"):
-        super().__init__()
-        self.app_core = app_core
-        self.text = text
-        self.source = source
-
-    def run(self):
-        try:
-            self.app_core.process_input(self.text, source=self.source)
-        except Exception as e:
-            pass
-        finally:
-            self.finished.emit()
-
-
-# ------------------------------------------------------------------
 # Main window
 # ------------------------------------------------------------------
 
@@ -41,6 +18,7 @@ class MainWindow(QMainWindow):
     # Signal used to safely push text to QTextEdit from a background thread
     message_ready = pyqtSignal(object)
     route_ready = pyqtSignal(object)
+    processing_state_changed = pyqtSignal(bool)
 
     def __init__(self, app_core):
         super().__init__()
@@ -55,6 +33,9 @@ class MainWindow(QMainWindow):
         self.app_core.set_gui_callback(self._on_message_from_thread)
         self.message_ready.connect(self.render_message)
         self.route_ready.connect(self._on_route_event)
+        self.processing_state_changed.connect(self.update_send_button_state)
+        
+        self.is_processing = False
 
     def init_ui(self):
         self.setWindowTitle("FRIDAY")
@@ -85,13 +66,13 @@ class MainWindow(QMainWindow):
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("❯ Type a command...")
         self.input_field.setStyleSheet("background-color: #1a1a1a; color: #ffffff; font-family: 'Courier New', Courier, monospace; font-size: 14px; border: 1px solid #333333; border-radius: 4px; padding: 8px;")
-        self.input_field.returnPressed.connect(self.send_message)
+        self.input_field.returnPressed.connect(self.handle_return_pressed)
 
         btn_style = "background-color: #262626; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #333333; border-radius: 4px; padding: 6px 12px;"
 
         self.send_button = QPushButton("Enter")
         self.send_button.setStyleSheet(btn_style)
-        self.send_button.clicked.connect(self.send_message)
+        self.send_button.clicked.connect(self.handle_send_button_clicked)
 
         self.mic_button = QPushButton("Mic: OFF")
         self.mic_button.setCheckable(True)
@@ -127,7 +108,10 @@ class MainWindow(QMainWindow):
         # Subscribe to State Changes
         self.app_core.event_bus.subscribe("gui_toggle_mic", lambda x: self.set_companion_state("listening" if x else "idle"))
         self.app_core.event_bus.subscribe("voice_response", lambda x: self.set_companion_state("speaking"))
-        self.app_core.event_bus.subscribe("turn_started", lambda x: self.set_companion_state("thinking"))
+        self.app_core.event_bus.subscribe("turn_started", lambda x: (
+            self.set_companion_state("thinking"),
+            self.processing_state_changed.emit(True)
+        ))
         self.app_core.event_bus.subscribe("assistant_ack", lambda x: self.set_companion_state("thinking"))
         self.app_core.event_bus.subscribe("assistant_progress", lambda x: self.set_companion_state("thinking"))
         self.app_core.event_bus.subscribe("tool_started", lambda x: (
@@ -135,8 +119,14 @@ class MainWindow(QMainWindow):
             self.route_ready.emit(x),
         ))
         self.app_core.event_bus.subscribe("llm_started", lambda x: self.set_companion_state("thinking"))
-        self.app_core.event_bus.subscribe("turn_completed", lambda x: self.set_companion_state("idle"))
-        self.app_core.event_bus.subscribe("turn_failed", lambda x: self.set_companion_state("idle"))
+        self.app_core.event_bus.subscribe("turn_completed", lambda x: (
+            self.set_companion_state("idle"),
+            self.processing_state_changed.emit(False)
+        ))
+        self.app_core.event_bus.subscribe("turn_failed", lambda x: (
+            self.set_companion_state("idle"),
+            self.processing_state_changed.emit(False)
+        ))
 
     def set_companion_state(self, state):
         if self.companion_state != state:
@@ -183,30 +173,29 @@ class MainWindow(QMainWindow):
     # Async message sending
     # ------------------------------------------------------------------
 
-    def send_message(self):
+    def update_send_button_state(self, is_processing):
+        self.is_processing = is_processing
+        if is_processing:
+            self.send_button.setText("■")
+            self.send_button.setStyleSheet("background-color: #8b0000; color: #ffffff; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #ff0000; border-radius: 4px; padding: 6px 12px;")
+            self.send_button.setToolTip("Stop Task")
+        else:
+            self.send_button.setText("Enter")
+            self.send_button.setStyleSheet("background-color: #262626; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-weight: bold; border: 1px solid #333333; border-radius: 4px; padding: 6px 12px;")
+            self.send_button.setToolTip("Send Message")
+
+    def handle_return_pressed(self):
         text = self.input_field.text().strip()
         if not text:
             return
         self.input_field.clear()
+        self.app_core.process_input(text, source="gui")
 
-        # Disable input while processing to prevent double-sends
-        self.send_button.setEnabled(False)
-        self.input_field.setEnabled(False)
-
-        # Run process_input in a background QThread
-        self._worker_thread = QThread()
-        self._worker = InputWorker(self.app_core, text, source="gui")
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._worker_thread.quit)
-        self._worker.finished.connect(self._on_worker_done)
-        self._worker_thread.start()
-
-    def _on_worker_done(self):
-        """Re-enable input after background processing finishes."""
-        self.send_button.setEnabled(True)
-        self.input_field.setEnabled(True)
-        self.input_field.setFocus()
+    def handle_send_button_clicked(self):
+        if self.is_processing:
+            self.app_core.cancel_current_task(announce=False)
+        else:
+            self.handle_return_pressed()
 
     # ------------------------------------------------------------------
     # Thread-safe GUI callbacks

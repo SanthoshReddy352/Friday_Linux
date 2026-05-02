@@ -97,6 +97,9 @@ class AssistantContext:
         cleaned = re.sub(r"[^\w\s']", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
+        # Fix common typos
+        cleaned = re.sub(r"\bcalender\b", "calendar", cleaned)
+
         previous = None
         while cleaned and cleaned != previous:
             previous = cleaned
