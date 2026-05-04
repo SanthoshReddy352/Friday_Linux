@@ -315,7 +315,8 @@ class TextToSpeech:
 
     def _run_pipeline_with_backend(self, text, run_id, backend):
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = self._runtime_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        if os.name != "nt":
+            env["LD_LIBRARY_PATH"] = self._runtime_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         env["PIPER_DATA_DIR"] = self._runtime_dir
 
         piper_proc = None

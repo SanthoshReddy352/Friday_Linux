@@ -33,7 +33,8 @@ ENV/
 
 # Project Specific
 logs/*.log
-data/*.db
+data/*.db*
+data/*.sqlite3*
 data/browser-profile/
 models/
 piper/

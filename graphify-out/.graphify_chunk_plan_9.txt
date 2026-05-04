@@ -1,6 +1,0 @@
-/home/tricky/Friday_Linux/tests/test_turn_orchestrator.py
-/home/tricky/Friday_Linux/tests/test_browser_automation_service.py
-/home/tricky/Friday_Linux/tests/test_llama.py
-/home/tricky/Friday_Linux/tests/test_hybrid_architecture.py
-/home/tricky/Friday_Linux/tests/test_workflow_orchestration.py
-/home/tricky/Friday_Linux/tests/snapshots/routing_snapshots.yaml
