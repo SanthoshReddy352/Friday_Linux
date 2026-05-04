@@ -146,31 +146,75 @@ class SystemCapabilities:
             if not os.path.isdir(applications_dir):
                 continue
 
-            for entry_name in sorted(os.listdir(applications_dir)):
-                if not entry_name.endswith(".desktop"):
-                    continue
-                entry_path = os.path.join(applications_dir, entry_name)
-                app = self._parse_desktop_file(entry_path)
-                if not app or not app.command:
-                    continue
+            if self.platform == "Windows":
+                for root, _, files in os.walk(applications_dir):
+                    for entry_name in files:
+                        if not entry_name.endswith(".lnk"):
+                            continue
+                        entry_path = os.path.join(root, entry_name)
+                        app = self._parse_lnk_file(entry_path)
+                        if not app:
+                            continue
 
-                key = self._normalize_alias(app.name or app.desktop_id or app.command)
-                existing = apps.get(key)
-                if existing:
-                    existing.aliases.update(app.aliases)
-                    if not existing.exec_line:
-                        existing.exec_line = app.exec_line
-                    continue
+                        key = self._normalize_alias(app.name)
+                        existing = apps.get(key)
+                        if existing:
+                            existing.aliases.update(app.aliases)
+                            continue
 
-                apps[key] = app
-                seen.add(app.command)
+                        apps[key] = app
+                        seen.add(app.command)
+            else:
+                for entry_name in sorted(os.listdir(applications_dir)):
+                    if not entry_name.endswith(".desktop"):
+                        continue
+                    entry_path = os.path.join(applications_dir, entry_name)
+                    app = self._parse_desktop_file(entry_path)
+                    if not app or not app.command:
+                        continue
+
+                    key = self._normalize_alias(app.name or app.desktop_id or app.command)
+                    existing = apps.get(key)
+                    if existing:
+                        existing.aliases.update(app.aliases)
+                        if not existing.exec_line:
+                            existing.exec_line = app.exec_line
+                        continue
+
+                    apps[key] = app
+                    seen.add(app.command)
 
         return apps
 
     def _application_dirs(self):
+        if self.platform == "Windows":
+            return (
+                os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
+                os.path.expandvars(r"%ALLUSERSPROFILE%\Microsoft\Windows\Start Menu\Programs"),
+            )
         return (
             "/usr/share/applications",
             os.path.expanduser("~/.local/share/applications"),
+        )
+
+    def _parse_lnk_file(self, path):
+        name = os.path.splitext(os.path.basename(path))[0]
+        if "uninstall" in name.lower():
+            return None
+        
+        command = path
+        desktop_id = os.path.basename(path)
+        aliases = {
+            self._normalize_alias(name),
+        }
+        aliases.discard("")
+
+        return DesktopApp(
+            name=name,
+            command=command,
+            desktop_id=desktop_id,
+            exec_line=command,
+            aliases=aliases,
         )
 
     def _parse_desktop_file(self, path):

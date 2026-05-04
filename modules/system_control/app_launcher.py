@@ -185,7 +185,10 @@ def _launch_single_application(app_name):
 
     try:
         if os_name == "Windows":
-            subprocess.Popen(f"start {command}", shell=True)
+            try:
+                os.startfile(command)
+            except AttributeError:
+                subprocess.Popen(f'start "" "{command}"', shell=True)
             return f"Opening {canonical or app_name}..."
 
         if os_name == "Linux":

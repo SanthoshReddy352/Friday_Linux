@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import platform
 from dataclasses import dataclass
 
 
@@ -49,6 +50,9 @@ _STARTUP_INPUT_PSEUDO_HINTS = (
 
 
 def list_audio_input_devices():
+    if platform.system() == "Windows":
+        return _list_sounddevice_inputs()
+        
     devices = _list_pipewire_inputs()
     if devices:
         return devices
