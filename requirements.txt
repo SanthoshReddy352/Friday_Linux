@@ -1,0 +1,37 @@
+# --- CORE GUI & UTILS ---
+PyQt6
+PyYAML==6.0.1
+psutil
+PyAutoGUI
+Pillow
+huggingface_hub
+python-dotenv
+requests
+
+# --- VOICE I/O (LOCAL PIPELINE) ---
+faster-whisper
+openwakeword
+llama-cpp-python
+numpy
+sounddevice
+pyttsx3
+
+# --- RESEARCH AGENT ---
+trafilatura
+feedparser
+html2text
+beautifulsoup4
+lxml
+
+# --- AGENTIC FRAMEWORK & STORAGE ---
+langgraph
+langchain-core
+chromadb
+
+# --- BROWSER AUTOMATION ---
+playwright
+selenium
+webdriver-manager
+
+# --- CLI INTERFACE ---
+prompt-toolkit

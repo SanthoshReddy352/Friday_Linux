@@ -1,0 +1,22 @@
+/home/tricky/Friday_Linux/core/reasoning/__init__.py
+/home/tricky/Friday_Linux/core/reasoning/graph_compiler.py
+/home/tricky/Friday_Linux/core/reasoning/route_scorer.py
+/home/tricky/Friday_Linux/core/reasoning/model_router.py
+/home/tricky/Friday_Linux/core/reasoning/workflows/__init__.py
+/home/tricky/Friday_Linux/core/reasoning/workflows/research_mode.py
+/home/tricky/Friday_Linux/core/reasoning/workflows/focus_mode.py
+/home/tricky/Friday_Linux/data/browser-profile/Default/Service Worker/CacheStorage/379f1cbab5b08b6fc9e08681e42d8be311441c88/index.txt
+/home/tricky/Friday_Linux/docs/implementation_plan.md
+/home/tricky/Friday_Linux/docs/refactor_roadmap.md
+/home/tricky/Friday_Linux/docs/testing_plan.md
+/home/tricky/Friday_Linux/docs/development_phases.md
+/home/tricky/Friday_Linux/docs/manual_testing_guide.md
+/home/tricky/Friday_Linux/docs/friday_architecture.md
+/home/tricky/Friday_Linux/docs/whisper_gemma_architecture.md
+/home/tricky/Friday_Linux/docs/architecture.md
+/home/tricky/Friday_Linux/docs/prd.md
+/home/tricky/Friday_Linux/docs/automation_roadmap.md
+/home/tricky/Friday_Linux/docs/clap_trigger_turn_off.md
+/home/tricky/Friday_Linux/docs/image.png
+/home/tricky/Friday_Linux/gui/__init__.py
+/home/tricky/Friday_Linux/gui/hud.py

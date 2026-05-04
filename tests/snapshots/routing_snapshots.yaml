@@ -1,0 +1,298 @@
+# Routing snapshot fixtures
+# ---------------------------------------------------------------------------
+# Each fixture pins the deterministic routing behavior of CommandRouter for a
+# given input. These exist to catch regressions during the Phase 1+ refactor
+# that displaces CommandRouter with the new TurnManager pipeline.
+#
+# Schema:
+#   id          (str)  - unique slug for the fixture
+#   input       (str)  - user text, exactly as it would arrive at process_text
+#   notes       (str)  - human-friendly description of the behavior being locked
+#   expects:
+#     calls    (list) - ordered list of expected tool dispatches
+#       - tool: str  - capability name
+#         args: dict - exact arg subset; only these keys are asserted
+#     response_contains (str, optional) - substring that must appear in result
+#     no_match (bool, optional)         - true when nothing should dispatch
+#
+# These snapshots use the deterministic fallback path only (no LLM loaded),
+# so behavior is reproducible without model files.
+# ---------------------------------------------------------------------------
+
+fixtures:
+  # --- system status family ---------------------------------------------
+  - id: system_info_status
+    input: "what is the system info"
+    notes: "system info phrase routes to status, not cpu/ram subset"
+    expects:
+      calls:
+        - tool: get_system_status
+          args: {}
+
+  - id: cpu_usage_subset
+    input: "what is the cpu usage"
+    notes: "cpu usage is its own tool, not generic system status"
+    expects:
+      calls:
+        - tool: get_cpu_ram
+          args: {}
+
+  - id: ram_usage_subset
+    input: "show me ram usage"
+    notes: "ram usage routes to cpu_ram tool"
+    expects:
+      calls:
+        - tool: get_cpu_ram
+          args: {}
+
+  - id: battery_check
+    input: "how much battery do I have"
+    notes: "battery status fast-path"
+    expects:
+      calls:
+        - tool: get_battery
+          args: {}
+
+  # --- app launching ----------------------------------------------------
+  - id: launch_firefox
+    input: "open firefox"
+    notes: "intent recognizer resolves single-app launch with app_names"
+    expects:
+      calls:
+        - tool: launch_app
+          args:
+            app_names: ["firefox"]
+
+  - id: launch_calculator
+    input: "open calculator"
+    notes: "calculator alias routes to launch_app"
+    expects:
+      calls:
+        - tool: launch_app
+          args:
+            app_names: ["calculator"]
+
+  - id: launch_browser_synonym
+    input: "launch the web browser"
+    notes: "browser context-term hits launch_app"
+    expects:
+      calls:
+        - tool: launch_app
+
+  # --- screenshot -------------------------------------------------------
+  - id: take_screenshot_basic
+    input: "take a screenshot"
+    notes: "screenshot phrase fast-paths to take_screenshot"
+    expects:
+      calls:
+        - tool: take_screenshot
+          args: {}
+
+  - id: capture_screen_synonym
+    input: "capture the screen"
+    notes: "capture-screen synonym still resolves to screenshot"
+    expects:
+      calls:
+        - tool: take_screenshot
+          args: {}
+
+  # --- volume controls --------------------------------------------------
+  - id: volume_up_steps
+    input: "increase the volume 5 times"
+    notes: "step count is parsed as integer, direction up"
+    expects:
+      calls:
+        - tool: set_volume
+          args:
+            direction: "up"
+            steps: 5
+
+  - id: volume_down_default_steps
+    input: "lower the volume"
+    notes: "down direction without explicit steps"
+    expects:
+      calls:
+        - tool: set_volume
+          args:
+            direction: "down"
+
+  - id: volume_absolute_percent
+    input: "set the volume to 50 percent"
+    notes: "absolute percent target replaces step count"
+    expects:
+      calls:
+        - tool: set_volume
+          args:
+            percent: 50
+
+  - id: volume_mute
+    input: "mute the audio"
+    notes: "mute direction"
+    expects:
+      calls:
+        - tool: set_volume
+          args:
+            direction: "mute"
+
+  # --- time / date ------------------------------------------------------
+  - id: time_query
+    input: "what time is it"
+    notes: "time fast-path"
+    expects:
+      calls:
+        - tool: get_time
+          args: {}
+
+  - id: date_query
+    input: "what's today's date"
+    notes: "date fast-path"
+    expects:
+      calls:
+        - tool: get_date
+          args: {}
+
+  # --- multi-action plan ------------------------------------------------
+  - id: multi_open_then_time
+    input: "open firefox and tell me the time"
+    notes: "intent recognizer splits into ordered plan: launch_app, get_time"
+    expects:
+      calls:
+        - tool: launch_app
+        - tool: get_time
+
+  - id: multi_time_then_system
+    input: "what is the time and system info"
+    notes: "two-tool plan in spoken order"
+    expects:
+      calls:
+        - tool: get_time
+        - tool: get_system_status
+
+  - id: multi_system_then_time_misheard
+    input: "what is the system info on time"
+    notes: "split correctly even when phrased awkwardly"
+    expects:
+      calls:
+        - tool: get_system_status
+        - tool: get_time
+
+  # --- file management --------------------------------------------------
+  - id: create_file_named
+    input: "create a file named ironman"
+    notes: "create routes to manage_file with action+filename"
+    expects:
+      calls:
+        - tool: manage_file
+          args:
+            action: "create"
+            filename: "ironman"
+
+  - id: list_folder_desktop
+    input: "list the desktop folder"
+    notes: "folder listing routes to list_folder_contents (complex tool — needs LLM)"
+    expects:
+      router_source_in: ["deterministic", "qwen_tool_planner"]
+
+  # --- world monitor / news --------------------------------------------
+  - id: world_news_via_alias
+    input: "give me the global news brief"
+    notes: "world_monitor matches via its 'global news brief' alias, not bare 'news'"
+    expects:
+      calls:
+        - tool: get_world_monitor_news
+
+  - id: bare_news_falls_through
+    input: "give me the latest news"
+    notes: "bare 'news' has no alias; falls through to llm_chat (current behavior)"
+    expects:
+      calls:
+        - tool: llm_chat
+
+  # --- browser automation (online) -------------------------------------
+  - id: youtube_play_song
+    input: "play despacito on youtube"
+    notes: "play X on youtube routes to play_youtube"
+    expects:
+      calls:
+        - tool: play_youtube
+
+  - id: youtube_music_play
+    input: "play despacito on youtube music"
+    notes: "youtube music variant"
+    expects:
+      calls:
+        - tool: play_youtube_music
+
+  # --- voice runtime ----------------------------------------------------
+  - id: shutdown_assistant
+    input: "shutdown assistant"
+    notes: "shutdown command"
+    expects:
+      calls:
+        - tool: shutdown_assistant
+          args: {}
+
+  - id: shutdown_alias_bye
+    input: "bye"
+    notes: "bye alias still triggers shutdown"
+    expects:
+      calls:
+        - tool: shutdown_assistant
+          args: {}
+
+  - id: enable_voice
+    input: "turn on voice"
+    notes: "enable_voice tool"
+    expects:
+      calls:
+        - tool: enable_voice
+
+  # --- confirmations ----------------------------------------------------
+  # Current behavior: bare confirmations dispatch to confirm_yes/confirm_no
+  # even without a pending state (the handler itself becomes a no-op when
+  # nothing is pending). This is locked here so the refactor preserves it.
+  - id: confirm_yes_basic
+    input: "yes"
+    notes: "bare 'yes' dispatches to confirm_yes (handler decides whether anything is pending)"
+    expects:
+      calls:
+        - tool: confirm_yes
+          args: {}
+
+  - id: confirm_no_basic
+    input: "cancel"
+    notes: "bare 'cancel' dispatches to confirm_no (handler decides whether anything is pending)"
+    expects:
+      calls:
+        - tool: confirm_no
+          args: {}
+
+  # --- llm chat fallback ------------------------------------------------
+  - id: chat_fallback_question
+    input: "tell me a fun fact"
+    notes: "open-ended phrase falls back to llm_chat"
+    expects:
+      calls:
+        - tool: llm_chat
+          args:
+            query: "tell me a fun fact"
+
+  # --- empty / nonsense -------------------------------------------------
+  - id: empty_input
+    input: ""
+    notes: "empty input returns empty response, no dispatch"
+    expects:
+      no_match: true
+
+  - id: pure_punctuation
+    input: "..."
+    notes: "punctuation-only is dropped as noise"
+    expects:
+      no_match: true
+
+  - id: unknown_phrase
+    input: "xyzzy teleport please"
+    notes: "totally unknown phrase falls through to llm_chat (since llm_chat is registered)"
+    expects:
+      calls:
+        - tool: llm_chat

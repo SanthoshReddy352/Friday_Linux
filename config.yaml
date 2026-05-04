@@ -1,0 +1,85 @@
+app:
+  name: FRIDAY
+  version: '0.1'
+  theme: dark
+conversation:
+  listening_mode: persistent
+  online_permission_mode: ask_first
+  wake_session_timeout_s: 12
+  assistant_echo_window_s: 1.8
+  delegate_multi_action_threshold: 2
+  progress_delays_s: []
+capabilities:
+  registry_mode: internal_mcp_compatible
+  allow_external_mcp: false
+  online_skills_enabled: true
+personas:
+  default_persona_id: friday_core
+  auto_memory_capture: aggressive
+models:
+  chat:
+    path: models/gemma-2b-it.gguf
+    preload: true
+    n_ctx: 4096
+    n_batch: 512
+    temperature: 0.7
+  tool:
+    path: models/qwen2.5-7b-instruct.gguf
+    preload: true
+    n_ctx: 2048
+    n_batch: 256
+    temperature: 0.1
+routing:
+  orchestrator: v2
+  policy: selective_executor
+  tool_timeout_ms: 2500
+  tool_max_tokens: 96
+  tool_target_max_tokens: 64
+  tool_top_p: 0.2
+  tool_json_response: true
+  execution_engine: parallel
+  chat_max_tokens: 512
+gui:
+  window_width: 500
+  window_height: 700
+voice:
+  stt_model: base.en
+  stt_compute_type: int8
+  stt_language: en
+  stt_cpu_threads: 8
+  wake_model_path: models/hey_friday.onnx
+  wake_transcript_fallback: true
+  media_max_uninvoked_words: 4
+  input_device:
+    id: 84
+    kind: pipewire
+    label: Nirvana Ion
+modules:
+  greeter:
+    enabled: true
+skills:
+  mode: local_first
+  weather:
+    api_key: ''
+    default_city: Mumbai
+browser_automation:
+  enabled: true
+  allow_online: true
+  preferred_browser: chrome
+  use_system_profile: true
+  chrome_user_data_dir: ''
+  chrome_profile_directory: ''
+world_monitor:
+  api_base_url: https://api.worldmonitor.app
+  web_base_url: https://www.worldmonitor.app
+  feed_api_base_url: https://worldmonitor.app
+  sources:
+    global: https://worldmonitor.app/
+    tech: https://tech.worldmonitor.app/
+    finance: https://finance.worldmonitor.app/
+    commodity: https://commodity.worldmonitor.app/
+    energy: https://energy.worldmonitor.app/
+    good: https://happy.worldmonitor.app/
+  api_key: ''
+  public_dashboard_fallback: true
+  timeout_s: 12
