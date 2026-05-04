@@ -321,7 +321,7 @@ class WorkspaceAgentExtension(Extension):
         except GWSError as exc:
             return f"Couldn't create the event: {exc}"
         event_id = result.get("id", "") if isinstance(result, dict) else ""
-        when = start_dt.strftime("%a %d %b at %-I:%M %p")
+        when = start_dt.strftime("%a %d %b at ") + start_dt.strftime("%I:%M %p").lstrip("0")
         suffix = f" (id: {event_id})" if event_id else ""
         return f"Done, sir. I've added '{summary}' to your calendar for {when}.{suffix}"
 
@@ -588,7 +588,7 @@ def _format_event(event: dict) -> str:
     if when and "T" in when:
         try:
             dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
-            when = dt.strftime("%-d %b at %-I:%M %p")
+            when = str(dt.day) + dt.strftime(" %b at ") + dt.strftime("%I:%M %p").lstrip("0")
         except Exception:
             when = when[:16]
     location = event.get("location") or ""

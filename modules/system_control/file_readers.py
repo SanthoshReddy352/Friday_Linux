@@ -120,6 +120,8 @@ def _read_pdf(filepath, max_chars=MAX_TEXT_CHARS):
         capture_output=True,
         text=True,
         check=False,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         return None

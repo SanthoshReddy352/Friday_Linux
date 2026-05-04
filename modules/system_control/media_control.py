@@ -6,7 +6,7 @@ from core.logger import logger
 def _run_cmd(cmd):
     """Helper to run a shell command and return its exit code and output."""
     try:
-        result = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True)
+        result = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             logger.error(f"Command '{cmd}' failed. stderr: {result.stderr.strip()}")
         return result.returncode == 0
@@ -31,7 +31,15 @@ def set_volume(level="up", steps=1, percent=None):
     try:
         if os_name == "Windows":
             import pyautogui
-            if level == "up":
+            if level == "absolute":
+                target = target_percent if target_percent is not None else 0
+                target = max(0, min(100, int(target)))
+                for _ in range(50):
+                    pyautogui.press('volumedown')
+                for _ in range(target // 2):
+                    pyautogui.press('volumeup')
+                return f"Volume set to ~{target}%."
+            elif level == "up":
                 for _ in range(steps):
                     pyautogui.press('volumeup')
                 return f"Volume increased {steps} step{'s' if steps != 1 else ''}."

@@ -70,7 +70,8 @@ def apply_input_device_selection(target):
         result = subprocess.run(
             [wpctl, "set-default", str(node_id)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -172,6 +173,8 @@ def _list_pipewire_inputs():
         [wpctl, "status"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
@@ -294,6 +297,8 @@ def _pipewire_node_description(node_id):
         [wpctl, "inspect", str(node_id)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
@@ -314,6 +319,8 @@ def _pipewire_node_is_internal_source(node_id):
         [wpctl, "inspect", str(node_id)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:

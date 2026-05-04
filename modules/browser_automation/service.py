@@ -749,10 +749,18 @@ class BrowserMediaService:
             "chrome": ["google-chrome", "google-chrome-stable"],
             "chromium": ["chromium", "chromium-browser"],
         }
+        if _platform.system() == "Windows":
+            candidates["chrome"] = ["chrome.exe", "chrome", 
+                                    r"C:\Program Files\Google\Chrome\Application\chrome.exe", 
+                                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"]
+            candidates["chromium"] = ["chromium.exe", "chromium"]
+            
         for candidate in candidates.get(browser_name, [browser_name]):
             resolved = shutil.which(candidate)
             if resolved:
                 return resolved
+            if _platform.system() == "Windows" and os.path.exists(candidate):
+                return candidate
         return None
 
     def _open_url_fallback(self, url, browser_name, platform, reason="", action_label=""):
@@ -764,19 +772,37 @@ class BrowserMediaService:
 
         try:
             if executable_path:
-                subprocess.Popen(
-                    [executable_path, url],
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                if _platform.system() == "Windows":
+                    subprocess.Popen(
+                        [executable_path, url],
+                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    subprocess.Popen(
+                        [executable_path, url],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             else:
-                subprocess.Popen(
-                    ["xdg-open", url],
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                if _platform.system() == "Windows":
+                    os.startfile(url)
+                elif _platform.system() == "Darwin":
+                    subprocess.Popen(
+                        ["open", url],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    subprocess.Popen(
+                        ["xdg-open", url],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             label = action_label or f"Opening {platform.replace('_', ' ')} in {browser_name}"
             if reason:
                 logger.warning("Browser automation fallback used: %s", reason)
@@ -1182,6 +1208,8 @@ class BrowserMediaService:
                     capture_output=True,
                     text=True,
                     timeout=2,
+                    encoding="utf-8",
+                    errors="replace",
                 )
             except Exception:
                 return ""

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -40,19 +41,19 @@ NELLORE_LON = 79.9865
 NELLORE_TZ = "Asia/Kolkata"
 NELLORE_LABEL = "Nellore, AP, India"
 
-BG = "#020104"
-PANEL_BG = "rgba(7, 8, 14, 230)"
-PANEL_BORDER = "rgba(168, 84, 255, 100)"
-TEXT = "#d9fbff"
-TEXT_DIM = "#8bb7c4"
-CYAN = "#4deaff"
-BLUE = "#4e82ff"
-GREEN = "#5dffbf"
-AMBER = "#ffcc66"
-RED = "#ff6376"
-PURPLE = "#b95cff"
-MAGENTA = "#df7bff"
-MUTED = "#51606b"
+BG = "#0d0d0d"
+PANEL_BG = "rgba(28, 28, 30, 240)"
+PANEL_BORDER = "rgba(255, 255, 255, 25)"
+TEXT = "#ffffff"
+TEXT_DIM = "#8e8e93"
+CYAN = "#64d2ff"
+BLUE = "#0a84ff"
+GREEN = "#32d74b"
+AMBER = "#ffd60a"
+RED = "#ff453a"
+PURPLE = "#bf5af2"
+MAGENTA = "#ff375f"
+MUTED = "#636366"
 
 
 def format_hud_message(role, text, max_chars=HUD_TEXT_MAX_CHARS, max_lines=HUD_TEXT_MAX_LINES):
@@ -176,17 +177,17 @@ def panel_style(border=PANEL_BORDER):
     return (
         f"background-color: {PANEL_BG};"
         f"border: 1px solid {border};"
-        "border-radius: 8px;"
+        "border-radius: 12px;"
     )
 
 
 def label_style(color=TEXT_DIM, size=11, weight="normal"):
     return (
         f"color: {color};"
-        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', 'Helvetica Neue', sans-serif;"
         f"font-size: {size}px;"
         f"font-weight: {weight};"
-        "letter-spacing: 0px;"
+        "letter-spacing: 0.2px;"
         "border: none;"
     )
 
@@ -257,7 +258,7 @@ class ParticleGlobeReactor(QWidget):
         self.wave_phase = 0.0
         self.speech_energy = 0.0
         self._speaking_until = 0.0
-        self.setMinimumSize(520, 520)
+        self.setMinimumSize(250, 200)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
         self.timer.start(24)
@@ -540,7 +541,7 @@ class ClockWeatherWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.weather_thread = None
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(120)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -608,188 +609,45 @@ class ClockWeatherWidget(QWidget):
         self.weather_detail_label.setText(formatted["details"])
 
 
-class CalendarWidget(QWidget):
-    create_requested = pyqtSignal(str, object)
-    delete_requested = pyqtSignal(int)
-
+class SystemStatusWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.events = []
-        self.setMinimumHeight(250)
+        self.setMinimumHeight(150)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        self.calendar.setSelectedDate(QDate.currentDate())
-        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
-        self.calendar.setStyleSheet(
-            "QCalendarWidget {"
-            "background-color: rgba(0, 0, 0, 88);"
-            f"color: {TEXT};"
-            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-            "border: 1px solid rgba(77, 234, 255, 70);"
-            "border-radius: 6px;"
-            "}"
-            "QCalendarWidget QWidget#qt_calendar_navigationbar {"
-            "background-color: rgba(8, 38, 52, 210);"
-            "}"
-            "QCalendarWidget QToolButton {"
-            f"color: {TEXT};"
-            "background-color: transparent;"
-            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-            "font-weight: bold;"
-            "padding: 4px;"
-            "}"
-            "QCalendarWidget QAbstractItemView {"
-            "background-color: rgba(0, 0, 0, 120);"
-            f"color: {TEXT};"
-            f"selection-background-color: {BLUE};"
-            f"selection-color: {TEXT};"
-            "outline: none;"
-            "}"
-        )
-        layout.addWidget(self.calendar)
-
-        self.events_label = QLabel("No scheduled reminders")
-        self.events_label.setStyleSheet(label_style(TEXT_DIM, 11))
-        self.events_label.setWordWrap(True)
-        layout.addWidget(self.events_label)
-
-        self.reminder_title = QLineEdit()
-        self.reminder_title.setPlaceholderText("Reminder")
-        self.reminder_title.setStyleSheet(text_box_style(font_size=11))
-        layout.addWidget(self.reminder_title)
-
-        self.reminder_time = QDateTimeEdit(QDateTime.currentDateTime().addSecs(10 * 60))
-        self.reminder_time.setCalendarPopup(True)
-        self.reminder_time.setDisplayFormat("dd MMM yyyy  hh:mm AP")
-        self.reminder_time.setStyleSheet(combo_style())
-        layout.addWidget(self.reminder_time)
-
-        action_row = QHBoxLayout()
-        action_row.setContentsMargins(0, 0, 0, 0)
-        action_row.setSpacing(8)
-        self.add_button = QPushButton("ADD")
-        self.add_button.setStyleSheet(button_style())
-        self.add_button.clicked.connect(self._emit_create)
-        action_row.addWidget(self.add_button)
-        self.delete_button = QPushButton("DELETE")
-        self.delete_button.setStyleSheet(button_style(danger=True))
-        self.delete_button.clicked.connect(self._emit_delete)
-        action_row.addWidget(self.delete_button)
-        layout.addLayout(action_row)
-
-        self.events_list = QListWidget()
-        self.events_list.setMinimumHeight(92)
-        self.events_list.setStyleSheet(text_box_style(font_size=11))
-        self.events_list.itemSelectionChanged.connect(self._sync_delete_state)
-        layout.addWidget(self.events_list)
-
-        self.editor_status = QLabel("")
-        self.editor_status.setStyleSheet(label_style(TEXT_DIM, 10))
-        self.editor_status.setWordWrap(True)
-        layout.addWidget(self.editor_status)
-
-        self.calendar.selectionChanged.connect(self._sync_editor_date)
-        self._sync_delete_state()
-
-    def set_events(self, events):
-        self.events = list(events or [])
-        self._render_events()
-
-    def add_event(self, event):
-        event = dict(event or {})
-        if not event.get("id"):
-            return
-        self.events = [item for item in self.events if item.get("id") != event.get("id")]
-        self.events.append(event)
-        self._render_events()
-
-    def remove_event(self, event):
-        event_id = dict(event or {}).get("id")
-        if event_id is None:
-            return
-        self.events = [item for item in self.events if item.get("id") != event_id]
-        self._render_events()
-
-    def mark_event_fired(self, event):
-        self.remove_event(event)
-
-    def set_editor_status(self, message, error=False):
-        color = RED if error else TEXT_DIM
-        self.editor_status.setStyleSheet(label_style(color, 10))
-        self.editor_status.setText(str(message or ""))
-
-    def _render_events(self):
-        self._clear_event_highlights()
-        upcoming = []
-        selected_id = self.selected_event_id()
-        self.events_list.clear()
-        for event in sorted(self.events, key=lambda item: str(item.get("remind_at") or "")):
-            if event.get("status") == "fired":
-                continue
-            remind_at = QDateTime.fromString(str(event.get("remind_at") or ""), Qt.DateFormat.ISODate)
-            if not remind_at.isValid():
-                continue
-            self._highlight_date(remind_at.date())
-            upcoming.append(f"{remind_at.toString('dd MMM hh:mm AP')}  {event.get('title', '')}")
-            item = QListWidgetItem(format_calendar_event_item(event))
-            item.setData(Qt.ItemDataRole.UserRole, event.get("id"))
-            self.events_list.addItem(item)
-            if event.get("id") == selected_id:
-                item.setSelected(True)
-        self.events_label.setText("\n".join(upcoming[:4]) if upcoming else "No scheduled reminders")
-        self._sync_delete_state()
-
-    def _clear_event_highlights(self):
-        empty = QTextCharFormat()
-        for offset in range(-365, 731):
-            self.calendar.setDateTextFormat(QDate.currentDate().addDays(offset), empty)
-
-    def _highlight_date(self, date):
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(77, 234, 255, 80))
-        fmt.setForeground(QColor(TEXT))
-        fmt.setFontWeight(QFont.Weight.Bold)
-        self.calendar.setDateTextFormat(date, fmt)
-
-    def selected_event_id(self):
-        item = self.events_list.currentItem()
-        if item is None:
-            return None
-        return item.data(Qt.ItemDataRole.UserRole)
-
-    def _emit_create(self):
-        title = self.reminder_title.text().strip()
-        if not title:
-            self.set_editor_status("Enter a reminder title.", error=True)
-            return
-        self.create_requested.emit(title, self.reminder_time.dateTime().toPyDateTime())
-        self.reminder_title.clear()
-
-    def _emit_delete(self):
-        event_id = self.selected_event_id()
-        if event_id is None:
-            self.set_editor_status("Select a reminder to delete.", error=True)
-            return
-        self.delete_requested.emit(int(event_id))
-
-    def _sync_delete_state(self):
-        self.delete_button.setEnabled(self.selected_event_id() is not None)
-
-    def _sync_editor_date(self):
-        selected = self.calendar.selectedDate()
-        current_time = self.reminder_time.time()
-        self.reminder_time.setDateTime(QDateTime(selected, current_time))
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+        
+        import platform
+        import sys
+        
+        info = [
+            ("OS PLATFORM", f"{platform.system()} {platform.release()}"),
+            ("ARCHITECTURE", platform.machine()),
+            ("PYTHON ENV", sys.version.split()[0]),
+            ("HUD ENGINE", "PyQt6 GPU Accelerated"),
+            ("UI SCALING", "Dynamic Responsive"),
+        ]
+        
+        for label, val in info:
+            row = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
+            v = QLabel(val)
+            v.setStyleSheet(label_style(TEXT, 12))
+            v.setAlignment(Qt.AlignmentFlag.AlignRight)
+            row.addWidget(lbl)
+            row.addStretch(1)
+            row.addWidget(v)
+            layout.addLayout(row)
+            
+        layout.addStretch(1)
 
 
 class PulseBars(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.values = [34, 66, 48, 82, 58, 43]
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(80)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
         self.timer.start(220)
@@ -838,13 +696,12 @@ class ProcessPanel(QWidget):
         self.plugin_area = QTextEdit()
         self.plugin_area.setReadOnly(True)
         self.plugin_area.setStyleSheet(
-            "background-color: rgba(0, 0, 0, 105);"
+            "background-color: transparent;"
             f"color: {TEXT};"
-            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-            "font-size: 12px;"
-            "border: 1px solid rgba(77, 234, 255, 90);"
-            "border-radius: 6px;"
-            "padding: 8px;"
+            "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
+            "font-size: 13px;"
+            "border: none;"
+            "padding: 4px;"
         )
         layout.addWidget(self.plugin_area, stretch=1)
 
@@ -891,8 +748,8 @@ class MicSelector(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(panel_style("rgba(77, 234, 255, 90)"))
-        self.setMinimumWidth(260)
+        self.setStyleSheet(panel_style())
+        self.setMinimumWidth(150)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(8)
@@ -950,41 +807,63 @@ class MicSelector(QFrame):
 
 def button_style(danger=False):
     if danger:
-        return (
-            "background-color: rgba(92, 18, 28, 235);"
-            f"color: {TEXT};"
-            f"border: 1px solid {RED};"
-            "border-radius: 6px;"
-            "padding: 10px;"
-            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-            "font-weight: bold;"
-        )
+        bg = "rgba(255, 69, 58, 200)"
+        hover_bg = "rgba(255, 69, 58, 255)"
+        border = "rgba(255, 255, 255, 40)"
+    else:
+        bg = "rgba(10, 132, 255, 200)"
+        hover_bg = "rgba(10, 132, 255, 255)"
+        border = "rgba(255, 255, 255, 40)"
+    
     return (
-        "background-color: rgba(8, 38, 52, 235);"
+        f"QPushButton {{ background-color: {bg};"
+        f"color: #ffffff;"
+        f"border: 1px solid {border};"
+        "border-radius: 8px;"
+        "padding: 10px 16px;"
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
+        "font-weight: 600; }}"
+        f"QPushButton:hover {{ background-color: {hover_bg}; }}"
+        f"QPushButton:pressed {{ background-color: rgba(255, 255, 255, 50); }}"
+    )
+
+
+def input_style():
+    return (
+        "QDateTimeEdit, QLineEdit, QSpinBox {"
+        "background-color: rgba(44, 44, 46, 230);"
         f"color: {TEXT};"
-        f"border: 1px solid {CYAN};"
-        "border-radius: 6px;"
-        "padding: 10px;"
-        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-        "font-weight: bold;"
+        "border: 1px solid rgba(255, 255, 255, 25);"
+        "border-radius: 8px;"
+        "padding: 8px 12px;"
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
+        "font-size: 13px;"
+        "}"
+        "QDateTimeEdit::drop-down {"
+        "border: none;"
+        "}"
     )
 
 
 def combo_style():
     return (
         "QComboBox {"
-        "background-color: rgba(2, 10, 18, 230);"
+        "background-color: rgba(44, 44, 46, 230);"
         f"color: {TEXT};"
-        "border: 1px solid rgba(77, 234, 255, 115);"
-        "border-radius: 5px;"
-        "padding: 7px;"
-        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
-        "font-size: 12px;"
+        "border: 1px solid rgba(255, 255, 255, 25);"
+        "border-radius: 8px;"
+        "padding: 8px 12px;"
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
+        "font-size: 13px;"
+        "}"
+        "QComboBox::drop-down {"
+        "border: none;"
         "}"
         "QComboBox QAbstractItemView {"
-        "background-color: #06121f;"
+        "background-color: #1c1c1e;"
         f"color: {TEXT};"
         f"selection-background-color: {BLUE};"
+        "border-radius: 8px;"
         "}"
     )
 
@@ -1018,9 +897,6 @@ class JarvisHUD(QMainWindow):
     tool_finished_ready = pyqtSignal(object)
     listening_mode_ready = pyqtSignal(object)
     voice_runtime_ready = pyqtSignal(object)
-    calendar_event_created_ready = pyqtSignal(object)
-    calendar_event_fired_ready = pyqtSignal(object)
-    calendar_event_deleted_ready = pyqtSignal(object)
 
     def __init__(self, app_core):
         super().__init__()
@@ -1031,22 +907,22 @@ class JarvisHUD(QMainWindow):
         self._speaking_until = 0.0
         self._chat_html_parts: list[str] = []
         self._input_worker: _InputWorker | None = None
+        self._current_layout_mode = None
 
         self.setWindowTitle("FRIDAY")
-        self.resize(1500, 920)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(1000, 650)
 
         central = QWidget()
         central.setStyleSheet(f"background-color: {BG}; color: {TEXT};")
         self.setCentralWidget(central)
-        root = QGridLayout(central)
-        root.setContentsMargins(18, 16, 18, 18)
-        root.setHorizontalSpacing(14)
-        root.setVerticalSpacing(14)
+        
+        self.root = QGridLayout(central)
+        self.root.setContentsMargins(24, 24, 24, 24)
+        self.root.setHorizontalSpacing(16)
+        self.root.setVerticalSpacing(16)
 
-        header = self._build_header()
-        root.addWidget(header, 0, 0, 1, 3)
+        self.header_widget = self._build_header()
+        self.root.addWidget(self.header_widget, 0, 0, 1, 3)
 
         left = QVBoxLayout()
         left.setSpacing(14)
@@ -1056,11 +932,11 @@ class JarvisHUD(QMainWindow):
         clock_panel.body.addWidget(self.clock_weather)
         left.addWidget(clock_panel, stretch=3)
 
-        calendar_panel = TechPanel("CALENDAR")
-        calendar_panel.indicator.setText("TODAY")
-        self.calendar_panel = CalendarWidget()
-        calendar_panel.body.addWidget(self.calendar_panel)
-        left.addWidget(calendar_panel, stretch=3)
+        system_panel = TechPanel("SYSTEM SPECS")
+        system_panel.indicator.setText("HOST")
+        self.system_panel = SystemStatusWidget()
+        system_panel.body.addWidget(self.system_panel)
+        left.addWidget(system_panel, stretch=3)
 
         stream_panel = TechPanel("EVENT STREAM")
         self.event_stream = QTextEdit()
@@ -1070,20 +946,23 @@ class JarvisHUD(QMainWindow):
         self.event_stream.setPlainText("FRIDAY boot layer ready.\nVoice bus linked.\nTool registry standing by.")
         stream_panel.body.addWidget(self.event_stream)
         left.addWidget(stream_panel, stretch=2)
-        root.addLayout(left, 1, 0)
+        
+        self.left_widget = QWidget()
+        self.left_widget.setLayout(left)
+        self.root.addWidget(self.left_widget, 1, 0)
 
         center = QVBoxLayout()
         center.setSpacing(14)
         reactor_panel = TechPanel("PARTICLE REACTOR")
         reactor_panel.setStyleSheet(
-            "background-color: #000000;"
-            "border: 1px solid rgba(185, 92, 255, 125);"
-            "border-radius: 8px;"
+            f"background-color: {PANEL_BG};"
+            "border: 1px solid rgba(255, 255, 255, 30);"
+            "border-radius: 12px;"
         )
         reactor_panel.layout.setContentsMargins(10, 10, 10, 12)
         reactor_panel.indicator.setText("CORE")
         self.reactor = ParticleGlobeReactor()
-        self.reactor.setMinimumSize(640, 560)
+        self.reactor.setMinimumSize(250, 200)
         reactor_panel.body.addWidget(self.reactor, stretch=1)
         center.addWidget(reactor_panel, stretch=7)
 
@@ -1094,7 +973,7 @@ class JarvisHUD(QMainWindow):
         self.subtitle_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.subtitle_label.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.subtitle_label.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.subtitle_label.setMinimumHeight(220)
+        self.subtitle_label.setMinimumHeight(100)
         self.subtitle_label.setStyleSheet(text_box_style(font_size=14))
         transcript_panel.body.addWidget(self.subtitle_label)
 
@@ -1117,7 +996,10 @@ class JarvisHUD(QMainWindow):
         transcript_panel.body.addLayout(input_layout)
 
         center.addWidget(transcript_panel, stretch=3)
-        root.addLayout(center, 1, 1)
+        
+        self.center_widget = QWidget()
+        self.center_widget.setLayout(center)
+        self.root.addWidget(self.center_widget, 1, 1)
 
         right = QVBoxLayout()
         right.setSpacing(14)
@@ -1165,12 +1047,17 @@ class JarvisHUD(QMainWindow):
         self.stop_btn.setStyleSheet(button_style(danger=True))
         self.stop_btn.clicked.connect(self.stop_speaking)
         right.addWidget(self.stop_btn)
-        root.addLayout(right, 1, 2)
+        
+        self.right_widget = QWidget()
+        self.right_widget.setLayout(right)
+        self.root.addWidget(self.right_widget, 1, 2)
 
-        root.setColumnStretch(0, 2)
-        root.setColumnStretch(1, 7)
-        root.setColumnStretch(2, 2)
-        root.setRowStretch(1, 1)
+        self.root.setColumnStretch(0, 2)
+        self.root.setColumnStretch(1, 7)
+        self.root.setColumnStretch(2, 2)
+        self.root.setRowStretch(1, 1)
+        self.root.setRowStretch(2, 0)
+        self.root.setRowStretch(3, 0)
 
         self.process_panel = ProcessPanel(self, self.app_core)
         self.process_panel.hide()
@@ -1195,10 +1082,10 @@ class JarvisHUD(QMainWindow):
         title = QLabel("FRIDAY")
         title.setStyleSheet(
             f"color: {TEXT};"
-            "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
             "font-size: 34px;"
-            "font-weight: bold;"
-            "letter-spacing: 0px;"
+            "font-weight: 800;"
+            "letter-spacing: -0.5px;"
             "border: none;"
         )
         layout.addWidget(title)
@@ -1226,13 +1113,8 @@ class JarvisHUD(QMainWindow):
         self.tool_finished_ready.connect(self._on_tool_finished)
         self.listening_mode_ready.connect(self._on_listening_mode_changed)
         self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
-        self.calendar_event_created_ready.connect(self._on_calendar_event_created)
-        self.calendar_event_fired_ready.connect(self._on_calendar_event_fired)
-        self.calendar_event_deleted_ready.connect(self._on_calendar_event_deleted)
 
         self.reactor.clicked.connect(self.toggle_pause_everything)
-        self.calendar_panel.create_requested.connect(self._create_calendar_event_from_gui)
-        self.calendar_panel.delete_requested.connect(self._delete_calendar_event_from_gui)
         bus = self.app_core.event_bus
         bus.subscribe("gui_toggle_mic", lambda payload: self.mic_toggle_ready.emit(payload))
         bus.subscribe("voice_response", lambda payload: self.voice_response_ready.emit(payload))
@@ -1246,11 +1128,7 @@ class JarvisHUD(QMainWindow):
         bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("listening_mode_changed", lambda payload: self.listening_mode_ready.emit(payload))
         bus.subscribe("voice_runtime_state_changed", lambda payload: self.voice_runtime_ready.emit(payload))
-        bus.subscribe("calendar_event_created", lambda payload: self.calendar_event_created_ready.emit(payload))
-        bus.subscribe("calendar_event_fired", lambda payload: self.calendar_event_fired_ready.emit(payload))
-        bus.subscribe("calendar_event_deleted", lambda payload: self.calendar_event_deleted_ready.emit(payload))
         bus.subscribe("system_shutdown", lambda _payload: self.shutdown_signal.emit())
-        self._load_calendar_events()
 
     def toggle_process_panel(self, _checked=False):
         if self.process_panel.isVisible():
@@ -1258,47 +1136,6 @@ class JarvisHUD(QMainWindow):
             return
         self.process_panel.show()
         self.process_panel.raise_()
-
-    def _load_calendar_events(self):
-        manager = getattr(self.app_core, "task_manager", None)
-        if manager and hasattr(manager, "list_calendar_events"):
-            self.calendar_panel.set_events(manager.list_calendar_events())
-
-    def _on_calendar_event_created(self, payload):
-        self.calendar_panel.add_event(payload)
-        if isinstance(payload, dict):
-            self._append_event("REMIND", str(payload.get("title") or "")[:90])
-
-    def _on_calendar_event_fired(self, payload):
-        self.calendar_panel.mark_event_fired(payload)
-
-    def _on_calendar_event_deleted(self, payload):
-        self.calendar_panel.remove_event(payload)
-        self.calendar_panel.set_editor_status("Reminder deleted.")
-        self._append_event("REMIND", "deleted")
-
-    def _create_calendar_event_from_gui(self, title, remind_at):
-        manager = getattr(self.app_core, "task_manager", None)
-        if not manager or not hasattr(manager, "create_calendar_event"):
-            self.calendar_panel.set_editor_status("Reminder manager is not available.", error=True)
-            return
-        ok, result = manager.create_calendar_event(title, remind_at)
-        if ok:
-            self.calendar_panel.set_editor_status("Reminder scheduled.")
-            self._append_event("REMIND", str(title)[:90])
-            return
-        self.calendar_panel.set_editor_status(result, error=True)
-
-    def _delete_calendar_event_from_gui(self, event_id):
-        manager = getattr(self.app_core, "task_manager", None)
-        if not manager or not hasattr(manager, "delete_calendar_event"):
-            self.calendar_panel.set_editor_status("Reminder manager is not available.", error=True)
-            return
-        ok, result = manager.delete_calendar_event(event_id)
-        if ok:
-            self.calendar_panel.set_editor_status(result)
-            return
-        self.calendar_panel.set_editor_status(result, error=True)
 
     def on_voice_mode_selected(self, index):
         try:
@@ -1503,8 +1340,53 @@ class JarvisHUD(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
+            offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            if offset.y() < 80:
+                self.drag_pos = offset
+                event.accept()
+                return
+        
+        self.drag_pos = None
+        super().mousePressEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        w = event.size().width()
+        
+        mode = "narrow" if w < 900 else "wide"
+        if getattr(self, "_current_layout_mode", None) == mode:
+            return
+        self._current_layout_mode = mode
+        
+        # Responsive reflow
+        if mode == "narrow":
+            # Mobile / Tablet (1 column)
+            self.root.addWidget(self.header_widget, 0, 0, 1, 1)
+            self.root.addWidget(self.center_widget, 1, 0, 1, 1)
+            self.root.addWidget(self.left_widget, 2, 0, 1, 1)
+            self.root.addWidget(self.right_widget, 3, 0, 1, 1)
+            
+            self.root.setColumnStretch(0, 1)
+            self.root.setColumnStretch(1, 0)
+            self.root.setColumnStretch(2, 0)
+            
+            self.root.setRowStretch(1, 0)
+            self.root.setRowStretch(2, 0)
+            self.root.setRowStretch(3, 0)
+        else:
+            # Desktop / TV (3 columns)
+            self.root.addWidget(self.header_widget, 0, 0, 1, 3)
+            self.root.addWidget(self.left_widget, 1, 0, 1, 1)
+            self.root.addWidget(self.center_widget, 1, 1, 1, 1)
+            self.root.addWidget(self.right_widget, 1, 2, 1, 1)
+            
+            self.root.setColumnStretch(0, 2)
+            self.root.setColumnStretch(1, 7)
+            self.root.setColumnStretch(2, 2)
+            
+            self.root.setRowStretch(1, 1)
+            self.root.setRowStretch(2, 0)
+            self.root.setRowStretch(3, 0)
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos is not None:
@@ -1518,6 +1400,11 @@ class JarvisHUD(QMainWindow):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+        elif event.key() == Qt.Key.Key_F11:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
 
     def _on_message_from_thread(self, payload):
         self.message_ready.emit(payload)
@@ -1605,18 +1492,58 @@ class JarvisHUD(QMainWindow):
 
 def text_box_style(font_size=13):
     return (
-        "background-color: rgba(0, 0, 0, 88);"
+        "background-color: rgba(20, 20, 22, 180);"
         f"color: {TEXT};"
-        "font-family: 'JetBrains Mono', 'Courier New', monospace;"
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
         f"font-size: {font_size}px;"
-        "border: 1px solid rgba(77, 234, 255, 70);"
-        "border-radius: 6px;"
-        "padding: 8px;"
+        "border: 1px solid rgba(255, 255, 255, 25);"
+        "border-radius: 8px;"
+        "padding: 10px;"
     )
 
 
 def start_hud(app_core):
     app = QApplication(sys.argv)
+    
+    # Global scrollbar style to make it look premium
+    app.setStyleSheet("""
+        QScrollBar:vertical {
+            border: none;
+            background: rgba(255, 255, 255, 10);
+            width: 8px;
+            margin: 0px;
+            border-radius: 4px;
+        }
+        QScrollBar::handle:vertical {
+            background: rgba(255, 255, 255, 40);
+            min-height: 20px;
+            border-radius: 4px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
+        }
+        QScrollBar:horizontal {
+            border: none;
+            background: rgba(255, 255, 255, 10);
+            height: 8px;
+            margin: 0px;
+            border-radius: 4px;
+        }
+        QScrollBar::handle:horizontal {
+            background: rgba(255, 255, 255, 40);
+            min-width: 20px;
+            border-radius: 4px;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+    """)
     window = JarvisHUD(app_core)
-    window.showFullScreen()
+    window.showMaximized()
     sys.exit(app.exec())

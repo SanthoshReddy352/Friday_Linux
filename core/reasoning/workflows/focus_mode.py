@@ -204,6 +204,7 @@ class FocusModeWorkflow:
             previous = subprocess.run(
                 ["gsettings", "get", "org.gnome.desktop.notifications", "show-banners"],
                 capture_output=True, text=True, timeout=2, check=False,
+                encoding="utf-8", errors="replace",
             ).stdout.strip()
         except Exception:
             previous = None

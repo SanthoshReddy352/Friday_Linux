@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import platform as _platform
 import queue
 import re
 import signal
@@ -46,7 +47,10 @@ LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 CLAP_LOG_PATH = os.path.join(LOGS_DIR, "clap_detector.log")
 CLAP_LAUNCH_LOG_PATH = os.path.join(LOGS_DIR, "clap_launch.log")
 
-VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "bin", "python3")
+if _platform.system() == "Windows":
+    VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
+else:
+    VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "bin", "python3")
 MAIN_PY = os.path.join(PROJECT_ROOT, "main.py")
 THIS_SCRIPT = os.path.abspath(__file__)
 DETECTOR_MODULE = "modules.voice_io.clap_detector"
@@ -80,24 +84,43 @@ LOGGER = setup_logger()
 
 
 def _iter_processes():
-    result = subprocess.run(
-        ["ps", "-eo", "pid=,args="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        error = (result.stderr or result.stdout or "unknown error").strip()
-        raise RuntimeError(f"ps failed: {error}")
-
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        pid_text, _, command = line.partition(" ")
-        if not pid_text.isdigit():
-            continue
-        yield int(pid_text), command.strip()
+    if _platform.system() == "Windows":
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/V", "/NH"],
+            capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "unknown error").strip()
+            raise RuntimeError(f"tasklist failed: {error}")
+        import csv
+        import io
+        for row in csv.reader(io.StringIO(result.stdout)):
+            if len(row) < 2:
+                continue
+            try:
+                pid = int(row[1].strip('"'))
+            except (ValueError, IndexError):
+                continue
+            command = row[0].strip('"')
+            yield pid, command
+    else:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "unknown error").strip()
+            raise RuntimeError(f"ps failed: {error}")
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            pid_text, _, command = line.partition(" ")
+            if not pid_text.isdigit():
+                continue
+            yield int(pid_text), command.strip()
 
 
 def _command_matches_target(command, *needles):
@@ -125,14 +148,17 @@ def launch_friday():
     os.makedirs(LOGS_DIR, exist_ok=True)
 
     with open(CLAP_LAUNCH_LOG_PATH, "a", encoding="utf-8") as launch_log:
-        process = subprocess.Popen(
-            [VENV_PYTHON, MAIN_PY],
+        popen_kwargs = dict(
             cwd=PROJECT_ROOT,
             stdin=subprocess.DEVNULL,
             stdout=launch_log,
             stderr=launch_log,
-            start_new_session=True,
         )
+        if _platform.system() == "Windows":
+            popen_kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+        process = subprocess.Popen([VENV_PYTHON, MAIN_PY], **popen_kwargs)
     LOGGER.info("FRIDAY launch requested with pid %s.", process.pid)
 
 
@@ -163,7 +189,13 @@ def stop_existing():
         for pid, command in _iter_processes():
             if pid == current_pid or not _detector_process_matches(command):
                 continue
-            os.kill(pid, signal.SIGTERM)
+            if _platform.system() == "Windows":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/F"],
+                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
             stopped += 1
         return stopped
     except Exception as exc:

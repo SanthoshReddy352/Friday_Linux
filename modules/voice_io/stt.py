@@ -1084,7 +1084,7 @@ class STTEngine:
             return
 
         try:
-            result = subprocess.run([wpctl, "status"], capture_output=True, text=True, check=False)
+            result = subprocess.run([wpctl, "status"], capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 return
 

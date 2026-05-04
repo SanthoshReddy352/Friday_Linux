@@ -1075,7 +1075,7 @@ class TaskManagerPlugin(FridayPlugin):
             str(message),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             if result.returncode == 0:
                 logger.info("[TaskManager] Scheduled system notification unit %s for %s", unit, on_calendar)
                 return True
@@ -1106,7 +1106,8 @@ class TaskManagerPlugin(FridayPlugin):
             logger.debug("[TaskManager] Failed to cancel system notification unit %s: %s", unit_base, exc)
 
     def _format_confirmation(self, message, remind_at, event_id):
-        when = remind_at.strftime("%A, %B %d, %Y at %-I:%M %p")
+        time_str = remind_at.strftime("%I:%M %p").lstrip("0")
+        when = remind_at.strftime("%A, %B %d, %Y") + " at " + time_str
         return f"Got it! I'll remind you to {message} on {when}."
 
     def _get_time(self):

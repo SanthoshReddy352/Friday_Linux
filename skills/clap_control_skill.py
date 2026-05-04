@@ -1,4 +1,5 @@
 import os
+import platform as _platform
 import subprocess
 import json
 from typing import List, Dict, Any, Callable
@@ -47,7 +48,10 @@ class ClapControlSkill(Skill):
         
         clap_script = os.path.join(project_root, "modules", "voice_io", "clap_detector.py")
         autostart_script = os.path.join(project_root, "modules", "voice_io", "register_autostart.py")
-        venv_python = os.path.join(project_root, ".venv", "bin", "python3")
+        if _platform.system() == "Windows":
+            venv_python = os.path.join(project_root, ".venv", "Scripts", "python.exe")
+        else:
+            venv_python = os.path.join(project_root, ".venv", "bin", "python3")
 
         try:
             if not enabled:
@@ -67,11 +71,16 @@ class ClapControlSkill(Skill):
             
             else:
                 # 1. Start the process in background
-                subprocess.Popen([venv_python, clap_script], 
-                                 cwd=project_root,
-                                 stdout=subprocess.DEVNULL, 
-                                 stderr=subprocess.DEVNULL, 
-                                 start_new_session=True)
+                popen_kwargs = dict(
+                    cwd=project_root,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if _platform.system() == "Windows":
+                    popen_kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    popen_kwargs["start_new_session"] = True
+                subprocess.Popen([venv_python, clap_script], **popen_kwargs)
                 status_msg = "Clap trigger is now active."
                 
                 # 2. Handle permanent change
