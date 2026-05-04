@@ -1356,7 +1356,7 @@ class STTEngine:
 
             for sample_rate in sample_rates:
                 for channels in channel_options:
-                    blocksize = max(256, int(sample_rate * 0.05))
+                    blocksize = max(256, int(sample_rate * (0.15 if os.name == "nt" else 0.05)))
                     try:
                         sd.check_input_settings(
                             device=device,

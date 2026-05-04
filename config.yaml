@@ -3,7 +3,7 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: persistent
+  listening_mode: on_demand
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8
@@ -51,9 +51,9 @@ voice:
   wake_transcript_fallback: true
   media_max_uninvoked_words: 4
   input_device:
-    id: 84
-    kind: pipewire
-    label: Nirvana Ion
+    id: 20
+    kind: sounddevice
+    label: Headset (Nirvana Ion)
 modules:
   greeter:
     enabled: true

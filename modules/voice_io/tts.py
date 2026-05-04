@@ -39,7 +39,8 @@ class TextToSpeech:
         )
         self._source_piper_dir = os.path.join(self.project_root, "piper")
         self._runtime_dir = os.path.join(tempfile.gettempdir(), "friday_runtime", "piper")
-        self.piper_path = os.path.join(self._runtime_dir, "piper")
+        self.piper_exe = "piper.exe" if os.name == "nt" else "piper"
+        self.piper_path = os.path.join(self._runtime_dir, self.piper_exe)
         self.aplay_path = shutil.which("aplay")
         self.pw_cat_path = shutil.which("pw-cat")
         self.preferred_playback_backend = os.getenv("FRIDAY_TTS_BACKEND", "auto").strip().lower()
@@ -260,7 +261,7 @@ class TextToSpeech:
             if self._runtime_prepared and os.path.exists(self.piper_path):
                 return True
 
-            source_piper = os.path.join(self._source_piper_dir, "piper")
+            source_piper = os.path.join(self._source_piper_dir, self.piper_exe)
             if not os.path.exists(source_piper):
                 logger.error(f"[TTS] Piper binary not found: {source_piper}")
                 return False
@@ -268,16 +269,26 @@ class TextToSpeech:
             os.makedirs(self._runtime_dir, exist_ok=True)
             self._sync_runtime_dir(self._source_piper_dir, self._runtime_dir)
 
-            for executable in ("piper", "piper_phonemize", "espeak-ng"):
+            for executable in (self.piper_exe, "piper_phonemize", "espeak-ng", "piper_phonemize.dll", "espeak-ng.dll"):
                 runtime_path = os.path.join(self._runtime_dir, executable)
                 if os.path.exists(runtime_path):
-                    os.chmod(runtime_path, os.stat(runtime_path).st_mode | 0o111)
+                    try:
+                        os.chmod(runtime_path, os.stat(runtime_path).st_mode | 0o111)
+                    except Exception:
+                        pass
 
             self._runtime_prepared = os.path.exists(self.piper_path)
             return self._runtime_prepared
 
     def _playback_backends(self):
         available = []
+        import sys
+        sd_script = "import sys, sounddevice as sd; stream = sd.RawOutputStream(samplerate=22050, channels=1, dtype='int16'); stream.start(); [stream.write(chunk) for chunk in iter(lambda: sys.stdin.buffer.read(4096), b'')]; stream.stop(); stream.close()"
+        sd_backend = {
+            "name": "python-sounddevice",
+            "path": sys.executable,
+            "argv": [sys.executable, "-c", sd_script],
+        }
         if self.pw_cat_path:
             available.append({
                 "name": "pw-cat",
@@ -290,6 +301,11 @@ class TextToSpeech:
                 "path": self.aplay_path,
                 "argv": [self.aplay_path, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
             })
+
+        if os.name == "nt":
+            available.insert(0, sd_backend)
+        else:
+            available.append(sd_backend)
 
         if self.preferred_playback_backend in {"pw-cat", "aplay"}:
             preferred = [item for item in available if item["name"] == self.preferred_playback_backend]
@@ -304,6 +320,9 @@ class TextToSpeech:
 
         piper_proc = None
         playback_proc = None
+        playback_thread = None
+        playback_error = None
+
         try:
             piper_proc = subprocess.Popen(
                 [self.piper_path, "--model", self.model_path, "--output_raw"],
@@ -312,34 +331,74 @@ class TextToSpeech:
                 stderr=subprocess.DEVNULL,
                 env=env,
             )
-            playback_proc = subprocess.Popen(
-                backend["argv"],
-                stdin=piper_proc.stdout,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if piper_proc.stdout:
-                piper_proc.stdout.close()
 
-            with self._speak_lock:
-                self._current_processes = [piper_proc, playback_proc]
+            if backend["name"] == "python-sounddevice":
+                import sounddevice as sd
+                def sd_playback_thread():
+                    nonlocal playback_error
+                    try:
+                        stream = sd.RawOutputStream(samplerate=22050, channels=1, dtype='int16')
+                        with stream:
+                            while True:
+                                try:
+                                    chunk = piper_proc.stdout.read(4096)
+                                except ValueError:
+                                    break
+                                if not chunk:
+                                    break
+                                if len(chunk) % 2 != 0:
+                                    chunk += b'\x00'
+                                stream.write(chunk)
+                    except Exception as e:
+                        playback_error = e
+
+                playback_thread = threading.Thread(target=sd_playback_thread, daemon=True)
+                playback_thread.start()
+
+                with self._speak_lock:
+                    self._current_processes = [piper_proc]
+            else:
+                playback_proc = subprocess.Popen(
+                    backend["argv"],
+                    stdin=piper_proc.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=None,
+                )
+                if piper_proc.stdout:
+                    piper_proc.stdout.close()
+
+                with self._speak_lock:
+                    self._current_processes = [piper_proc, playback_proc]
 
             if piper_proc.stdin:
                 piper_proc.stdin.write(text.encode("utf-8"))
                 piper_proc.stdin.close()
 
-            playback_proc.wait()
-            piper_proc.wait()
+            if playback_thread:
+                piper_proc.wait()
+                playback_thread.join(timeout=2.0)
+                playback_rc = 1 if playback_error else 0
+            else:
+                playback_proc.wait()
+                piper_proc.wait()
+                playback_rc = playback_proc.returncode
+
             interrupted = self.interrupt_event.is_set() or run_id != self._run_id
+            
+            if playback_error and not interrupted:
+                logger.error(f"[TTS] Sounddevice playback error: {playback_error}")
+                
             if piper_proc.returncode not in (0, None) and not interrupted:
                 logger.error(f"[TTS] Piper exited with code {piper_proc.returncode}.")
             elif piper_proc.returncode not in (0, None):
                 logger.debug(f"[TTS] Piper interrupted with code {piper_proc.returncode}.")
-            if playback_proc.returncode not in (0, None) and not interrupted:
-                logger.error(f"[TTS] {backend['name']} exited with code {playback_proc.returncode}.")
-            elif playback_proc.returncode not in (0, None):
-                logger.debug(f"[TTS] {backend['name']} interrupted with code {playback_proc.returncode}.")
-            return interrupted, piper_proc.returncode, playback_proc.returncode
+                
+            if playback_rc not in (0, None) and not interrupted:
+                logger.error(f"[TTS] {backend['name']} exited with code {playback_rc}.")
+            elif playback_rc not in (0, None):
+                logger.debug(f"[TTS] {backend['name']} interrupted with code {playback_rc}.")
+                
+            return interrupted, piper_proc.returncode, playback_rc
         finally:
             self._stop_processes([piper_proc, playback_proc])
             with self._speak_lock:

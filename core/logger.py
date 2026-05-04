@@ -25,6 +25,12 @@ class _TraceContextFilter(logging.Filter):
         return True
 
 
+import sys
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 def setup_logger(name="FRIDAY"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -42,13 +48,14 @@ def setup_logger(name="FRIDAY"):
             os.path.join(log_dir, 'friday.log'),
             maxBytes=5*1024*1024,
             backupCount=3,
+            encoding='utf-8'
         )
         file_handler.set_name(FILE_HANDLER_NAME)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-        console_handler = logging.StreamHandler()
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.set_name(CONSOLE_HANDLER_NAME)
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)

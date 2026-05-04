@@ -205,9 +205,31 @@ def _list_sounddevice_inputs():
     except Exception:
         pass
 
+    preferred_api_index = -1
+    import platform
+    if platform.system() == "Windows":
+        try:
+            hostapis = sd.query_hostapis()
+            for i, api in enumerate(hostapis):
+                if "WASAPI" in api.get("name", ""):
+                    preferred_api_index = i
+                    break
+            if preferred_api_index == -1:
+                for i, api in enumerate(hostapis):
+                    if "MME" in api.get("name", ""):
+                        preferred_api_index = i
+                        break
+        except Exception:
+            pass
+
     for index, device in enumerate(sd.query_devices()):
         if device.get("max_input_channels", 0) <= 0:
             continue
+            
+        if preferred_api_index != -1 and device.get("hostapi") != preferred_api_index:
+            if index != default_input:
+                continue
+
         label = device.get("name", f"Input {index}")
         devices.append(
             AudioInputDevice(
