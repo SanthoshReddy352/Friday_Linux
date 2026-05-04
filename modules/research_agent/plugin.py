@@ -23,9 +23,10 @@ class ResearchAgentPlugin(FridayPlugin):
             "description": (
                 "Run an agentic internet research session on a topic. Uses a "
                 "classifier → researcher loop → writer pipeline (inspired by Vane). "
-                "Searches DuckDuckGo and arXiv across multiple iterations, scrapes "
-                "sources, and synthesizes a briefing with numbered citations to "
-                "~/Documents/friday-research/<topic>/. "
+                "Searches a public SearxNG pool across web/academic/social categories "
+                "with per-instance circuit-breakers and DuckDuckGo HTML as a last-"
+                "resort fallback. Scrapes top sources and synthesizes a briefing "
+                "with numbered [N] citations to ~/Documents/friday-research/<topic>/. "
                 f"Modes: {mode_list} (default: {DEFAULT_MODE}). "
                 "Use for 'research X', 'find research papers about X', "
                 "'do a deep dive on X', or 'put together a briefing on X'."

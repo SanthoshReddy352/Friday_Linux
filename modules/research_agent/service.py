@@ -7,9 +7,17 @@ Pipeline
 1. Classifier  – LLM classifies the query: skip_search / academic / discussion,
                  and generates a standalone reformulation of the topic.
 2. Researcher  – Agentic loop where the LLM picks tools each iteration:
-                   web_search · academic_search · scrape_url · done
-   Iteration budgets (from Vane): speed=2, balanced=6, quality=15
+                   web_search · academic_search · social_search · scrape_url · done
+   Iteration budgets (matched to Vane): speed=2, balanced=6, quality=25
 3. Writer      – Final synthesis with numbered [N] citations.
+
+Search backend
+--------------
+Vane queries a SearxNG instance for everything (general / science / social
+categories). We mirror that — see ``searxng_client.SearxNGClient``. Public
+SearxNG instances fail often, so the client maintains a pool with per-
+instance circuit breakers. If the entire pool is unreachable we fall
+through to a DuckDuckGo HTML scrape so the agent always returns *something*.
 
 Outputs  ~/Documents/friday-research/<slug>/
   00-summary.md     ← synthesis with citations
@@ -29,16 +37,34 @@ from datetime import datetime
 from typing import Callable
 from urllib.parse import quote_plus, urlparse
 
-import feedparser
-import html2text as _html2text_lib
 import numpy as np
 import requests
-from bs4 import BeautifulSoup
 
 from core.logger import logger
 
+from .searxng_client import (
+    SearxNGClient,
+    SearxNGError,
+    SearxResult,
+    get_default_client as _get_default_searxng,
+)
+
+# Optional deps — keep imports lazy so the module loads even on a stripped
+# environment. Each fallback path checks for None and degrades gracefully.
 try:
-    import trafilatura
+    from bs4 import BeautifulSoup  # type: ignore
+except ImportError:
+    BeautifulSoup = None  # type: ignore
+
+try:
+    import html2text as _html2text_lib  # type: ignore
+    _HAS_HTML2TEXT = True
+except ImportError:
+    _html2text_lib = None  # type: ignore
+    _HAS_HTML2TEXT = False
+
+try:
+    import trafilatura  # type: ignore
     _HAS_TRAFILATURA = True
 except ImportError:
     _HAS_TRAFILATURA = False
@@ -102,8 +128,16 @@ class ResearchReport:
 # ---------------------------------------------------------------------------
 
 class ResearchAgentService:
-    def __init__(self, app):
+    def __init__(self, app, searx_client: SearxNGClient | None = None):
         self.app = app
+        # Caller can inject a pre-built client (tests, custom pool). Otherwise
+        # we share the process-wide singleton so all research turns benefit
+        # from a common circuit-breaker view.
+        self._searx_override = searx_client
+
+    @property
+    def searx(self) -> SearxNGClient:
+        return self._searx_override or _get_default_searxng()
 
     # ------------------------------------------------------------------
     # Public entry — non-blocking
@@ -337,19 +371,26 @@ class ResearchAgentService:
 
             elif action_name == "web_search":
                 q = (action.get("query") or query).strip()
-                new = self._search_duckduckgo(q, limit=max_sources * 2)
-                # For discussion mode, also search Reddit via DuckDuckGo scoping
-                if classification.get("discussion") and not any("reddit" in s.url for s in new):
-                    reddit = self._search_duckduckgo(f"site:reddit.com {q}", limit=3)
-                    new = new + reddit
+                new = self._search_web(q, limit=max_sources * 2)
+                # In discussion mode, mix in social results so the LLM has
+                # community voices to draw on even if it didn't pick the
+                # social_search tool explicitly.
+                if classification.get("discussion") and not any(self._looks_social(s.url) for s in new):
+                    new = new + self._search_social(q, limit=3)
                 added = self._merge_sources(sources, new, seen_urls, max_sources)
                 action_history.append(f"web_search({q!r}) → {added} new results")
 
             elif action_name == "academic_search":
                 q = (action.get("query") or query).strip()
-                new = self._search_arxiv(q, limit=max(2, max_sources // 2))
+                new = self._search_academic(q, limit=max(3, max_sources // 2))
                 added = self._merge_sources(sources, new, seen_urls, max_sources)
                 action_history.append(f"academic_search({q!r}) → {added} papers")
+
+            elif action_name == "social_search":
+                q = (action.get("query") or query).strip()
+                new = self._search_social(q, limit=max(3, max_sources // 2))
+                added = self._merge_sources(sources, new, seen_urls, max_sources)
+                action_history.append(f"social_search({q!r}) → {added} discussions")
 
             elif action_name == "scrape_url":
                 url = (action.get("url") or "").strip()
@@ -485,19 +526,24 @@ class ResearchAgentService:
         sources_text = self._format_gathered(sources, max_chars=500)
         history_text = "\n".join(f"  {h}" for h in history[-4:]) if history else "  (none)"
 
+        discussion_hint = " (discussion mode is on — prefer social_search for opinions/reviews)" \
+            if classification.get("discussion") else ""
+
         prompt = (
             f'Research topic: "{query}"\n\n'
             f"Sources gathered so far ({len(sources)}):\n{sources_text}\n\n"
             f"Recent actions:\n{history_text}\n\n"
             "Available tools:\n"
-            "  web_search(query)       – search DuckDuckGo for web pages\n"
-            "  academic_search(query)  – search arXiv for research papers\n"
+            "  web_search(query)       – general web search via SearxNG\n"
+            "  academic_search(query)  – research papers (arXiv, Scholar) via SearxNG\n"
+            "  social_search(query)    – Reddit / community discussions via SearxNG\n"
             "  scrape_url(url)         – fetch full content from a specific URL\n"
             "  done()                  – finish research\n\n"
-            f"Iteration {iteration + 1}/{max_iter}.{last_hint}\n"
+            f"Iteration {iteration + 1}/{max_iter}.{last_hint}{discussion_hint}\n"
             "Output ONE JSON action and nothing else:\n"
             '{"action": "web_search", "query": "..."}\n'
             '{"action": "academic_search", "query": "..."}\n'
+            '{"action": "social_search", "query": "..."}\n'
             '{"action": "scrape_url", "url": "https://...", "title": "..."}\n'
             '{"action": "done"}'
         )
@@ -806,8 +852,79 @@ class ResearchAgentService:
     # Search backends
     # ------------------------------------------------------------------
 
-    def _search_duckduckgo(self, topic: str, limit: int) -> list[ResearchSource]:
-        # Try DDG HTML endpoint; retry once on failure
+    # ---- Layered search backends ------------------------------------------
+    #
+    # Priority order is the same Vane uses (SearxNG first), but every layer
+    # has a direct-backend fallback so research never hard-fails on a
+    # transient SearxNG outage. Public SearxNG instances often serve JS
+    # anti-bot challenges instead of results — when that happens, we drop
+    # straight through to the direct backends below.
+
+    def _search_web(self, topic: str, limit: int) -> list[ResearchSource]:
+        """General web search. SearxNG → DuckDuckGo HTML."""
+        searx = self._try_searx(topic, categories=["general"], limit=limit, default_origin="web")
+        if searx:
+            return searx
+        return self._search_duckduckgo_fallback(topic, limit)
+
+    def _search_academic(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Academic search. SearxNG (science) → arXiv API → DDG site:arxiv.org."""
+        searx = self._try_searx(topic, categories=["science"], limit=limit, default_origin="academic")
+        if searx:
+            return searx
+        arxiv = self._search_arxiv_fallback(topic, limit)
+        if arxiv:
+            return arxiv
+        return self._search_duckduckgo_fallback(f"site:arxiv.org {topic}", limit)
+
+    def _search_social(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Discussion search. SearxNG (social) → Reddit JSON → DDG site:reddit.com."""
+        searx = self._try_searx(topic, categories=["social_media"], limit=limit, default_origin="social")
+        if searx:
+            return searx
+        reddit = self._search_reddit_fallback(topic, limit)
+        if reddit:
+            return reddit
+        return self._search_duckduckgo_fallback(f"site:reddit.com {topic}", limit)
+
+    def _try_searx(
+        self, topic: str, *, categories: list[str], limit: int, default_origin: str,
+    ) -> list[ResearchSource]:
+        """Single attempt against the SearxNG pool. Empty list = couldn't get
+        results (caller should fall through). Never raises."""
+        try:
+            results = self.searx.search(topic, categories=categories, max_results=limit)
+        except SearxNGError as exc:
+            logger.info("[research] SearxNG pool unavailable for %s: %s", categories, exc)
+            return []
+        except Exception as exc:
+            logger.warning("[research] SearxNG %s search errored: %s", categories, exc)
+            return []
+        return [self._searx_to_source(r, default_origin=default_origin) for r in results]
+
+    def _searx_to_source(self, r: SearxResult, *, default_origin: str) -> ResearchSource:
+        # Pick a more specific origin label when SearxNG tells us the engine.
+        origin = (r.engine or default_origin or "web").lower().strip() or default_origin
+        return ResearchSource(
+            title=r.title,
+            url=r.url,
+            snippet=r.snippet,
+            origin=origin,
+        )
+
+    def _looks_social(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower()
+        return any(s in host for s in (
+            "reddit.com", "old.reddit.com", "news.ycombinator.com",
+            "stackexchange.com", "stackoverflow.com",
+        ))
+
+    # ---- Fallback backends (used only when SearxNG is unreachable) --------
+
+    def _search_duckduckgo_fallback(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Last-ditch DuckDuckGo HTML scrape used only when the SearxNG pool
+        is fully unreachable. Vane doesn't ship this — it's our safety net
+        so research never hard-fails."""
         for attempt in range(2):
             try:
                 response = requests.get(
@@ -824,14 +941,20 @@ class ResearchAgentService:
                 break
             except Exception as exc:
                 if attempt == 1:
-                    logger.warning("[research] DuckDuckGo search failed: %s", exc)
+                    logger.warning("[research] DuckDuckGo HTML fallback failed: %s", exc)
                     return []
                 time.sleep(1.5)
 
-        soup = BeautifulSoup(response.text, "lxml")
+        if BeautifulSoup is None:
+            logger.warning("[research] beautifulsoup4 not installed — DDG HTML fallback disabled")
+            return []
+
+        try:
+            soup = BeautifulSoup(response.text, "lxml")
+        except Exception:
+            soup = BeautifulSoup(response.text, "html.parser")
         results: list[ResearchSource] = []
 
-        # Primary selectors used by DDG's HTML page
         for node in soup.select("div.result, div.web-result, div.results_links_deep"):
             title_node = node.select_one("a.result__a")
             snippet_node = node.select_one("a.result__snippet, span.result__snippet")
@@ -848,7 +971,6 @@ class ResearchAgentService:
             if len(results) >= limit:
                 break
 
-        # Fallback: scrape any result link if primary selector returned nothing
         if not results:
             for link in soup.select("a.result__a, a[href*='duckduckgo.com/l/?']")[:limit]:
                 title = link.get_text(" ", strip=True)
@@ -860,7 +982,9 @@ class ResearchAgentService:
 
         return results
 
-    def _search_arxiv(self, topic: str, limit: int) -> list[ResearchSource]:
+    def _search_arxiv_fallback(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Direct arXiv Atom feed — parsed without feedparser to avoid an
+        optional dep. Used when SearxNG science pool fails."""
         url = (
             "http://export.arxiv.org/api/query?"
             f"search_query=all:{quote_plus(topic)}&start=0&max_results={int(limit)}"
@@ -872,15 +996,32 @@ class ResearchAgentService:
             )
             response.raise_for_status()
         except Exception as exc:
-            logger.warning("[research] arXiv search failed: %s", exc)
+            logger.warning("[research] arXiv fallback failed: %s", exc)
             return []
 
-        feed = feedparser.parse(response.text)
-        results = []
-        for entry in feed.entries[:limit]:
-            link = entry.get("link") or ""
-            title = (entry.get("title") or "").strip()
-            summary = (entry.get("summary") or "").strip()
+        # Parse the Atom feed with stdlib ElementTree. arXiv's namespace is
+        # the standard Atom one; we strip it for simpler XPath.
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(response.text)
+        except ET.ParseError as exc:
+            logger.warning("[research] arXiv XML parse failed: %s", exc)
+            return []
+
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        results: list[ResearchSource] = []
+        for entry in root.findall("atom:entry", ns)[:limit]:
+            title_el = entry.find("atom:title", ns)
+            summary_el = entry.find("atom:summary", ns)
+            # arXiv puts the abstract page URL in <id>; the alternate <link>
+            # rel="alternate" also points to the same thing.
+            id_el = entry.find("atom:id", ns)
+            link = (id_el.text or "").strip() if id_el is not None else ""
+            title = (title_el.text or "").strip() if title_el is not None else ""
+            # Collapse whitespace inside the title (arXiv wraps long titles)
+            title = re.sub(r"\s+", " ", title)
+            summary = (summary_el.text or "").strip() if summary_el is not None else ""
+            summary = re.sub(r"\s+", " ", summary)
             if not link or not title:
                 continue
             results.append(ResearchSource(
@@ -888,6 +1029,54 @@ class ResearchAgentService:
                 url=link,
                 snippet=summary[:400],
                 origin="arxiv",
+            ))
+        return results
+
+    def _search_reddit_fallback(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Reddit's public JSON search — no auth required, very stable.
+
+        Used when SearxNG social pool fails. More relevant than scraping
+        DuckDuckGo with site:reddit.com because we get post bodies and
+        comment counts directly.
+        """
+        try:
+            response = requests.get(
+                "https://www.reddit.com/search.json",
+                params={"q": topic, "limit": str(int(limit)), "sort": "relevance"},
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                },
+                timeout=REQUEST_TIMEOUT_S,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("[research] Reddit fallback failed: %s", exc)
+            return []
+
+        try:
+            data = response.json()
+        except ValueError:
+            return []
+
+        results: list[ResearchSource] = []
+        for child in (data.get("data", {}) or {}).get("children", [])[:limit]:
+            d = child.get("data") or {}
+            permalink = d.get("permalink") or ""
+            title = (d.get("title") or "").strip()
+            if not permalink or not title:
+                continue
+            url = "https://www.reddit.com" + permalink
+            selftext = (d.get("selftext") or "").strip()
+            subreddit = d.get("subreddit") or ""
+            score = d.get("score") or 0
+            num_comments = d.get("num_comments") or 0
+            snippet = selftext[:400] if selftext else f"r/{subreddit} · {score} pts · {num_comments} comments"
+            results.append(ResearchSource(
+                title=title,
+                url=url,
+                snippet=snippet,
+                origin="reddit",
             ))
         return results
 
@@ -961,20 +1150,36 @@ class ResearchAgentService:
                     return re.sub(r"\n{3,}", "\n\n", text).strip()
             except Exception:
                 pass
-        # html2text fallback (BeautifulSoup + html2text)
-        h2t = _html2text_lib.HTML2Text()
-        h2t.ignore_links = False
-        h2t.ignore_images = True
-        h2t.body_width = 0
-        try:
-            soup = BeautifulSoup(html, "lxml")
-            for tag in ("script", "style", "noscript", "svg", "form", "footer", "header", "nav", "aside"):
-                for node in soup.select(tag):
-                    node.decompose()
-            article = soup.select_one("article") or soup.select_one("main") or soup.body or soup
-            text = h2t.handle(str(article)).strip()
-        except Exception:
-            text = html
+
+        # BeautifulSoup + html2text path. Both are optional — degrade to a
+        # crude tag-strip if either is missing.
+        text = ""
+        if BeautifulSoup is not None and _HAS_HTML2TEXT:
+            try:
+                h2t = _html2text_lib.HTML2Text()
+                h2t.ignore_links = False
+                h2t.ignore_images = True
+                h2t.body_width = 0
+                # Try lxml first (faster) then html.parser as fallback
+                try:
+                    soup = BeautifulSoup(html, "lxml")
+                except Exception:
+                    soup = BeautifulSoup(html, "html.parser")
+                for tag in ("script", "style", "noscript", "svg", "form", "footer", "header", "nav", "aside"):
+                    for node in soup.select(tag):
+                        node.decompose()
+                article = soup.select_one("article") or soup.select_one("main") or soup.body or soup
+                text = h2t.handle(str(article)).strip()
+            except Exception:
+                text = ""
+
+        if not text:
+            # Last-ditch: strip tags with a regex. Ugly but never crashes.
+            text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+            text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"&nbsp;", " ", text)
+
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = re.sub(r"[ \t]+", " ", text)
         return text.strip()
