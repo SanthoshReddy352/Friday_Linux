@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from core.model_output import strip_model_artifacts
+
 
 class ResponseFinalizer:
     def __init__(self, app):
@@ -23,6 +25,7 @@ class ResponseFinalizer:
         """Humanize and run clarification detection on a tool response."""
         if not isinstance(response, str):
             return response
+        response = strip_model_artifacts(response)
         assistant_context = getattr(self._app, "assistant_context", None)
         if assistant_context and hasattr(assistant_context, "humanize_tool_result"):
             response = assistant_context.humanize_tool_result(response)

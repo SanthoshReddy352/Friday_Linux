@@ -635,6 +635,8 @@ class IntentRecognizer:
             rf"\b(?:to|into|in)\s+{det}([a-z0-9][a-z0-9 _\-.]*)\s+file$",
             r"\b(?:file\s+)?(?:named|called)\s+([a-z0-9][a-z0-9 _\-.]*)$",
             rf"\b(?:create|make)\s+{det}file\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*)$",
+            rf"\b(?:to|into|in)\s+{det}(?!file\b|document\b)([a-z0-9][a-z0-9 _\-]*\.(?:pdf|txt|md|json|csv|py|docx))$",
+            rf"\b(?:to|into|in)\s+{det}(?!file\b|document\b)([a-z0-9][a-z0-9 _\-]+?\s+(?:pdf|txt|md|json|csv|py|docx))$",
         )
         for pattern in patterns:
             match = re.search(pattern, clause_lower)

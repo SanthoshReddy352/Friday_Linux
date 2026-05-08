@@ -380,9 +380,7 @@ class CapabilityBroker:
         return ""
 
     def _chat_ack(self, text: str) -> str:
-        if "?" in (text or "") or re.search(r"\b(?:what|why|how|when|where|who)\b", text or ""):
-            return "Let me think that through."
-        return "I'm with you."
+        return ""
 
     def _estimated_latency(self, steps: list[ToolStep]) -> str:
         classes = []

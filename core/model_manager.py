@@ -72,7 +72,7 @@ class LocalModelManager:
         self._profiles = {
             "chat": ModelProfile(
                 role="chat",
-                path=self._resolve_path(self._config_get("models.chat.path", os.path.join(models_dir, "gemma-2b-it.gguf"))),
+                path=self._resolve_path(self._config_get("models.chat.path", os.path.join(models_dir, "mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf"))),
                 preload=bool(self._config_get("models.chat.preload", True)),
                 n_ctx=int(self._config_get("models.chat.n_ctx", 4096)),
                 n_batch=int(self._config_get("models.chat.n_batch", 512)),
@@ -80,7 +80,7 @@ class LocalModelManager:
             ),
             "tool": ModelProfile(
                 role="tool",
-                path=self._resolve_path(self._config_get("models.tool.path", os.path.join(models_dir, "qwen2.5-7b-instruct.gguf"))),
+                path=self._resolve_path(self._config_get("models.tool.path", os.path.join(models_dir, "mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf"))),
                 preload=bool(self._config_get("models.tool.preload", False)),
                 n_ctx=int(self._config_get("models.tool.n_ctx", 4096)),
                 n_batch=int(self._config_get("models.tool.n_batch", 512)),

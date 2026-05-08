@@ -39,6 +39,7 @@ from core.router import CommandRouter
 from core.extensions.loader import ExtensionLoader
 from core.routing_state import RoutingState
 from core.response_finalizer import ResponseFinalizer
+from core.model_output import strip_model_artifacts
 from core.logger import logger
 
 
@@ -350,6 +351,8 @@ class FridayApp:
         self.gui_callback = callback
 
     def emit_message(self, role, text, source=None):
+        if role == "assistant":
+            text = strip_model_artifacts(text)
         payload = {
             "role": role,
             "text": text,

@@ -1,5 +1,6 @@
 from core.plugin_manager import FridayPlugin
 from core.logger import logger
+from core.model_output import strip_model_artifacts, with_no_think_user_message
 import re
 
 
@@ -47,7 +48,7 @@ class LLMChatPlugin(FridayPlugin):
         if llm is None:
             return "My language model isn't loaded right now. Please check the models directory."
 
-        messages = self._build_messages(query)
+        messages = with_no_think_user_message(self._build_messages(query))
 
         logger.debug(f"[LLMChat] Sending chat prompt for: '{query}'")
         try:
@@ -74,7 +75,7 @@ class LLMChatPlugin(FridayPlugin):
         max_tokens = self._chat_max_tokens()
         if not hasattr(llm, "create_chat_completion"):
             res = llm(messages[-1]["content"], max_tokens=max_tokens, temperature=0.7, top_p=0.9)
-            return res["choices"][0]["text"].strip()
+            return strip_model_artifacts(res["choices"][0]["text"])
 
         stream = llm.create_chat_completion(
             messages=messages,
@@ -84,9 +85,10 @@ class LLMChatPlugin(FridayPlugin):
             stream=True,
         )
         if isinstance(stream, dict):
-            return stream["choices"][0]["message"]["content"].strip()
+            return strip_model_artifacts(stream["choices"][0]["message"]["content"])
 
         parts = []
+        visible_text = ""
         sentence_buffer = ""
         first_token_seen = False
         for chunk in stream:
@@ -101,7 +103,16 @@ class LLMChatPlugin(FridayPlugin):
                 if feedback and turn:
                     feedback.emit_llm_first_token(turn)
             parts.append(content)
-            sentence_buffer += content
+            cleaned = strip_model_artifacts("".join(parts))
+            if cleaned == visible_text:
+                continue
+            if cleaned.startswith(visible_text):
+                new_visible = cleaned[len(visible_text):]
+            else:
+                new_visible = cleaned
+                sentence_buffer = ""
+            visible_text = cleaned
+            sentence_buffer += new_visible
             spoken_parts = re.split(r"(?<=[.!?])\s+", sentence_buffer)
             if len(spoken_parts) > 1:
                 spoken_text = " ".join(part for part in spoken_parts[:-1] if part).strip()
@@ -114,7 +125,7 @@ class LLMChatPlugin(FridayPlugin):
             self.app.event_bus.publish("voice_response", sentence_buffer.strip())
             self.app.routing_state.mark_voice_spoken()
 
-        return "".join(parts).strip()
+        return strip_model_artifacts("".join(parts))
 
     def _build_messages(self, new_query):
         assistant_context = getattr(self.app, "assistant_context", None)

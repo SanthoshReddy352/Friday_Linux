@@ -56,6 +56,17 @@ class ResearchAgentPlugin(FridayPlugin):
         topic = (args.get("topic") or "").strip()
         if not topic:
             topic = self._extract_topic(text)
+
+        # Delegate to the conversational planner workflow when one is wired
+        # up — it will gather mode/sources/focus/confirmation step by step
+        # before kicking off the actual research, then ask whether to read
+        # the summary aloud when it's ready.
+        planner = self._get_planner()
+        if planner is not None and getattr(self.app.router, "session_id", None):
+            return planner.begin(topic, self.app.router.session_id)
+
+        # Direct-call fallback (no session / no orchestrator) — keep the old
+        # one-shot behavior so non-interactive callers still work.
         if not topic:
             return "What should I research? Try 'research the latest on quantum dot displays'."
 
@@ -86,6 +97,13 @@ class ResearchAgentPlugin(FridayPlugin):
             f"up to {max_sources} sources), sir. "
             "I'll let you know when the briefing is ready in your friday-research folder."
         )
+
+    def _get_planner(self):
+        """Return the ResearchPlannerWorkflow instance, or None if absent."""
+        orchestrator = getattr(self.app, "workflow_orchestrator", None)
+        if orchestrator is None:
+            return None
+        return orchestrator.workflows.get("research_planner")
 
     # ------------------------------------------------------------------
     # Internals

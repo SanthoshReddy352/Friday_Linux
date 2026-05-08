@@ -129,6 +129,14 @@ def test_sanitize_for_speech_strips_markdown_and_emoji():
     assert result == "Heading\nItem one\ncode\nDone"
 
 
+def test_sanitize_for_speech_removes_thinking_blocks():
+    from modules.voice_io.plugin import sanitize_for_speech
+
+    result = sanitize_for_speech("<think>private draft</think>\nFinal answer.")
+
+    assert result == "Final answer."
+
+
 def test_sanitize_for_speech_makes_links_and_dates_speakable():
     from modules.voice_io.plugin import sanitize_for_speech
 

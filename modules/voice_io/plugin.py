@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from .stt import STTEngine
 from .tts import TextToSpeech
+from core.model_output import strip_model_artifacts
 
 
 EMOJI_PATTERN = re.compile(
@@ -64,7 +65,8 @@ def sanitize_for_speech(text):
     if not text:
         return ""
 
-    cleaned = re.sub(r"<[^>]+>", "", text)
+    cleaned = strip_model_artifacts(text)
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
     cleaned = re.sub(r"https?://[^\s)]+", _replace_url, cleaned)
     cleaned = re.sub(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", _replace_slash_date, cleaned)
     cleaned = re.sub(r"\b(\d{4})-(\d{2})-(\d{2})\b", _replace_iso_date, cleaned)

@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.logger import logger
+from core.model_output import extract_fenced_code, strip_model_artifacts, with_no_think_user_message
 from .file_readers import read_file_preview, summarize_file_offline
 from .file_search import (
     canonicalize_extension,
@@ -247,14 +248,20 @@ class WorkspaceFileController:
         if not target_path:
             return "I couldn't figure out where to create that file."
 
-        content = request.content
-        if request.use_last_assistant_message and not content:
-            content = self._latest_assistant_text()
+        content = strip_model_artifacts(request.content)
+        if request.use_last_assistant_message:
+            content = strip_model_artifacts(self._latest_assistant_text())
             if not content:
                 return "I don't have a recent assistant response to save yet."
+            content = self._prepare_saved_content(content, request)
 
-        if request.action in {"write", "append"} and content and self._looks_like_topic_phrase(content):
-            generated = self._generate_topic_content(content)
+        if (
+            request.action in {"write", "append"}
+            and content
+            and not request.use_last_assistant_message
+            and self._should_generate_content(content, request)
+        ):
+            generated = self._generate_requested_content(content, request)
             if generated:
                 content = generated
 
@@ -331,6 +338,8 @@ class WorkspaceFileController:
         filename = (args.get("filename") or "").strip() or self._extract_manage_filename(text_lower)
         content = (args.get("content") or "").strip() or self._extract_manage_content(text)
         use_last_assistant_message = self._wants_last_assistant_message(text_lower, content)
+        if use_last_assistant_message:
+            content = ""
 
         return FileManageRequest(
             action=action,
@@ -438,6 +447,8 @@ class WorkspaceFileController:
         if not normalized:
             return ""
         if extension and not os.path.splitext(normalized)[1]:
+            ext_word = re.escape(extension.lstrip("."))
+            normalized = re.sub(rf"\s+{ext_word}$", "", normalized, flags=re.IGNORECASE).strip()
             normalized += extension
         return os.path.abspath(os.path.join(folder_path, normalized))
 
@@ -464,31 +475,63 @@ class WorkspaceFileController:
             return False
         return True
 
-    def _generate_topic_content(self, topic):
-        topic_clean = re.sub(r"^(?:the|a|an|some|about|on)\s+", "", topic.strip(), flags=re.IGNORECASE)
-        if not topic_clean:
+    def _should_generate_content(self, content, request):
+        if self._looks_like_topic_phrase(content):
+            return True
+        extension = (request.extension or os.path.splitext(request.filename)[1] or "").lower()
+        if extension in {".py", ".js", ".ts", ".sh", ".html", ".css", ".json"}:
+            return bool(
+                re.search(
+                    r"\b(?:script|program|function|class|app|code|json|html|css|shell|bash)\b",
+                    content,
+                    re.IGNORECASE,
+                )
+            )
+        return False
+
+    def _prepare_saved_content(self, content, request):
+        extension = (request.extension or os.path.splitext(request.filename)[1] or "").lower()
+        if extension in {".py", ".js", ".ts", ".sh", ".html", ".css", ".json"}:
+            return extract_fenced_code(content)
+        return content.strip()
+
+    def _generate_requested_content(self, request_text, request):
+        request_clean = re.sub(r"^(?:the|a|an|some|about|on)\s+", "", request_text.strip(), flags=re.IGNORECASE)
+        if not request_clean:
             return ""
         router = getattr(self.app, "router", None)
         llm = router.get_llm() if router and hasattr(router, "get_llm") else None
         if llm is None:
             return ""
-        prompt = (
-            f"Write a clear, well-structured short article about {topic_clean}. "
-            "Use a brief title on the first line, then 2-4 short paragraphs. "
-            "Keep it under 350 words. Plain text only, no markdown."
-        )
+        extension = (request.extension or os.path.splitext(request.filename)[1] or "").lower()
+        filename = request.filename or "the file"
+        if extension in {".py", ".js", ".ts", ".sh", ".html", ".css", ".json"}:
+            prompt = (
+                f"Create the complete contents for {filename} from this request: {request_clean}\n"
+                "Return only the file contents. No markdown fences, no explanation, no preamble, no chain-of-thought."
+            )
+        else:
+            prompt = (
+                f"Write a clear, well-structured short article about {request_clean}. "
+                "Use a brief title on the first line, then 2-4 short paragraphs. "
+                "Keep it under 350 words. Plain text only, no markdown, no chain-of-thought."
+            )
         try:
             if hasattr(llm, "create_chat_completion"):
                 response = llm.create_chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=with_no_think_user_message([{"role": "user", "content": prompt}]),
                     max_tokens=600,
                     temperature=0.6,
                 )
-                return (response["choices"][0]["message"]["content"] or "").strip()
-            response = llm(prompt, max_tokens=600, temperature=0.6)
-            return (response["choices"][0].get("text") or "").strip()
+                generated = response["choices"][0]["message"]["content"] or ""
+            else:
+                generated = llm(f"{prompt}\n\n/no_think", max_tokens=600, temperature=0.6)["choices"][0].get("text") or ""
+            generated = strip_model_artifacts(generated)
+            if extension in {".py", ".js", ".ts", ".sh", ".html", ".css", ".json"}:
+                generated = extract_fenced_code(generated)
+            return generated.strip()
         except Exception as exc:
-            logger.warning("LLM topic-content generation failed for '%s': %s", topic_clean, exc)
+            logger.warning("LLM file-content generation failed for '%s': %s", request_clean, exc)
             return ""
 
     def _latest_assistant_text(self):
@@ -565,6 +608,8 @@ class WorkspaceFileController:
             rf"\b(?:create|make)\s+{det}file\s+(?:named|called)?\s*([a-z0-9][a-z0-9 _\-.]*?)(?=\s+with\s+content|\s+{boundary}|$)",
             rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+{det}(?:file|document)\s+(?:named\s+|called\s+)?([a-z0-9][a-z0-9 _\-.]*?)(?=\s+{boundary}|$)",
             rf"\b(?:append|add|write|save)\s+.*?\b(?:to|into|in)\s+{det}([a-z0-9][a-z0-9 _\-.]*?)\s+(?:file|document)(?=\s+{boundary}|$)",
+            rf"\b(?:to|into|in)\s+{det}(?!file\b|document\b)([a-z0-9][a-z0-9 _\-]*\.(?:pdf|txt|md|json|csv|py|docx))(?=\s+{boundary}|$)",
+            rf"\b(?:to|into|in)\s+{det}(?!file\b|document\b)([a-z0-9][a-z0-9 _\-]+?\s+(?:pdf|txt|md|json|csv|py|docx))(?=\s+{boundary}|$)",
         )
         for pattern in patterns:
             match = re.search(pattern, text_lower)
@@ -617,13 +662,13 @@ class WorkspaceFileController:
         return "create"
 
     def _wants_last_assistant_message(self, text_lower, content):
-        if content:
-            return False
+        pronoun = r"(?:that|this|it|the answer|the response|my answer|your answer)"
         return bool(
             re.search(
-                r"\b(?:save|write|append|add)\s+(?:that|this|it|the answer|the response|my answer|your answer)\b",
+                rf"\b(?:save|write|append|add)\s+{pronoun}\b(?:\s+(?:to|into|in)\b|$)",
                 text_lower,
             )
+            or (content or "").strip().lower() in {"it", "that", "this", "the answer", "the response"}
         )
 
     def _clean_entity(self, value):

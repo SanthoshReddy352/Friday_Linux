@@ -503,9 +503,14 @@ class WorkflowOrchestrator:
         self.register(ReminderWorkflow(app))
         self.register(CalendarEventWorkflow(app))
         try:
-            from core.reasoning.workflows import ResearchWorkflow, FocusModeWorkflow  # noqa: PLC0415
+            from core.reasoning.workflows import (  # noqa: PLC0415
+                ResearchWorkflow,
+                FocusModeWorkflow,
+                ResearchPlannerWorkflow,
+            )
             self.register(ResearchWorkflow(app))
             self.register(FocusModeWorkflow(app))
+            self.register(ResearchPlannerWorkflow(app))
         except Exception as exc:  # pragma: no cover
             logger.warning("[workflow] Could not load reasoning workflows: %s", exc)
 

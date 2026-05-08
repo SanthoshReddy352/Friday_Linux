@@ -79,7 +79,12 @@ class DialogueManager:
                 return ""
             # Use plan's existing ack if it's already contextual
             existing = getattr(plan, "ack", "")
-            if existing and existing not in ("I'll handle that in steps.", "I'm with you.", "Let me think that through."):
+            generic_ack = existing.strip().lower()
+            if (
+                existing
+                and generic_ack not in ("i'll handle that in steps.", "i'm with you.")
+                and "think that through" not in generic_ack
+            ):
                 return existing
 
         return self._ack_from_text(user_text) or ""

@@ -353,6 +353,74 @@ def test_save_that_uses_latest_assistant_response_for_active_file(monkeypatch, t
     assert (desktop / "coffee").read_text(encoding="utf-8") == "Espresso, drip coffee, and cold brew."
 
 
+def test_write_it_to_python_file_saves_latest_code_block(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = build_test_app(tmp_path)
+    SystemControlPlugin(app)
+    app.router.get_llm = MagicMock()
+    app.assistant_context.record_message(
+        "assistant",
+        "Sure, here it is:\n\n```python\ndef check_pin(pin):\n    return pin == '1234'\n\n"
+        "for number in range(10000):\n    pin = f'{number:04d}'\n    if check_pin(pin):\n"
+        "        print(pin)\n        break\n```\n\nYou can adjust check_pin.",
+    )
+
+    saved = app.router.process_text("write it to a file named break.py")
+
+    assert saved == "Saved break.py."
+    app.router.get_llm.assert_not_called()
+    assert (desktop / "break.py").read_text(encoding="utf-8").startswith("def check_pin(pin):")
+    assert "```" not in (desktop / "break.py").read_text(encoding="utf-8")
+
+
+def test_write_it_to_bare_python_filename_routes_to_file_tool(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = build_test_app(tmp_path)
+    SystemControlPlugin(app)
+    app.router.get_llm = MagicMock()
+    app.assistant_context.record_message(
+        "assistant",
+        "```python\nprint('saved from prior response')\n```",
+    )
+
+    saved = app.router.process_text("write it to hello.py")
+
+    assert saved == "Saved hello.py."
+    app.router.get_llm.assert_not_called()
+    assert (desktop / "hello.py").read_text(encoding="utf-8") == "print('saved from prior response')"
+
+
+def test_write_generated_file_strips_thinking_blocks(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = build_test_app(tmp_path)
+    SystemControlPlugin(app)
+
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": "<think>wrong private article draft</think>\n```python\nprint('ok')\n```"
+                }
+            }
+        ]
+    }
+    app.router.get_llm = MagicMock(return_value=mock_llm)
+
+    result = app.router.process_text("write a Python script that prints ok into a file named psbreak.py")
+
+    sent_messages = mock_llm.create_chat_completion.call_args.kwargs["messages"]
+    assert sent_messages[-1]["content"].endswith("/no_think")
+    assert result == "Saved psbreak.py."
+    assert (desktop / "psbreak.py").read_text(encoding="utf-8") == "print('ok')"
+
+
 def test_browser_workflow_routes_open_and_pause(monkeypatch, tmp_path):
     app = build_test_app(tmp_path)
     BrowserAutomationPlugin(app)

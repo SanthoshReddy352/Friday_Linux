@@ -6,6 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 
+from core.embedding_router import EmbeddingRouter
 from core.intent_recognizer import IntentRecognizer
 from core.logger import logger
 from core.model_manager import LocalModelManager
@@ -37,6 +38,15 @@ class CommandRouter:
         self.context_store = None
         self.workflow_orchestrator = None
         self.session_id = None
+        # Embedding router catches paraphrases that the deterministic layer
+        # misses, before we pay the LLM-router latency. Disabled when the
+        # FRIDAY_DISABLE_EMBED_ROUTER env var is set.
+        self.embedding_router = None
+        if os.getenv("FRIDAY_DISABLE_EMBED_ROUTER") != "1":
+            try:
+                self.embedding_router = EmbeddingRouter()
+            except Exception as exc:
+                logger.warning("[router] Embedding router unavailable: %s", exc)
         # routing_state and response_finalizer are injected by FridayApp after
         # construction. A local fallback RoutingState is created so the router
         # works stand-alone in tests (e.g. test_router_tools.py).
@@ -148,12 +158,17 @@ class CommandRouter:
             "aliases": aliases,
             "patterns": patterns,
             "context_terms": self._build_context_terms(spec),
+            "capability_meta": capability_meta or {},
         }
         self.tools.append(route)
         self._tools_by_name[spec["name"]] = route
         self._tool_aliases[spec["name"]] = aliases
         self._tool_patterns[spec["name"]] = patterns
         self._tools_prompt_cache = None
+        # Embedding index becomes stale on every tool registration; mark it
+        # for rebuild on the next route() call.
+        if self.embedding_router is not None:
+            self.embedding_router._index_signature = ""
         capability_registry = getattr(self, "capability_registry", None)
         if capability_registry is not None:
             capability_registry.register_tool(spec, callback, metadata=capability_meta)
@@ -260,6 +275,12 @@ class CommandRouter:
             if workflow_result is not None:
                 return workflow_result
 
+        # 1.5. Embedding router: catch paraphrases the regex layer missed
+        # before paying the LLM-router latency cost.
+        embed_result = self._try_embedding_route(text, text_clean)
+        if embed_result is not None:
+            return embed_result
+
         # 2. Selective Qwen tool reasoning for ambiguous or complex tool requests
         should_use_tool_model = (
             self.routing_policy == "selective_executor"
@@ -363,7 +384,9 @@ class CommandRouter:
             dialog_state=getattr(self, "dialog_state", None),
             target_tool=target_tool,
         )
-        messages = [{"role": "user", "content": prompt}]
+        # Qwen3 toggle: disable chain-of-thought for tool routing (latency-critical).
+        # Harmless on non-Qwen3 models — appears as literal text they ignore.
+        messages = [{"role": "user", "content": prompt + "\n\n/no_think"}]
         output_tokens = max(
             24,
             self.tool_target_max_tokens if target_tool else self.tool_max_tokens,
@@ -488,6 +511,10 @@ class CommandRouter:
                 )
             raw_output = raw_output.strip()
 
+            # Qwen3 reasoning models may still emit <think>...</think> even with
+            # /no_think — strip it before JSON parsing.
+            raw_output = re.sub(r"<think>.*?</think>", "", raw_output, flags=re.DOTALL).strip()
+
             # Strip markdown fences if Gemma wraps the JSON
             raw_output = raw_output.replace("```json", "").replace("```", "").strip()
             # Ensure the JSON object is terminated
@@ -554,6 +581,37 @@ class CommandRouter:
 
         logger.debug("No handler matched the command.")
         return None
+
+    def _try_embedding_route(self, text, text_clean):
+        """Dispatch via embedding similarity if the top match is confident.
+
+        Skips tools that need structured args (those flagged via the router's
+        blocklist or capability_meta.embeddable=False). Returns None if no
+        confident match — callers should then fall through to the LLM router.
+        """
+        router = getattr(self, "embedding_router", None)
+        if router is None or not self._tools_by_name:
+            return None
+        try:
+            router.build_index(self._tools_by_name)
+            match = router.route(text_clean or text)
+        except Exception as exc:
+            logger.warning("[router] Embedding route failed: %s", exc)
+            return None
+        if not match:
+            return None
+
+        route = self._tools_by_name.get(match["tool"])
+        if route is None:
+            return None
+        logger.info(
+            "[router] Embedding match: '%s' (score=%.2f) — skipping LLM router.",
+            match["tool"], match["score"],
+        )
+        self._set_routing_decision(
+            "embedding", tool_name=match["tool"], args={},
+        )
+        return self._invoke_route(route, text, {})
 
     def _continue_active_workflow(self, text):
         orchestrator = getattr(self, "workflow_orchestrator", None)
@@ -915,7 +973,7 @@ class CommandRouter:
             "read_notes": {"read notes", "show notes", "my notes"},
             "get_time": {"time", "what time is it"},
             "get_date": {"date", "today's date", "what day is it"},
-            "manage_file": {"create file", "make file", "new file"},
+            "manage_file": {"create file", "make file", "new file", "write it to", "save it to", "write that to", "save that to"},
             "enable_voice": {"enable voice", "start listening", "turn on mic", "turn on microphone"},
             "disable_voice": {"disable voice", "stop listening", "turn off mic", "turn off microphone"},
             "confirm_yes": {"yes", "yeah", "open it", "do it", "sure", "okay"},
@@ -966,7 +1024,10 @@ class CommandRouter:
             "read_notes": [r"\b(?:read|show|list)\s+(?:my\s+)?notes\b"],
             "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b", r"\btime\b"],
             "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b", r"\bdate\b"],
-            "manage_file": [r"\b(?:create|make)\s+(?:a\s+)?file\b"],
+            "manage_file": [
+                r"\b(?:create|make)\s+(?:a\s+)?file\b",
+                r"\b(?:write|save|append|add)\s+(?:it|that|this|the answer|the response)\s+(?:to|into|in)\s+\S+",
+            ],
             "enable_voice": [r"\b(?:enable|start|turn on)\s+(?:the\s+)?(?:mic|microphone|voice)\b"],
             "disable_voice": [r"\b(?:disable|stop|turn off)\s+(?:the\s+)?(?:mic|microphone|voice)\b"],
             "confirm_yes": [r"^(?:yes|yeah|yep|sure|okay|ok|open it|do it)$"],

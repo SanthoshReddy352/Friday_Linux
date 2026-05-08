@@ -31,7 +31,7 @@ def test_deterministic_tool_plan_does_not_call_local_llm():
     assert spoken == ["It is noon."]
 
 
-def test_chat_turn_speaks_ack_and_progress_before_final_response():
+def test_chat_turn_speaks_progress_before_final_response_without_ack():
     app = FridayApp()
     app.config.config = {"conversation": {"progress_delays_s": [0.01]}}
     app.router.register_tool(
@@ -56,9 +56,9 @@ def test_chat_turn_speaks_ack_and_progress_before_final_response():
     if t and t.is_alive():
         t.join(timeout=10.0)
 
-    assert spoken[0] == "Let me think that through."
     assert "I'm working on it." in spoken
     assert spoken[-1] == "We are improving the architecture."
+    assert "Let me think that through." not in spoken
 
 
 def test_streamed_chat_does_not_duplicate_final_speech():

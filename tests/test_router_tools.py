@@ -156,6 +156,7 @@ def test_llm_chat_uses_router_lazy_loader():
     """Chat plugin should obtain the model through router.get_llm() instead of assuming eager load."""
     app = MagicMock()
     app.router.register_tool = MagicMock()
+    app.assistant_context = None
 
     mock_llm = MagicMock()
     mock_llm.create_chat_completion.return_value = {
@@ -168,6 +169,26 @@ def test_llm_chat_uses_router_lazy_loader():
 
     assert result == "chat_ok"
     app.router.get_llm.assert_called_once()
+
+
+def test_llm_chat_disables_and_strips_qwen_thinking():
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.assistant_context = None
+
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": "<think>private reasoning</think>\nchat_ok"}}]
+    }
+    app.router.get_llm.return_value = mock_llm
+
+    plugin = LLMChatPlugin(app)
+    result = plugin.handle_chat("what is the meaning of life?", {})
+
+    sent_messages = mock_llm.create_chat_completion.call_args.kwargs["messages"]
+    assert sent_messages[-1]["content"].endswith("/no_think")
+    assert result == "chat_ok"
+    assert "<think>" not in result
 
 
 def test_multi_action_plan_executes_multiple_tools(router):
@@ -341,6 +362,25 @@ def test_create_file_command_routes_to_manage_file_when_available(router):
 
     assert result == "created ironman"
     assert captured == {"action": "create", "filename": "ironman"}
+    assert router.current_route_source == "deterministic"
+
+
+def test_write_it_to_filename_routes_to_manage_file(router):
+    captured = {}
+
+    def manage_file_handler(text, args):
+        captured.update(args)
+        return "saved"
+
+    router.register_tool(
+        {"name": "manage_file", "description": "Manage file.", "parameters": {}},
+        manage_file_handler,
+    )
+
+    result = router.process_text("write it to hello.py")
+
+    assert result == "saved"
+    assert captured == {"action": "write", "filename": "hello.py"}
     assert router.current_route_source == "deterministic"
 
 

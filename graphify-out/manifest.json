@@ -308,12 +308,16 @@
     "hash": "67e383476f7f8ac550a127018524210f"
   },
   "/home/tricky/Friday_Linux/modules/research_agent/plugin.py": {
-    "mtime": 1777717000.933666,
-    "hash": "ff3536181515ab9d67d2d3ca1e460348"
+    "mtime": 1777888116.2495246,
+    "hash": "f6e9e214913f98371b1aeb8ec61ea080"
   },
   "/home/tricky/Friday_Linux/modules/research_agent/service.py": {
-    "mtime": 1777736066.321858,
-    "hash": "12e6817bac3aaa87e3f8130908d30004"
+    "mtime": 1777888585.5441594,
+    "hash": "08ec801993e8d44ce1c627bcf6362995"
+  },
+  "/home/tricky/Friday_Linux/modules/research_agent/searxng_client.py": {
+    "mtime": 1777888439.748558,
+    "hash": "8ca71020b670e03f060074449ccf6ba3"
   },
   "/home/tricky/Friday_Linux/modules/system_control/media_control.py": {
     "mtime": 1777882862.3794973,
