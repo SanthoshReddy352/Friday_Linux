@@ -51,7 +51,7 @@ Thumbs.db
 
 #logs
 logs/*.log
-
+logs/
 #env
 .env
 
