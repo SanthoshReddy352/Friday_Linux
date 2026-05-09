@@ -473,6 +473,11 @@ class CommandRouter:
             return self.llm
         if self._tool_llm_load_failed:
             return None
+        # Fast-fail: if tool model is still loading from disk (preload in progress),
+        # don't block the turn — keyword/intent matching handles it.
+        if not self.model_manager.is_loaded("tool"):
+            logger.debug("[router] tool model not in memory yet, skipping LLM routing")
+            return None
 
         with self._tool_llm_lock:
             if self.tool_llm is not None:

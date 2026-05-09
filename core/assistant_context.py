@@ -39,6 +39,7 @@ class AssistantContext:
         self.last_tool_args = {}
         self.context_store = None
         self.session_id = None
+        self.session_rag = None
 
     def bind_context_store(self, context_store, session_id):
         self.context_store = context_store
@@ -176,6 +177,10 @@ class AssistantContext:
             "Match the user's energy and give responses as long as the topic deserves. "
             "No preamble, no chain-of-thought, no emoji unless the user uses one first."
         )
+        rag_context = ""
+        if self.session_rag and self.session_rag.is_active:
+            rag_context = self.session_rag.get_context_block(query)
+
         if is_short:
             guidance = persona
         else:
@@ -185,6 +190,9 @@ class AssistantContext:
                 f"Session summary: {session_summary or 'none'}\n"
                 f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
             )
+
+        if rag_context:
+            guidance = f"{guidance}\n\n{rag_context}"
 
         recent_limit = 6 if is_short else 12
         recent = [

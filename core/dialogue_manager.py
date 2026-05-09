@@ -15,31 +15,54 @@ if TYPE_CHECKING:
 
 # ---------------------------------------------------------------------------
 # Ack templates per domain
+# Keys are matched against lowercased user text — put multi-word keys first
+# so they win over shorter overlapping keys.
 # ---------------------------------------------------------------------------
 
 _DOMAIN_ACKS: dict[str, str] = {
-    "weather": "Fetching weather data...",
-    "calendar": "Checking your calendar...",
-    "email": "Looking at your emails...",
-    "task": "Pulling up your tasks...",
-    "reminder": "Setting that reminder now.",
-    "file": "On it — finding that file.",
-    "screenshot": "Taking a screenshot.",
-    "volume": "Adjusting volume.",
-    "battery": "Checking battery status.",
-    "cpu": "Pulling system stats.",
-    "ram": "Checking memory usage.",
-    "youtube": "Opening YouTube now.",
-    "music": "Starting the music.",
-    "browser": "Opening the browser.",
-    "search": "Searching now.",
-    "news": "Fetching the latest news...",
-    "note": "Saving your note.",
-    "shutdown": "Understood. Shutting down.",
-    "launch": "Launching that for you.",
-    "read": "Reading that file now.",
-    "summarize": "Summarizing that for you.",
-    "chat": "Let me think about that.",
+    # --- Multi-word keys first (higher specificity) ---
+    "world monitor": "Let me get the latest news.",
+    "good news": "Let me find something uplifting.",
+    "tech news": "Pulling up tech news.",
+    "finance news": "Checking the markets.",
+    "energy news": "Pulling up energy news.",
+    "commodity news": "Checking commodity prices.",
+    "daily briefing": "Pulling up your briefing.",
+    "morning briefing": "Pulling up your briefing.",
+    "unread email": "Checking your inbox.",
+    "latest email": "Let me pull that up.",
+    "google drive": "Searching your Drive.",
+    "search drive": "Searching your Drive.",
+    # --- Single-word keys ---
+    "weather": "Let me check the weather.",
+    "calendar": "Checking your calendar.",
+    "email": "Let me check your inbox.",
+    "gmail": "Checking your inbox.",
+    "inbox": "Let me check your inbox.",
+    "task": "Let me pull up your tasks.",
+    "reminder": "Setting that.",
+    "file": "Looking for that.",
+    "drive": "Searching your Drive.",
+    "screenshot": "Analyzing the screen.",
+    "volume": "Done.",
+    "battery": "Checking battery.",
+    "cpu": "Let me check.",
+    "ram": "Let me check.",
+    "youtube": "Opening YouTube.",
+    "music": "On it.",
+    "browser": "Opening that.",
+    "search": "Looking that up.",
+    "news": "Pulling up the news.",
+    "briefing": "Pulling up your briefing.",
+    "research": "Starting research — back in a moment.",
+    "document": "Searching your documents.",
+    "note": "Saving that.",
+    "shutdown": "Sure, shutting down.",
+    "launch": "Opening that.",
+    "read": "Let me read that.",
+    "summarize": "Let me take a look.",
+    "analyze": "Taking a look.",
+    "screen": "Analyzing the screen.",
 }
 
 _TONE_STARTERS: dict[str, tuple[str, ...]] = {
@@ -109,9 +132,8 @@ class DialogueManager:
         if not response:
             return response
         if t == "frustrated":
-            return f"I hear you. {response}"
+            return f"Got it. {response}"
         if t == "urgent":
-            # Strip filler phrases for urgency
             for filler in ("Let me ", "I'll go ahead and ", "Sure thing, "):
                 if response.startswith(filler):
                     response = response[len(filler):]
@@ -120,7 +142,7 @@ class DialogueManager:
 
     def clarification_prompt(self, partial_text: str) -> str:
         """Return a clarification question for ambiguous input."""
-        return f"I didn't quite catch that. Could you rephrase? You said: '{partial_text[:60]}'"
+        return f"Sorry, I didn't catch that. Could you say that again?"
 
     # ------------------------------------------------------------------
     # Internal

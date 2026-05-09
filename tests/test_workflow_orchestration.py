@@ -193,7 +193,7 @@ def test_calendar_events_briefing_formats_upcoming_times(monkeypatch, tmp_path):
 
     result = plugin.handle_list_calendar_events("", {})
 
-    assert result == "Here are your upcoming reminders:\nToday at 4:10 PM: purchase a gift"
+    assert result == "Here are your reminders:\n  Today at 4:10 PM: purchase a gift"
 
 
 def test_calendar_event_fire_sends_desktop_notification(monkeypatch, tmp_path):
@@ -218,7 +218,7 @@ def test_completed_calendar_events_are_cleaned_on_startup(monkeypatch, tmp_path)
     TaskManagerPlugin(app)
     conn = task_manager_plugin.sqlite3.connect(task_manager_plugin.DB_PATH)
     conn.execute(
-        "INSERT INTO calendar_events (title, remind_at, status, created_at, fired_at) VALUES (?, ?, 'fired', ?, ?)",
+        "INSERT INTO calendar_events (title, remind_at, status, created_at, fired_at, type) VALUES (?, ?, 'fired', ?, ?, 'reminder')",
         ("old task", "2026-04-28T15:40:00", "2026-04-28T15:30:00", "2026-04-28T15:40:00"),
     )
     conn.commit()
@@ -687,3 +687,166 @@ def test_browser_play_falls_back_to_search_results_when_playwright_is_unavailabl
         "Opening search results for sahiba song on youtube music. "
         "Browser automation is unavailable, so I opened the page directly."
     )
+
+
+# ---------------------------------------------------------------------------
+# Reminder vs Calendar Event — separate behaviour tests
+# ---------------------------------------------------------------------------
+
+class FixedNow(datetime):
+    @classmethod
+    def now(cls):
+        return cls(2026, 4, 28, 15, 27, 0)
+
+FUTURE = FixedNow(2026, 4, 28, 16, 10, 0)
+
+
+def test_reminder_confirmation_uses_remind_wording(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    # Call _handle_reminder_parts directly with a fully-parsed payload
+    result = plugin._handle_reminder_parts({"message": "call John", "remind_at": FUTURE})
+
+    assert "I'll remind you to call John" in result
+    assert "Created" not in result
+
+
+def test_calendar_event_confirmation_uses_created_wording(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    result = plugin._format_event_confirmation("Standup", FUTURE)
+
+    assert result.startswith("Created 'Standup'")
+    assert "remind you" not in result
+
+
+def test_reminder_stored_with_type_reminder(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
+    events = plugin.list_calendar_events()
+
+    assert len(events) == 1
+    assert events[0]["type"] == "reminder"
+
+
+def test_calendar_event_stored_with_type_calendar_event(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("Standup", FUTURE, event_type="calendar_event")
+    events = plugin.list_calendar_events()
+
+    assert len(events) == 1
+    assert events[0]["type"] == "calendar_event"
+
+
+def test_reminder_fires_with_reminder_announcement(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(task_manager_plugin.shutil, "which", lambda name: "/usr/bin/notify-send")
+    monkeypatch.setattr(task_manager_plugin.subprocess, "run", MagicMock())
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    event_id = plugin._insert_calendar_event("call John", datetime.now(), event_type="reminder")
+    plugin._fire_calendar_event(event_id, "call John", "reminder")
+
+    call_args = app.emit_assistant_message.call_args
+    assert "Reminder: call John" in call_args.args[0]
+    assert call_args.kwargs.get("source") == "reminder"
+
+
+def test_calendar_event_fires_with_starting_now_announcement(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(task_manager_plugin.shutil, "which", lambda name: "/usr/bin/notify-send")
+    monkeypatch.setattr(task_manager_plugin.subprocess, "run", MagicMock())
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    event_id = plugin._insert_calendar_event("Standup", datetime.now(), event_type="calendar_event")
+    plugin._fire_calendar_event(event_id, "Standup", "calendar_event")
+
+    call_args = app.emit_assistant_message.call_args
+    assert "'Standup' is starting now." in call_args.args[0]
+    assert call_args.kwargs.get("source") == "calendar"
+
+
+def test_list_separates_reminders_and_calendar_events(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
+    plugin._create_calendar_event("Standup", FUTURE, event_type="calendar_event")
+
+    result = plugin.handle_list_calendar_events("", {})
+
+    assert "Reminders:" in result
+    assert "call John" in result
+    assert "Calendar events:" in result
+    assert "Standup" in result
+
+
+def test_list_only_reminders_uses_reminder_header(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
+
+    result = plugin.handle_list_calendar_events("", {})
+
+    assert result.startswith("Here are your reminders:")
+    assert "Calendar events" not in result
+
+
+def test_list_only_events_uses_events_header(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("Standup", FUTURE, event_type="calendar_event")
+
+    result = plugin.handle_list_calendar_events("", {})
+
+    assert result.startswith("Here are your calendar events:")
+    assert "Reminders" not in result
+
+
+def test_briefing_separates_reminders_and_events(monkeypatch, tmp_path):
+    monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
+    monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
+    monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
+    app = build_test_app(tmp_path)
+    plugin = TaskManagerPlugin(app)
+
+    plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
+    plugin._create_calendar_event("Standup", FUTURE, event_type="calendar_event")
+
+    result = plugin.get_unfinished_task_briefing()
+
+    assert "1 unfinished reminder" in result
+    assert "call John" in result
+    assert "1 upcoming calendar event" in result
+    assert "Standup" in result

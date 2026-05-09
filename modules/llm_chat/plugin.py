@@ -1,6 +1,6 @@
 from core.plugin_manager import FridayPlugin
 from core.logger import logger
-from core.model_output import strip_model_artifacts, with_no_think_user_message
+from core.model_output import strip_model_artifacts, with_no_think_user_message, math_to_speech
 import re
 
 
@@ -117,12 +117,12 @@ class LLMChatPlugin(FridayPlugin):
             if len(spoken_parts) > 1:
                 spoken_text = " ".join(part for part in spoken_parts[:-1] if part).strip()
                 if spoken_text:
-                    self.app.event_bus.publish("voice_response", spoken_text)
+                    self.app.event_bus.publish("voice_response", math_to_speech(spoken_text))
                     self.app.routing_state.mark_voice_spoken()
                 sentence_buffer = spoken_parts[-1]
 
         if sentence_buffer.strip():
-            self.app.event_bus.publish("voice_response", sentence_buffer.strip())
+            self.app.event_bus.publish("voice_response", math_to_speech(sentence_buffer.strip()))
             self.app.routing_state.mark_voice_spoken()
 
         return strip_model_artifacts("".join(parts))

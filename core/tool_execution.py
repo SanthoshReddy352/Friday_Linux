@@ -76,6 +76,8 @@ class OrderedToolExecutor:
             if turn is not None:
                 self.app.turn_feedback.emit_tool_finished(turn, step.capability_name, result.ok, duration_ms, error=result.error)
             if result.ok:
+                # Save working artifact for pronoun resolution ("save that", "use this")
+                self._save_artifact(step, result)
                 # Phase 10: cache successful read results
                 if cache is not None:
                     descriptor = getattr(self.app.capability_registry, "get_descriptor", lambda n: None)(step.capability_name)
@@ -94,3 +96,23 @@ class OrderedToolExecutor:
                 if memory_broker and hasattr(memory_broker, "record_capability_outcome"):
                     memory_broker.record_capability_outcome(step.capability_name, None, False)
         return "\n".join(str(item) for item in responses if item)
+
+    def _save_artifact(self, step, result) -> None:
+        """Persist the tool result as the session's working artifact."""
+        output = getattr(result, "output", "")
+        if not output:
+            return
+        try:
+            from core.context_store import WorkingArtifact
+            artifact = WorkingArtifact(
+                content=str(output),
+                output_type=getattr(result, "output_type", "text"),
+                capability_name=step.capability_name,
+                artifact_type=getattr(result, "output_type", "text"),
+            )
+            memory = getattr(self.app, "memory_service", None)
+            session_id = getattr(self.app, "session_id", "")
+            if memory and session_id:
+                memory.save_artifact(session_id, artifact)
+        except Exception:
+            pass

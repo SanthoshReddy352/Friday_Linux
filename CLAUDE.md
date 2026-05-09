@@ -34,6 +34,18 @@ Keep the graph up to date: after adding or changing significant files, run `/gra
 
 FRIDAY is a local-first, cross-platform AI assistant (Linux + Windows). It uses a modular plugin architecture with a capability registry, a v2 turn orchestration pipeline, and a three-tier memory system (episodic, semantic, procedural).
 
+## Testing Guide (single source of truth)
+
+`docs/testing_guide.md` is the **only** manual testing reference for this project.
+
+**After modifying or adding any feature, you MUST:**
+1. Add a row to the Modification Log in `docs/testing_guide.md` with today's date, the affected section, and a one-line description of the change.
+2. Add or update test cases in the relevant section using the next available `[T-N.M]` ID.
+3. Add a regression guard to §17 if the test is must-not-break.
+4. Update `tests/` (automated suite) in the same change when the behavior can be unit-tested.
+
+Do **not** update the old `docs/manual_testing_guide.md` — it is archived for historical reference only.
+
 ## Platform Notes
 
 This is a cross-platform project (Linux + Windows). Platform-specific code must guard with `platform.system()` or `os.name`. Key patterns already in use:

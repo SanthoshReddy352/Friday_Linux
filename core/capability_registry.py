@@ -33,6 +33,7 @@ class CapabilityDescriptor:
     resources: list[dict] = field(default_factory=list)
     prompts: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    fallback_capability: str = ""
 
 
 @dataclass
@@ -42,6 +43,7 @@ class CapabilityExecutionResult:
     output: Any = ""
     error: str = ""
     descriptor: CapabilityDescriptor | None = None
+    output_type: str = "text"
 
 
 class CapabilityRegistry:
@@ -68,9 +70,9 @@ class CapabilityRegistry:
             name=name,
             description=str(spec.get("description") or ""),
             connectivity=metadata.get("connectivity") or self._infer_connectivity(spec, metadata),
-            latency_class=metadata.get("latency_class", "interactive"),
+            latency_class=metadata.get("latency_class") or spec.get("latency_class") or "interactive",
             permission_mode=metadata.get("permission_mode") or self._infer_permission_mode(spec, metadata),
-            side_effect_level=metadata.get("side_effect_level") or self._infer_side_effect_level(spec, metadata),
+            side_effect_level=metadata.get("side_effect_level") or spec.get("side_effect_level") or self._infer_side_effect_level(spec, metadata),
             streaming=bool(metadata.get("streaming", False)),
             input_schema=dict(spec.get("parameters") or {}),
             output_schema=dict(metadata.get("output_schema") or {}),
@@ -170,6 +172,10 @@ class CapabilityExecutor:
 
         try:
             output = handler(raw_text, dict(args or {}))
+            if isinstance(output, CapabilityExecutionResult):
+                if output.descriptor is None:
+                    output.descriptor = descriptor
+                return output
             return CapabilityExecutionResult(
                 ok=True,
                 name=name,

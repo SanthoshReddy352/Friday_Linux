@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
@@ -55,6 +56,20 @@ def _default_vector_path():
 def _tokenize(text):
     cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in str(text or ""))
     return [token for token in cleaned.split() if len(token) > 1]
+
+
+@dataclass
+class WorkingArtifact:
+    """Tracks the last meaningful capability output for the current session.
+
+    Stored in the session state JSON blob so it survives across the turn boundary.
+    Enables pronoun resolution: "save that", "use this", "read it back".
+    """
+    content: str
+    output_type: str = "text"
+    capability_name: str = ""
+    artifact_type: str = "text"
+    source_path: str = ""
 
 
 class HashEmbeddingFunction:
@@ -425,6 +440,57 @@ class ContextStore:
         state["pending_online"] = {}
         self.save_session_state(session_id, state)
 
+    # ------------------------------------------------------------------
+    # Working artifact — tracks last meaningful capability output
+    # ------------------------------------------------------------------
+
+    def save_artifact(self, session_id: str, artifact: "WorkingArtifact") -> None:
+        """Persist the working artifact into the session state JSON blob."""
+        state = self.get_session_state(session_id) or {}
+        state["working_artifact"] = {
+            "content": artifact.content,
+            "output_type": artifact.output_type,
+            "capability_name": artifact.capability_name,
+            "artifact_type": artifact.artifact_type,
+            "source_path": artifact.source_path,
+        }
+        self.save_session_state(session_id, state)
+
+    def get_artifact(self, session_id: str) -> "WorkingArtifact | None":
+        """Retrieve the current working artifact for this session, or None."""
+        state = self.get_session_state(session_id) or {}
+        data = state.get("working_artifact")
+        if not data:
+            return None
+        return WorkingArtifact(
+            content=data.get("content", ""),
+            output_type=data.get("output_type", "text"),
+            capability_name=data.get("capability_name", ""),
+            artifact_type=data.get("artifact_type", "text"),
+            source_path=data.get("source_path", ""),
+        )
+
+    # ------------------------------------------------------------------
+    # Reference registry — cross-turn entity and ordinal bindings
+    # ------------------------------------------------------------------
+
+    def save_reference(self, session_id: str, key: str, value: str) -> None:
+        """Save a named reference (ordinal, last_file, active_document) in session state."""
+        state = self.get_session_state(session_id) or {}
+        refs = state.setdefault("reference_registry", {})
+        refs[key] = value
+        self.save_session_state(session_id, state)
+
+    def get_reference(self, session_id: str, key: str) -> "str | None":
+        """Return a specific reference value, or None if not set."""
+        state = self.get_session_state(session_id) or {}
+        return state.get("reference_registry", {}).get(key)
+
+    def get_all_references(self, session_id: str) -> dict:
+        """Return the full reference registry dict for this session."""
+        state = self.get_session_state(session_id) or {}
+        return dict(state.get("reference_registry", {}))
+
     def log_online_permission(self, session_id, tool_name, decision, reason=""):
         now = _utc_now()
         with self._connect() as conn:
@@ -675,7 +741,9 @@ class ContextStore:
         return unique
 
     def _ensure_storage(self):
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        _db_dir = os.path.dirname(self.db_path)
+        if _db_dir:
+            os.makedirs(_db_dir, exist_ok=True)
         os.makedirs(self.vector_path, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(

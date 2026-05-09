@@ -1,5 +1,7 @@
 import os
+import re
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -8,6 +10,10 @@ from core.app import FridayApp
 from modules.world_monitor.plugin import WorldMonitorPlugin
 from modules.world_monitor.service import WorldMonitorService
 
+# Dynamic timestamps so articles always fall within the default 20h window
+_NOW_MS = int(time.time() * 1000)
+_1H_AGO_MS = _NOW_MS - 3_600_000
+_3H_AGO_MS = _NOW_MS - 10_800_000
 
 SAMPLE_BOOTSTRAP = {
     "data": {
@@ -21,7 +27,7 @@ SAMPLE_BOOTSTRAP = {
                     "primaryTitle": "Iran tensions disrupt regional shipping",
                     "primarySource": "Reuters",
                     "primaryLink": "https://example.com/iran",
-                    "pubDate": 1777352556000,
+                    "pubDate": _1H_AGO_MS,
                     "importanceScore": 245,
                     "category": "conflict",
                     "threatLevel": "critical",
@@ -31,7 +37,7 @@ SAMPLE_BOOTSTRAP = {
                     "primaryTitle": "Colombia highway bombing leaves casualties",
                     "primarySource": "Guardian",
                     "primaryLink": "https://example.com/colombia",
-                    "pubDate": 1777310589000,
+                    "pubDate": _3H_AGO_MS,
                     "importanceScore": 220,
                     "category": "terrorism",
                     "threatLevel": "high",
@@ -75,7 +81,7 @@ SAMPLE_FEED_DIGEST = {
                     "description": "Suppliers are prioritizing high-margin accelerator orders as demand keeps rising.",
                     "source": "Reuters",
                     "link": "https://example.com/ai-chip",
-                    "publishedAt": 1777352556000,
+                    "publishedAt": _1H_AGO_MS,
                     "threat": {"level": "THREAT_LEVEL_MEDIUM", "category": "supply-chain"},
                 }
             ]
@@ -101,7 +107,7 @@ def test_world_monitor_service_formats_filtered_brief():
     assert "AI summary: A concise global risk summary." in result
     assert "Iran tensions disrupt regional shipping" in result
     assert "Colombia highway bombing" not in result
-    assert "28th April 2026" in result
+    assert re.search(r"\d+(?:st|nd|rd|th) \w+ 2026", result)
     assert "CRITICAL, conflict, IR" in result
     assert "Source: https://example.com/iran" in result
 
@@ -162,7 +168,7 @@ def test_world_monitor_service_builds_speech_without_raw_source_links():
     speech = "\n".join(digest["speech_segments"])
     assert "https://" not in speech
     assert "/" not in speech
-    assert "28th April 2026" in speech
+    assert re.search(r"\d+(?:st|nd|rd|th) \w+ 2026", speech)
     assert "Reported by Reuters" in speech
 
 
@@ -368,3 +374,94 @@ def test_world_monitor_plugin_registers_online_dashboard_tool():
     assert descriptor.connectivity == "online"
     assert descriptor.permission_mode == "always_ok"
     assert descriptor.side_effect_level == "write"
+
+
+def test_world_monitor_service_returns_empty_digest_when_api_key_missing():
+    """Without an API key, a 401 from the bootstrap API must not surface as an exception."""
+    service = WorldMonitorService()
+
+    def raise_401(*args, **kwargs):
+        mock = MagicMock(status_code=401)
+        mock.raise_for_status.side_effect = Exception("401 Client Error: Unauthorized")
+        return mock
+
+    with patch("modules.world_monitor.service.requests.get", side_effect=raise_401):
+        result = service.get_news_digest(category="global", limit=3, window_hours=20)
+
+    assert result["category"] == "global"
+    assert result["stories"] == []
+    assert "could not find" in result["display_text"].lower()
+
+
+def test_world_monitor_service_get_full_briefing_returns_all_categories():
+    service = WorldMonitorService()
+
+    def make_mock(*args, **kwargs):
+        return MagicMock(
+            status_code=200,
+            headers={"Content-Type": "text/html"},
+            text=SAMPLE_TECH_HTML,
+            raise_for_status=lambda: None,
+        )
+
+    with patch("modules.world_monitor.service.requests.get", side_effect=make_mock):
+        digests = service.get_full_briefing(top_n=2, window_hours=20)
+
+    assert set(digests.keys()) == {"global", "tech", "finance", "commodity", "energy", "good"}
+    formatted = service.format_full_briefing(digests, top_n=2)
+    assert "WorldMonitor Full Briefing" in formatted["display_text"]
+    assert "GLOBAL NEWS:" in formatted["display_text"].upper()
+    assert "TECH NEWS:" in formatted["display_text"].upper()
+    assert len(formatted["speech_segments"]) >= 1
+
+
+def test_world_monitor_plugin_full_briefing_invoked_on_briefing_keyword():
+    app = FridayApp()
+    app.config.config = {
+        "world_monitor": {"spoken_limit": 3},
+        "browser_automation": {"preferred_browser": "chrome"},
+    }
+    app.browser_media_service = MagicMock()
+    plugin = WorldMonitorPlugin(app)
+    plugin.service.get_full_briefing = MagicMock(return_value={
+        cat: {
+            "display_text": f"{cat} news",
+            "speech_segments": [f"Top {cat} story."],
+            "stories": [{"title": f"{cat} story", "summary": "", "source": ""}],
+            "dashboard_url": "https://worldmonitor.app/",
+            "category": cat,
+        }
+        for cat in ("global", "tech", "finance", "commodity", "energy", "good")
+    })
+    spoken = []
+    app.event_bus.subscribe("voice_response", spoken.append)
+
+    result = plugin.handle_world_monitor_news("give me a world monitor briefing", {})
+
+    plugin.service.get_full_briefing.assert_called_once()
+    assert result == "Opening and reading the full WorldMonitor briefing."
+    assert len(spoken) >= 1
+
+
+def test_world_monitor_plugin_single_category_skips_full_briefing():
+    app = FridayApp()
+    app.config.config = {
+        "world_monitor": {"spoken_limit": 3},
+        "browser_automation": {"preferred_browser": "chrome"},
+    }
+    app.browser_media_service = MagicMock()
+    plugin = WorldMonitorPlugin(app)
+    plugin.service.get_news_digest = MagicMock(return_value={
+        "display_text": "tech briefing",
+        "speech_segments": ["Tech story."],
+        "stories": [],
+        "dashboard_url": "https://tech.worldmonitor.app/",
+        "category": "tech",
+    })
+    plugin.service.get_full_briefing = MagicMock()
+    app.event_bus.subscribe("voice_response", lambda _: None)
+
+    plugin.handle_world_monitor_news("give me a tech news briefing", {})
+
+    plugin.service.get_full_briefing.assert_not_called()
+    plugin.service.get_news_digest.assert_called_once()

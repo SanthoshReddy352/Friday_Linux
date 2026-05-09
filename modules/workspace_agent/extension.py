@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import time as _time_mod
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from core.extensions.protocol import Extension, ExtensionContext
@@ -175,6 +176,16 @@ class WorkspaceAgentExtension(Extension):
                 "parameters": {},
             },
             self._handle_daily_briefing,
+            metadata=_READ_META,
+        )
+
+        ctx.register_capability(
+            {
+                "name": "summarize_inbox",
+                "description": "Summarize all unread Gmail emails into a single spoken paragraph — sender, topic, and key details from every message.",
+                "parameters": {"max_results": "max emails to fetch and summarize (default 10)"},
+            },
+            self._handle_summarize_inbox,
             metadata=_READ_META,
         )
 
@@ -505,6 +516,110 @@ class WorkspaceAgentExtension(Extension):
                 line += f" — {link}"
             lines.append(line)
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Inbox summary
+    # ------------------------------------------------------------------
+
+    def _handle_summarize_inbox(self, raw_text: str, args: dict) -> str:
+        """Fetch unread email bodies in parallel, then LLM-summarize into one paragraph."""
+        try:
+            max_emails = min(int(args.get("max_results") or 10), 15)
+        except (TypeError, ValueError):
+            max_emails = 10
+
+        try:
+            messages = gws.gmail_list_unread(max_results=max_emails)
+        except GWSError as exc:
+            return f"I couldn't reach Gmail: {exc}"
+
+        if not messages:
+            return "Your inbox is clear — no unread emails to summarize, sir."
+
+        count = len(messages)
+        # Read bodies for the top 5 only — keeps prompt short and inference fast.
+        to_read = [m for m in messages[:5] if m.get("id")]
+
+        bodies: dict[str, str] = {}
+
+        def _read_one(msg: dict) -> tuple[str, str]:
+            try:
+                data = gws.gmail_read(msg["id"], include_headers=True)
+                body = (
+                    data.get("body_text") or data.get("body") or data.get("text") or ""
+                ).strip()
+                if len(body) > 200:
+                    body = body[:200].rstrip() + "…"
+                return msg["id"], body
+            except Exception:
+                return msg["id"], ""
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for msg_id, body in pool.map(_read_one, to_read):
+                if msg_id:
+                    bodies[msg_id] = body
+
+        # Build compact context blocks
+        blocks = []
+        for i, msg in enumerate(messages, 1):
+            sender = _short_sender(msg.get("from", ""))
+            subject = msg.get("subject") or "(no subject)"
+            body = bodies.get(msg.get("id", ""), "")
+            block = f"{i}. {sender}: {subject}"
+            if body:
+                block += f" — {body}"
+            blocks.append(block)
+
+        email_text = "\n".join(blocks)
+
+        llm, inference_lock = self._get_chat_llm_and_lock()
+        if llm is not None:
+            prompt = (
+                f"You have {count} unread email(s):\n{email_text}\n\n"
+                "Write ONE paragraph (2-3 sentences) summarising all these emails. "
+                "Mention each sender and their key point. "
+                "Plain conversational English, no lists, no bullet points."
+            )
+            try:
+                with inference_lock:
+                    resp = llm.create_chat_completion(
+                        messages=[{"role": "user", "content": prompt + "\n\n/no_think"}],
+                        max_tokens=150,
+                        temperature=0.3,
+                        top_p=0.9,
+                    )
+                summary = (resp["choices"][0]["message"]["content"] or "").strip()
+                summary = re.sub(r"<think>.*?</think>", "", summary, flags=re.DOTALL).strip()
+                if summary:
+                    return summary
+                logger.warning("[workspace] LLM returned empty email summary")
+            except Exception as exc:
+                logger.warning("[workspace] LLM inbox summary failed: %s", exc)
+
+        # Fallback: plain spoken list when LLM is unavailable
+        parts = [f"You have {count} unread email(s), sir."]
+        for msg in messages:
+            sender = _short_sender(msg.get("from", ""))
+            subject = msg.get("subject") or "(no subject)"
+            parts.append(f"From {sender}: {subject}.")
+        return " ".join(parts)
+
+    def _get_chat_llm_and_lock(self):
+        """Return (chat_llm, inference_lock) from the app router, or (None, dummy_lock)."""
+        import threading
+        _dummy = threading.Lock()
+        app = self._get_app()
+        if app is None:
+            return None, _dummy
+        router = getattr(app, "router", None)
+        if router is None:
+            return None, _dummy
+        try:
+            llm = router.get_llm()
+            lock = getattr(router, "chat_inference_lock", _dummy)
+            return llm, lock
+        except Exception:
+            return None, _dummy
 
     # ------------------------------------------------------------------
     # Daily briefing

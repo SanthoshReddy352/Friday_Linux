@@ -31,6 +31,8 @@ from core.planning import (
 from core.task_graph_executor import TaskGraphExecutor
 from core.tool_execution import OrderedToolExecutor
 from core.tracing import configure_trace_export
+from core.resource_monitor import ResourceMonitor
+from core.session_rag import SessionRAG
 from core.turn_feedback import RuntimeMetrics, TurnFeedbackRuntime
 from core.turn_manager import TurnManager
 from core.task_runner import TaskRunner
@@ -52,6 +54,8 @@ class FridayApp:
         self.context_store = ContextStore()
         self.session_id = self.context_store.start_session({"entrypoint": "FridayApp"})
         self.assistant_context.bind_context_store(self.context_store, self.session_id)
+        self.session_rag = SessionRAG()
+        self.assistant_context.session_rag = self.session_rag
         self.capability_registry = CapabilityRegistry()
         self.capability_executor = CapabilityExecutor(self.capability_registry)
         self.runtime_metrics = RuntimeMetrics()
@@ -63,6 +67,7 @@ class FridayApp:
         # behind one read/write surface so the storage layer can evolve
         # without touching every caller. New code targets app.memory_service;
         # legacy app.context_store access remains valid during the migration.
+        # Phase 6: Mem0 components wired in after server probe (see further below)
         self.memory_service = MemoryService(self.context_store, self.memory_broker)
         # Phase 3: kernel services — stateless, injected into broker/agent
         self.consent_service = ConsentService(self.config)
@@ -155,6 +160,79 @@ class FridayApp:
         self._last_turn_speech_managed = False
         self._shutdown_requested = False
         self._turn_lock = __import__("threading").Lock()
+        self.resource_monitor = ResourceMonitor()
+
+        # Phase 6: Mem0 memory integration — boot extraction server and build client
+        from core.mem0_client import build_mem0_client
+        from core.memory_extractor import TurnGatedMemoryExtractor
+
+        _mem0_cfg = self.config.get("memory", {}) if hasattr(self.config, "get") else {}
+        self._mem0_client = None
+        self._mem0_extractor = None
+
+        if _mem0_cfg.get("enabled", False):
+            if self._start_mem0_server():
+                self._mem0_client = build_mem0_client(_mem0_cfg)
+                if self._mem0_client:
+                    self._mem0_extractor = TurnGatedMemoryExtractor(
+                        self._mem0_client, self.turn_feedback
+                    )
+
+        # Rebuild MemoryService with Mem0 components (replaces the Phase 2 instance above)
+        self.memory_service = MemoryService(
+            self.context_store,
+            self.memory_broker,
+            mem0_client=self._mem0_client,
+            extractor=self._mem0_extractor,
+        )
+
+    def _start_mem0_server(self) -> bool:
+        """Boot llama.cpp extraction server if memory.enabled and auto_start are set."""
+        import subprocess
+        import time
+        import urllib.request
+
+        cfg = self.config.get("memory", {}) if hasattr(self.config, "get") else {}
+        if not cfg.get("enabled", False):
+            return False
+        srv_cfg = cfg.get("extraction_server", {})
+        if not srv_cfg.get("auto_start", False):
+            return False
+
+        model_path = srv_cfg.get("model_path", "")
+        port = int(srv_cfg.get("port", 8181))
+        host = srv_cfg.get("host", "127.0.0.1")
+
+        if not os.path.exists(model_path):
+            logger.warning("[mem0] Model not found: %s — skipping extraction server.", model_path)
+            return False
+
+        try:
+            proc = subprocess.Popen(
+                [
+                    sys.executable, "-m", "llama_cpp.server",
+                    "--model", model_path,
+                    "--n_ctx", str(srv_cfg.get("n_ctx", 1024)),
+                    "--n_batch", str(srv_cfg.get("n_batch", 128)),
+                    "--port", str(port),
+                    "--host", host,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(16):
+                time.sleep(0.5)
+                try:
+                    urllib.request.urlopen(f"http://{host}:{port}/v1/models", timeout=1)
+                    logger.info("[mem0] Extraction server ready at port %d (PID %d).", port, proc.pid)
+                    return True
+                except Exception:
+                    continue
+            logger.warning("[mem0] Extraction server did not start in time.")
+            return False
+        except Exception as exc:
+            logger.warning("[mem0] Failed to start extraction server: %s", exc)
+            return False
 
     def initialize(self):
         logger.info("Initializing FRIDAY...")
@@ -211,6 +289,26 @@ class FridayApp:
         logger.info("FRIDAY: Cleanup complete.")
         sys.exit(0)
 
+    _RAG_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".html", ".csv"}
+
+    def _resolve_rag_file_path(self, text: str) -> "str | None":
+        """Return a local file path if *text* looks like a supported document, else None."""
+        from urllib.parse import urlparse, unquote
+        t = (text or "").strip()
+        candidates = []
+        if t.startswith("file://"):
+            try:
+                candidates.append(unquote(urlparse(t).path))
+            except Exception:
+                pass
+        if t.startswith("/"):
+            candidates.append(t)
+        for path in candidates:
+            path = path.strip()
+            if os.path.isfile(path) and os.path.splitext(path)[1].lower() in self._RAG_EXTENSIONS:
+                return path
+        return None
+
     def process_input(self, text, source="user"):
         """Process user input.
 
@@ -218,6 +316,20 @@ class FridayApp:
         returns immediately and is never blocked for the duration of a turn.
         Text/GUI commands run synchronously as before.
         """
+        # Intercept file paths (dropped, typed, or pasted) before routing to LLM.
+        file_path = self._resolve_rag_file_path(text)
+        if file_path:
+            import threading
+            name = os.path.basename(file_path)
+            self.emit_message("user", f"[Load file: {name}]", source=source)
+
+            def _load():
+                msg = self.load_session_rag_file(file_path)
+                self.emit_assistant_message(msg, speak=True)
+
+            threading.Thread(target=_load, daemon=True).start()
+            return ""
+
         if source != "voice" and self.is_speaking:
             tts = getattr(self, "tts", None)
             if tts:
@@ -236,6 +348,17 @@ class FridayApp:
             return ""
 
         return self._execute_turn(text, source)
+
+    def load_session_rag_file(self, path: str) -> str:
+        """Load a file into the session RAG context. Returns a status message."""
+        from core.logger import logger as _log
+        try:
+            msg = self.session_rag.load_file(path)
+            _log.info("[session_rag] %s", msg)
+            return msg
+        except Exception as exc:
+            _log.warning("[session_rag] Failed to load %s: %s", path, exc)
+            return f"Could not load file: {exc}"
 
     def _execute_turn(self, text, source="user", cancel_event=None):
         """Synchronous turn processing — called directly (text/GUI) or via TaskRunner (voice)."""
@@ -270,6 +393,15 @@ class FridayApp:
                     source="friday",
                     speak=not getattr(self, "_last_turn_speech_managed", False),
                 )
+                # Phase 8: queue Mem0 extraction for this completed turn.
+                # Fires for all turn types (VLM, document, chat) — the extractor
+                # waits for active_turns == 0 before calling mem0.add().
+                _extractor = getattr(self, "_mem0_extractor", None)
+                if _extractor:
+                    try:
+                        _extractor.queue_turn(route_text, response)
+                    except Exception:
+                        pass
             return response
         finally:
             if source == "voice":

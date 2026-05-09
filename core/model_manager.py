@@ -140,6 +140,10 @@ class LocalModelManager:
             if profile.preload and os.path.exists(profile.path):
                 threading.Thread(target=self.get_model, args=(role,), daemon=True).start()
 
+    def is_loaded(self, role: str) -> bool:
+        """Return True only if the model is already in memory. Never blocks."""
+        return role in self._models
+
     def status(self, role):
         profile = self.profile(role)
         return {

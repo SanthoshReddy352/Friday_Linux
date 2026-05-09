@@ -29,6 +29,7 @@ class ToolStep:
     node_id: str = ""
     depends_on: list[str] = field(default_factory=list)
     retries: int = 0
+    fallback_capability: str = ""
 
 
 @dataclass
@@ -144,7 +145,7 @@ class CapabilityBroker:
             return ToolPlan(
                 turn_id=turn_id,
                 mode="planner",
-                ack="Let me figure out the right tool for that.",
+                ack="Let me work that out.",
                 estimated_latency="generative",
                 final_style=style_hint,
             )
@@ -361,7 +362,7 @@ class CapabilityBroker:
         if not steps:
             return ""
         if len(steps) > 1:
-            return "I'll handle that in steps."
+            return "On it."
         step = steps[0]
         descriptor = self.app.capability_registry.get_descriptor(step.capability_name)
         latency = getattr(descriptor, "latency_class", step.timeout_ms)
@@ -374,9 +375,9 @@ class CapabilityBroker:
             if ack:
                 return ack
         if step.connectivity == "online":
-            return "I'll open that up."
+            return "On it."
         if latency in {"slow", "generative", "background"}:
-            return "I'll work on that now."
+            return "One moment."
         return ""
 
     def _chat_ack(self, text: str) -> str:

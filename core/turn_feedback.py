@@ -64,6 +64,15 @@ class TurnFeedbackRuntime:
         self._turns: dict[str, TurnRecord] = {}
         self._timers: dict[str, list[threading.Timer]] = {}
 
+    @property
+    def active_turns(self) -> int:
+        """Count of turns that have been started but not yet completed or failed."""
+        with self._lock:
+            return sum(
+                1 for t in self._turns.values()
+                if not t.cancelled and t.completed_at == 0.0
+            )
+
     def start_turn(self, text: str, source: str = "user") -> TurnRecord:
         turn = TurnRecord(turn_id=str(uuid.uuid4()), text=text, source=source)
         with self._lock:
@@ -79,6 +88,13 @@ class TurnFeedbackRuntime:
 
     def emit_progress(self, turn: TurnRecord, text: str):
         if not text or self._is_cancelled(turn.turn_id):
+            return
+        # Suppress if turn already finished (timer raced with complete_turn).
+        if turn.completed_at > 0.0:
+            return
+        # Suppress if LLM has already started streaming — the response is
+        # already being spoken and a progress phrase would interrupt it.
+        if "llm_first_token_ms" in turn.metrics:
             return
         self._publish("assistant_progress", turn, {"text": text})
 
@@ -101,6 +117,9 @@ class TurnFeedbackRuntime:
 
     def emit_llm_first_token(self, turn: TurnRecord):
         turn.metrics.setdefault("llm_first_token_ms", round((time.monotonic() - turn.started_at) * 1000, 1))
+        # LLM is streaming — kill any pending progress timers now so "One moment."
+        # can't fire while the actual response is already being spoken.
+        self.cancel_progress(turn.turn_id)
         self._publish("llm_first_token", turn, {})
 
     def start_progress_timers(self, turn: TurnRecord, phrases: list[str] | None = None):
@@ -108,9 +127,8 @@ class TurnFeedbackRuntime:
         if not delays:
             return
         phrases = phrases or [
-            "I'm working on it.",
-            "Still checking. I want to get this right.",
-            "This is taking a little longer, but I'm still on it.",
+            "One moment.",
+            "Still on it.",
         ]
         timers = []
         for index, delay in enumerate(delays):

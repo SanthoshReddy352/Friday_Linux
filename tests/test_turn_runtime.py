@@ -56,7 +56,7 @@ def test_chat_turn_speaks_progress_before_final_response_without_ack():
     if t and t.is_alive():
         t.join(timeout=10.0)
 
-    assert "I'm working on it." in spoken
+    assert "One moment." in spoken
     assert spoken[-1] == "We are improving the architecture."
     assert "Let me think that through." not in spoken
 

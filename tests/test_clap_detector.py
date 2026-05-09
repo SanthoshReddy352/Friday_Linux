@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, mock_open, patch
 
 import numpy as np
@@ -56,15 +58,19 @@ def test_launch_friday_uses_project_venv_and_main_entrypoint():
     assert kwargs["start_new_session"] is True
 
 
-def test_handle_pending_events_skips_launch_when_friday_is_already_running():
+def test_launch_worker_skips_launch_when_friday_is_already_running():
+    """_launch_worker must not call launch_friday when FRIDAY is already up."""
     service = ClapDetectorService()
-    service.events.put("double_clap")
 
     with patch("modules.voice_io.clap_detector.is_friday_running", return_value=True), \
          patch("modules.voice_io.clap_detector.launch_friday") as launch:
-        handled = service.handle_pending_events()
+        service.events.put("double_clap")
+        # _launch_worker is an infinite daemon loop — run it in a background thread.
+        worker = threading.Thread(target=service._launch_worker, daemon=True)
+        worker.start()
+        # Give the worker enough time to consume the queued event.
+        time.sleep(0.2)
 
-    assert handled == 1
     launch.assert_not_called()
 
 
@@ -83,16 +89,13 @@ def test_detector_process_match_accepts_real_script_invocation():
 def test_clap_detector_engine_accepts_slightly_softer_second_clap():
     engine = ClapDetectorEngine(
         min_threshold=0.08,
-        dynamic_mult=2.0,
-        crest_factor_min=5.5,
-        second_clap_threshold_mult=0.75,
-        second_clap_crest_mult=0.85,
         min_gap=0.1,
         max_gap=1.35,
         cooldown=2.5,
         warmup_seconds=0.0,
         status_log_interval_s=9999.0,
     )
+
     engine.warmup_until = 0.0
 
     quiet = np.zeros(32, dtype=np.float32)
@@ -108,16 +111,13 @@ def test_clap_detector_engine_accepts_slightly_softer_second_clap():
 def test_clap_detector_engine_accepts_more_natural_double_clap():
     engine = ClapDetectorEngine(
         min_threshold=0.065,
-        dynamic_mult=1.6,
-        crest_factor_min=4.2,
-        second_clap_threshold_mult=0.65,
-        second_clap_crest_mult=0.75,
         min_gap=0.06,
         max_gap=1.75,
         cooldown=2.5,
         warmup_seconds=0.0,
         status_log_interval_s=9999.0,
     )
+
     engine.warmup_until = 0.0
 
     quiet = np.zeros(32, dtype=np.float32)
@@ -133,14 +133,13 @@ def test_clap_detector_engine_accepts_more_natural_double_clap():
 def test_clap_detector_engine_restarts_when_second_clap_is_too_late():
     engine = ClapDetectorEngine(
         min_threshold=0.08,
-        dynamic_mult=2.0,
-        crest_factor_min=5.5,
         min_gap=0.1,
         max_gap=1.35,
         cooldown=2.5,
         warmup_seconds=0.0,
         status_log_interval_s=9999.0,
     )
+
     engine.warmup_until = 0.0
 
     first = np.concatenate([np.array([0.60], dtype=np.float32), np.zeros(31, dtype=np.float32)])
@@ -154,16 +153,13 @@ def test_clap_detector_engine_restarts_when_second_clap_is_too_late():
 def test_clap_detector_engine_downmixes_multichannel_audio():
     engine = ClapDetectorEngine(
         min_threshold=0.065,
-        dynamic_mult=1.6,
-        crest_factor_min=4.2,
-        second_clap_threshold_mult=0.65,
-        second_clap_crest_mult=0.75,
         min_gap=0.06,
         max_gap=1.75,
         cooldown=2.5,
         warmup_seconds=0.0,
         status_log_interval_s=9999.0,
     )
+
     engine.warmup_until = 0.0
 
     quiet = np.zeros((32, 2), dtype=np.float32)
@@ -173,7 +169,7 @@ def test_clap_detector_engine_downmixes_multichannel_audio():
     second[0, :] = 0.28
 
     assert engine.process_frame(quiet, now=0.00) is None
-    assert engine.prev_data.shape == (32,)
     assert engine.process_frame(first, now=1.00) == "first"
+
     assert engine.process_frame(quiet, now=1.03) is None
     assert engine.process_frame(second, now=1.82) == "double"

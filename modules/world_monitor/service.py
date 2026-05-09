@@ -92,12 +92,15 @@ class WorldMonitorService:
 
         if country_code or min_threat:
             if category == "global":
-                return self._get_api_digest(
-                    focus=focus,
-                    country_code=country_code,
-                    limit=limit,
-                    min_threat=min_threat,
-                )
+                try:
+                    return self._get_api_digest(
+                        focus=focus,
+                        country_code=country_code,
+                        limit=limit,
+                        min_threat=min_threat,
+                    )
+                except Exception:
+                    pass
             return self._empty_category_digest(category, focus, limit, window_hours)
 
         try:
@@ -130,12 +133,15 @@ class WorldMonitorService:
                 )
 
         if category == "global":
-            return self._get_api_digest(
-                focus=focus,
-                country_code=country_code,
-                limit=limit,
-                min_threat=min_threat,
-            )
+            try:
+                return self._get_api_digest(
+                    focus=focus,
+                    country_code=country_code,
+                    limit=limit,
+                    min_threat=min_threat,
+                )
+            except Exception:
+                pass
         return self._empty_category_digest(category, focus, limit, window_hours)
 
     def get_global_news_digest(
@@ -152,6 +158,49 @@ class WorldMonitorService:
             limit=limit,
             min_threat=min_threat,
         )
+
+    def get_full_briefing(
+        self,
+        top_n: int = 3,
+        window_hours: int = DEFAULT_NEWS_WINDOW_HOURS,
+    ) -> dict:
+        """Fetch top_n stories from each of the 6 categories. Returns {category: digest}."""
+        results = {}
+        for cat in CATEGORY_LABELS:
+            try:
+                digest = self.get_news_digest(category=cat, limit=top_n, window_hours=window_hours)
+            except Exception:
+                digest = self._empty_category_digest(cat, "", top_n, window_hours)
+            results[cat] = digest
+        return results
+
+    def format_full_briefing(self, digests: dict, top_n: int = 3) -> dict:
+        """Format an all-category briefing dict into display_text + speech_segments."""
+        lines = ["WorldMonitor Full Briefing — Top stories per category"]
+        speech = ["Here is your full WorldMonitor briefing across all categories."]
+
+        for cat, digest in digests.items():
+            label = CATEGORY_LABELS.get(cat, cat)
+            stories = digest.get("stories") or []
+            lines.append(f"\n{label.upper()}:")
+            if not stories:
+                lines.append("  No recent stories.")
+                speech.append(f"No recent {cat} news.")
+                continue
+            speech.append(f"{cat.title()} news:")
+            for i, article in enumerate(stories[:top_n], start=1):
+                summary = self._article_summary_sentence(article)
+                meta = self._article_meta(article)
+                display_line = f"  {i}. {summary}"
+                if meta:
+                    display_line += f" ({meta})"
+                lines.append(display_line)
+                speech.append(f"Story {i}: {summary}")
+
+        return {
+            "display_text": "\n".join(lines),
+            "speech_segments": speech,
+        }
 
     def _get_api_digest(
         self,

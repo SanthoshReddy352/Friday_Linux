@@ -85,17 +85,75 @@ REQUEST_TIMEOUT_S = 12.0
 MODES: dict[str, dict] = {
     "speed":    {"max_iter": 2,  "max_sources": 4,  "final_tokens": 600},
     "balanced": {"max_iter": 6,  "max_sources": 8,  "final_tokens": 900},
-    "quality":  {"max_iter": 25, "max_sources": 12, "final_tokens": 1800},
+    "quality":  {"max_iter": 25, "max_sources": 12, "final_tokens": 2400},
 }
 DEFAULT_MODE = "balanced"
 
 # Slightly longer than the old 3s to give the agentic loop room to breathe.
 # Voice turns still get priority via the inference lock — this is just the
 # acquire timeout before falling back to a heuristic action.
-RESEARCH_INFERENCE_TIMEOUT_S = 60.0
+RESEARCH_INFERENCE_TIMEOUT_S = 15.0
 
 # One concurrent research workflow at a time.
 _RESEARCH_SEMAPHORE = threading.BoundedSemaphore(1)
+
+# Open-access domains that reliably return full text (no paywall/bot challenge).
+# Used to reorder academic search results so scarce source slots aren't wasted.
+_OPEN_ACCESS_DOMAINS = frozenset({
+    "arxiv.org", "biorxiv.org", "medrxiv.org",
+    "pmc.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov",
+    "mdpi.com", "frontiersin.org", "elifesciences.org",
+    "plos.org", "europepmc.org", "semanticscholar.org",
+    "doaj.org", "core.ac.uk", "ssrn.com",
+    "who.int", "cdc.gov", "nih.gov",
+    "open.library", "zenodo.org",
+})
+
+# Domains that reliably block scraping (paywalls / JS challenges).
+_PAYWALLED_DOMAINS = frozenset({
+    "onlinelibrary.wiley.com", "researchgate.net",
+    "academic.oup.com", "journals.sagepub.com",
+    "sciencedirect.com", "springer.com",
+    "tandfonline.com", "jstor.org",
+    "science.org", "nejm.org",
+})
+
+# JS loading-spinner text trafilatura sometimes picks up from lazy-loaded pages.
+_LOADING_JUNK = re.compile(
+    r"(?m)^[ \t]*("
+    r"Loading\.\.\.?"
+    r"|Loading(?:\s+\w+){0,3}\.\.\."
+    r"|Please\s+wait\.{0,3}"
+    r"|Content\s+(is\s+)?loading"
+    r"|Page\s+(is\s+)?loading"
+    r"|Just\s+a\s+moment"
+    r"|Checking\s+your\s+browser"
+    r"|JavaScript\s+required"
+    r"|Enable\s+JavaScript"
+    r")[ \t]*$",
+    re.IGNORECASE,
+)
+
+# Per-source content character limit sent to the summarizer LLM.
+_CONTENT_LIMITS: dict[str, int] = {
+    "speed": 4_000,
+    "balanced": 8_000,
+    "quality": 15_000,
+}
+
+# Max tokens for per-source LLM summary.
+_SOURCE_SUMMARY_TOKENS: dict[str, int] = {
+    "speed": 180,
+    "balanced": 280,
+    "quality": 600,
+}
+
+# Number of bullet points requested per source summary.
+_SOURCE_BULLETS: dict[str, str] = {
+    "speed": "3–4",
+    "balanced": "4–6",
+    "quality": "8–12",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +294,7 @@ class ResearchAgentService:
 
             # Step 3: per-source summarization (parallel)
             with ThreadPoolExecutor(max_workers=min(len(sources), 3)) as pool:
-                futs = {pool.submit(self._summarize_source, s, topic): s for s in sources}
+                futs = {pool.submit(self._summarize_source, s, topic, mode): s for s in sources}
                 for fut in as_completed(futs):
                     try:
                         fut.result()
@@ -244,7 +302,7 @@ class ResearchAgentService:
                         logger.warning("[research] Source summarize failed: %s", exc)
 
             # Step 4: writer synthesis with citations (Vane writer)
-            synthesis = self._writer_synthesis(topic, sources, final_tokens)
+            synthesis = self._writer_synthesis(topic, sources, final_tokens, mode)
 
         summary_path = self._write_outputs(folder, topic, synthesis, sources, when)
         duration = time.monotonic() - started_at
@@ -277,6 +335,7 @@ class ResearchAgentService:
             return default
 
         prompt = (
+            "/no_think\n"
             "Analyze this research query and output JSON only (no other text).\n"
             f'Query: "{topic}"\n\n'
             "Required output format:\n"
@@ -297,10 +356,10 @@ class ResearchAgentService:
                         max_tokens=120,
                         temperature=0.1,
                     )
-                    text = (resp["choices"][0]["message"]["content"] or "").strip()
+                    text = self._strip_think(resp["choices"][0]["message"]["content"] or "")
                 else:
                     resp = llm(prompt, max_tokens=120, temperature=0.1)
-                    text = (resp["choices"][0].get("text") or "").strip()
+                    text = self._strip_think(resp["choices"][0].get("text") or "")
                 result = self._extract_json(text)
                 if isinstance(result, dict):
                     result.setdefault("query", topic)
@@ -361,6 +420,7 @@ class ResearchAgentService:
                 history=action_history,
                 iteration=iteration,
                 max_iter=max_iter,
+                max_sources=max_sources,
             )
 
             action_name = (action.get("action") or "").lower()
@@ -438,6 +498,7 @@ class ResearchAgentService:
         history_text = "\n".join(f"  {h}" for h in history[-3:]) if history else "  (none)"
 
         prompt = (
+            "/no_think\n"
             f'Research topic: "{query}"\n'
             f"Sources so far ({len(sources)}): {gathered}\n"
             f"Recent actions:\n{history_text}\n\n"
@@ -454,9 +515,9 @@ class ResearchAgentService:
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=60, temperature=0.3,
                     )
-                    return (resp["choices"][0]["message"]["content"] or "").strip()
+                    return self._strip_think(resp["choices"][0]["message"]["content"] or "")
                 resp = llm(prompt, max_tokens=60, temperature=0.3)
-                return (resp["choices"][0].get("text") or "").strip()
+                return self._strip_think(resp["choices"][0].get("text") or "")
             except Exception:
                 return ""
 
@@ -471,6 +532,7 @@ class ResearchAgentService:
         history: list[str],
         iteration: int,
         max_iter: int,
+        max_sources: int = 8,
     ) -> dict:
         """Ask the LLM for the next research action (JSON).
 
@@ -556,10 +618,10 @@ class ResearchAgentService:
                         max_tokens=80,
                         temperature=0.2,
                     )
-                    text = (resp["choices"][0]["message"]["content"] or "").strip()
+                    text = self._strip_think(resp["choices"][0]["message"]["content"] or "")
                 else:
                     resp = llm(prompt, max_tokens=80, temperature=0.2)
-                    text = (resp["choices"][0].get("text") or "").strip()
+                    text = self._strip_think(resp["choices"][0].get("text") or "")
                 parsed = self._extract_json(text)
                 if isinstance(parsed, dict) and "action" in parsed:
                     return parsed
@@ -600,7 +662,7 @@ class ResearchAgentService:
     # Step 3 — Per-source summarization
     # ------------------------------------------------------------------
 
-    def _summarize_source(self, source: ResearchSource, topic: str) -> None:
+    def _summarize_source(self, source: ResearchSource, topic: str, mode: str = DEFAULT_MODE) -> None:
         """Fetch body if missing, then LLM-summarize the source (mutates in-place)."""
         if not source.body:
             body = self._fetch_main_text(source.url)
@@ -609,10 +671,11 @@ class ResearchAgentService:
                 return
             source.body = body
 
-        content = (source.snippet + "\n\n" + source.body).strip()[:5_000]
-        source.summary = self._llm_source_summary(topic, source.title, source.url, content)
+        content_limit = _CONTENT_LIMITS.get(mode, 5_000)
+        content = (source.snippet + "\n\n" + source.body).strip()[:content_limit]
+        source.summary = self._llm_source_summary(topic, source.title, source.url, content, mode)
 
-    def _llm_source_summary(self, topic: str, title: str, url: str, content: str) -> str:
+    def _llm_source_summary(self, topic: str, title: str, url: str, content: str, mode: str = DEFAULT_MODE) -> str:
         if not content:
             return ""
         llm, role = self._get_llm()
@@ -620,10 +683,15 @@ class ResearchAgentService:
         if llm is None:
             return extractive_fallback
 
+        n_bullets = _SOURCE_BULLETS.get(mode, "4–6")
+        max_tokens = _SOURCE_SUMMARY_TOKENS.get(mode, 280)
         prompt = (
+            f"/no_think\n"
             f'Summarize this source for a research briefing on "{topic}".\n'
             f"Title: {title}\n\n"
-            "Write 4-6 bullet points on key claims and relevance. "
+            f"Write {n_bullets} bullet points. Each bullet must state a specific claim, "
+            "statistic, or finding with concrete details — no vague generalisations. "
+            "If the source contains numbers, percentages, or named studies, include them. "
             "Use '- ' bullets. No preamble.\n\n"
             f"Content:\n{content}"
         )
@@ -633,12 +701,12 @@ class ResearchAgentService:
                 if hasattr(llm, "create_chat_completion"):
                     resp = llm.create_chat_completion(
                         messages=[{"role": "user", "content": prompt}],
-                        max_tokens=220,
+                        max_tokens=max_tokens,
                         temperature=0.3,
                     )
-                    return (resp["choices"][0]["message"]["content"] or "").strip()
-                resp = llm(prompt, max_tokens=220, temperature=0.3)
-                return (resp["choices"][0].get("text") or "").strip()
+                    return self._strip_think(resp["choices"][0]["message"]["content"] or "")
+                resp = llm(prompt, max_tokens=max_tokens, temperature=0.3)
+                return self._strip_think(resp["choices"][0].get("text") or "")
             except Exception as exc:
                 logger.warning("[research] Source summary failed for %s: %s", url, exc)
                 return extractive_fallback
@@ -650,55 +718,88 @@ class ResearchAgentService:
     # Step 4 — Writer synthesis with citations (Vane src/lib/prompts/search/writer.ts)
     # ------------------------------------------------------------------
 
-    def _writer_synthesis(self, topic: str, sources: list[ResearchSource], final_tokens: int) -> str:
-        """Synthesize all source summaries into a final briefing with [N] citations."""
+    def _writer_synthesis(self, topic: str, sources: list[ResearchSource], final_tokens: int, mode: str = DEFAULT_MODE) -> str:
+        """Synthesize all source summaries into a final briefing with [N] citations.
+
+        Only sources with actual summaries are included. Their original [N] indices
+        are preserved so the References section in the output file remains consistent.
+        Sources without summaries are skipped and their index numbers are omitted from
+        the prompt — this prevents the LLM from hallucinating content for them.
+        """
+        # Build chunks from ONLY sources that were successfully summarized.
+        # Keep original index for citation consistency with the References section.
         chunks = []
+        available_indices: list[int] = []
         for i, s in enumerate(sources, 1):
-            if not s.summary:
+            if not s.summary or s.error:
                 continue
             chunks.append(f"[{i}] {s.title}\n{s.summary.strip()}")
+            available_indices.append(i)
+
         if not chunks:
             return (
                 f"No usable sources were retrieved for '{topic}'. "
                 "The raw search links are listed in the Sources section."
             )
 
-        is_quality = final_tokens >= 1400
-        bundle = "\n\n".join(chunks)[:6_000]
+        is_quality = final_tokens >= 1900
+        bundle_limit = 14_000 if is_quality else 6_000
+        bundle = "\n\n".join(chunks)[:bundle_limit]
+        available_list = ", ".join(f"[{i}]" for i in available_indices)
+
         llm, role = self._get_llm()
         if llm is None:
             return self._extractive_writer_report(topic, sources)
 
         if is_quality:
             format_instructions = (
-                "Write a comprehensive research report in Markdown.\n"
-                "Structure:\n"
-                "## Summary\n(2-3 sentence headline takeaway)\n\n"
-                "## Key Findings\n(6-10 detailed bullet points)\n\n"
-                "## Analysis\n(2-3 paragraphs of deeper analysis)\n\n"
-                "## Open Questions\n(3-5 bullet points on gaps or future directions)\n\n"
-                "CITATION RULES — follow strictly:\n"
-                "- Cite EVERY SINGLE fact, statement, and sentence with [N] inline.\n"
-                "- Every sentence must include at least one citation.\n"
-                "- Use numbered brackets like [1], [2], [1][3] for multiple sources.\n"
+                "Write a comprehensive research report in Markdown. "
+                "Be detailed, specific, and thorough — this is a quality research briefing.\n\n"
+                "## Summary\n"
+                "4–6 sentences. Lead with the single most important finding. "
+                "Include at least two specific statistics or concrete facts from the sources.\n\n"
+                "## Key Findings\n"
+                "12–16 detailed bullet points. Every bullet must state a specific, concrete claim. "
+                "Include numbers, percentages, named studies, named technologies, or named researchers "
+                "wherever the sources provide them. "
+                "Do NOT write vague bullets like 'AI improves healthcare' — write "
+                "'AI reduced diagnostic error rates by X% in study Y [N]'.\n\n"
+                "## Analysis\n"
+                "4 substantive paragraphs (5+ sentences each):\n"
+                "  Paragraph 1: Cross-source synthesis — what do these sources collectively show?\n"
+                "  Paragraph 2: Contradictions, limitations, methodological caveats, or gaps.\n"
+                "  Paragraph 3: Practical implications — what does this mean for practitioners?\n"
+                "  Paragraph 4: Future outlook — where is this field heading based on the evidence?\n\n"
+                "## Key Papers & Sources\n"
+                "List the 3–5 most important papers, studies, or primary sources referenced. "
+                "For each: title or inferred title, main finding in one sentence, citation index. "
+                "Format: '**Title** — key finding. [N]'\n\n"
+                "## Open Questions\n"
+                "5 concrete, specific research gaps or unresolved questions raised by the evidence.\n\n"
             )
         else:
             format_instructions = (
-                "Write a research briefing in Markdown.\n"
-                "Structure:\n"
-                "## Summary\n(1-2 sentence headline takeaway)\n\n"
-                "## Key Findings\n(4-6 bullet points)\n\n"
-                "## Open Questions\n(1-2 bullet points)\n\n"
-                "CITATION RULES — follow strictly:\n"
-                "- Cite every fact and statement with [N] inline.\n"
-                "- Every sentence must include at least one citation.\n"
-                "- Use numbered brackets like [1], [2].\n"
+                "Write a research briefing in Markdown.\n\n"
+                "## Summary\n(2–3 sentences, lead with the most important finding)\n\n"
+                "## Key Findings\n(6–8 specific bullet points with concrete facts)\n\n"
+                "## Open Questions\n(3 concrete gaps or unresolved questions)\n\n"
             )
 
+        citation_rules = (
+            f"CITATION RULES (strictly enforced):\n"
+            f"- Available source indices: {available_list}\n"
+            f"- Cite ONLY these indices inline: [2], [4][5], etc.\n"
+            f"- Do NOT invent or hallucinate citations for any index NOT in the list above.\n"
+            f"- Every factual sentence must end with at least one inline citation.\n"
+            f"- If a fact is not supported by an available source, do not include it.\n"
+        )
+
         prompt = (
-            f'Write a research briefing about "{topic}" using the {len(chunks)} sources below.\n\n'
-            f"{format_instructions}\n"
-            f"Sources:\n{bundle}"
+            f"/no_think\n"
+            f'Research topic: "{topic}"\n\n'
+            f"{format_instructions}"
+            f"{citation_rules}\n"
+            f"Sources ({len(chunks)} usable):\n{bundle}"
         )
 
         extractive_report = self._extractive_writer_report(topic, sources)
@@ -711,9 +812,9 @@ class ResearchAgentService:
                         max_tokens=final_tokens,
                         temperature=0.4,
                     )
-                    return (resp["choices"][0]["message"]["content"] or "").strip()
+                    return self._strip_think(resp["choices"][0]["message"]["content"] or "")
                 resp = llm(prompt, max_tokens=final_tokens, temperature=0.4)
-                return (resp["choices"][0].get("text") or "").strip()
+                return self._strip_think(resp["choices"][0].get("text") or "")
             except Exception as exc:
                 logger.warning("[research] Writer synthesis failed: %s", exc)
                 return extractive_report
@@ -826,6 +927,7 @@ class ResearchAgentService:
         if llm is None:
             return f"Research topic: {topic}\n(No LLM available for synthesis.)"
         prompt = (
+            f"/no_think\n"
             f'Write a concise briefing about "{topic}" from your knowledge.\n'
             "Include: headline takeaway, 3-5 key facts, any caveats or open questions.\n"
             "Plain text, no preamble."
@@ -839,9 +941,9 @@ class ResearchAgentService:
                         max_tokens=final_tokens,
                         temperature=0.4,
                     )
-                    return (resp["choices"][0]["message"]["content"] or "").strip()
+                    return self._strip_think(resp["choices"][0]["message"]["content"] or "")
                 resp = llm(prompt, max_tokens=final_tokens, temperature=0.4)
-                return (resp["choices"][0].get("text") or "").strip()
+                return self._strip_think(resp["choices"][0].get("text") or "")
             except Exception as exc:
                 logger.warning("[research] Knowledge synthesis failed: %s", exc)
                 return f"Research topic: {topic} — synthesis unavailable."
@@ -861,21 +963,42 @@ class ResearchAgentService:
     # straight through to the direct backends below.
 
     def _search_web(self, topic: str, limit: int) -> list[ResearchSource]:
-        """General web search. SearxNG → DuckDuckGo HTML."""
+        """General web search. SearxNG → DuckDuckGo HTML → Wikipedia."""
         searx = self._try_searx(topic, categories=["general"], limit=limit, default_origin="web")
         if searx:
             return searx
-        return self._search_duckduckgo_fallback(topic, limit)
+        ddg = self._search_duckduckgo_fallback(topic, limit)
+        if ddg:
+            return ddg
+        return self._search_wikipedia_fallback(topic, min(limit, 5))
 
     def _search_academic(self, topic: str, limit: int) -> list[ResearchSource]:
-        """Academic search. SearxNG (science) → arXiv API → DDG site:arxiv.org."""
-        searx = self._try_searx(topic, categories=["science"], limit=limit, default_origin="academic")
+        """Academic search. SearxNG (science) → arXiv API → DDG open-access.
+
+        Results are reordered so open-access domains fill source slots first.
+        Paywalled domains (Wiley, ScienceDirect, etc.) are deprioritized — they
+        block scraping and waste source budget.
+        """
+        searx = self._try_searx(topic, categories=["science"], limit=limit * 2, default_origin="academic")
         if searx:
-            return searx
+            # Reorder: open-access first, then non-paywalled, then paywalled last.
+            oa = [s for s in searx if self._is_open_access(s.url)]
+            mid = [s for s in searx if not self._is_open_access(s.url) and not self._is_likely_paywalled(s.url)]
+            pw = [s for s in searx if self._is_likely_paywalled(s.url)]
+            reordered = (oa + mid + pw)[:limit]
+            if pw and not oa:
+                logger.info("[research] All %d academic results appear paywalled — open-access priority will apply", len(pw))
+            return reordered
         arxiv = self._search_arxiv_fallback(topic, limit)
         if arxiv:
             return arxiv
-        return self._search_duckduckgo_fallback(f"site:arxiv.org {topic}", limit)
+        wiki = self._search_wikipedia_fallback(topic, min(3, limit))
+        if wiki:
+            return wiki
+        # Last resort: explicitly target open-access repositories via DDG
+        return self._search_duckduckgo_fallback(
+            f"site:arxiv.org OR site:pmc.ncbi.nlm.nih.gov OR site:mdpi.com {topic}", limit
+        )
 
     def _search_social(self, topic: str, limit: int) -> list[ResearchSource]:
         """Discussion search. SearxNG (social) → Reddit JSON → DDG site:reddit.com."""
@@ -986,17 +1109,29 @@ class ResearchAgentService:
         """Direct arXiv Atom feed — parsed without feedparser to avoid an
         optional dep. Used when SearxNG science pool fails."""
         url = (
-            "http://export.arxiv.org/api/query?"
+            "https://export.arxiv.org/api/query?"
             f"search_query=all:{quote_plus(topic)}&start=0&max_results={int(limit)}"
             "&sortBy=relevance&sortOrder=descending"
         )
-        try:
-            response = requests.get(
-                url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT_S,
-            )
-            response.raise_for_status()
-        except Exception as exc:
-            logger.warning("[research] arXiv fallback failed: %s", exc)
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT_S,
+                )
+                if response.status_code == 429:
+                    wait = 2 ** attempt
+                    logger.info("[research] arXiv rate-limited (429) — retrying in %ds", wait)
+                    time.sleep(wait)
+                    response = None
+                    continue
+                response.raise_for_status()
+                break
+            except Exception as exc:
+                logger.warning("[research] arXiv fallback failed: %s", exc)
+                return []
+        if response is None:
+            logger.warning("[research] arXiv fallback: exhausted retries after 429")
             return []
 
         # Parse the Atom feed with stdlib ElementTree. arXiv's namespace is
@@ -1080,6 +1215,53 @@ class ResearchAgentService:
             ))
         return results
 
+    def _search_wikipedia_fallback(self, topic: str, limit: int) -> list[ResearchSource]:
+        """Wikipedia OpenSearch API — reliable, rate-limit-free for small queries.
+
+        Used as a last-resort fallback when SearxNG, DDG, and arXiv all fail.
+        Returns high-quality encyclopedic sources with full summaries.
+        """
+        try:
+            resp = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "opensearch",
+                    "search": topic,
+                    "limit": str(int(min(limit, 5))),
+                    "format": "json",
+                    "redirects": "resolve",
+                    "namespace": "0",
+                },
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                timeout=REQUEST_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("[research] Wikipedia OpenSearch failed: %s", exc)
+            return []
+
+        # OpenSearch format: [query, [titles], [descriptions], [urls]]
+        if not isinstance(data, list) or len(data) < 4:
+            return []
+
+        titles = data[1]
+        descriptions = data[2]
+        urls = data[3]
+
+        results: list[ResearchSource] = []
+        for title, desc, url in zip(titles, descriptions, urls):
+            if not title or not url:
+                continue
+            results.append(ResearchSource(
+                title=title,
+                url=url,
+                snippet=(desc or "")[:400],
+                origin="wikipedia",
+            ))
+        logger.info("[research] Wikipedia fallback: %d results for %r", len(results), topic)
+        return results
+
     def _unwrap_ddg_href(self, href: str) -> str:
         if not href:
             return ""
@@ -1147,6 +1329,7 @@ class ResearchAgentService:
                     no_fallback=False, favor_recall=True,
                 )
                 if text:
+                    text = _LOADING_JUNK.sub("", text)
                     return re.sub(r"\n{3,}", "\n\n", text).strip()
             except Exception:
                 pass
@@ -1180,6 +1363,7 @@ class ResearchAgentService:
             text = re.sub(r"<[^>]+>", " ", text)
             text = re.sub(r"&nbsp;", " ", text)
 
+        text = _LOADING_JUNK.sub("", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = re.sub(r"[ \t]+", " ", text)
         return text.strip()
@@ -1246,6 +1430,26 @@ class ResearchAgentService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        """Remove Qwen3 <think>...</think> chain-of-thought blocks from model output.
+
+        The router already does this for tool calls; research prompts use /no_think
+        as the primary guard, but this strips any that slip through.
+        """
+        if not text:
+            return text
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+        return cleaned or text
+
+    def _is_open_access(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return any(oa in host for oa in _OPEN_ACCESS_DOMAINS)
+
+    def _is_likely_paywalled(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return any(pw in host for pw in _PAYWALLED_DOMAINS)
 
     def _extract_json(self, text: str) -> dict | None:
         """Extract first JSON object from LLM output."""

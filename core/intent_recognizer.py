@@ -1,6 +1,28 @@
 import re
 import os
 
+# Patterns that unambiguously mark a knowledge/explanation question.
+# When matched, plan() short-circuits to [] so the turn goes to the LLM.
+_KNOWLEDGE_Q_RE = re.compile(
+    r"^(?:"
+    r"(?:explain|describe|define|elaborate(?:\s+on)?|clarify|discuss|outline|summarise|summarize\s+(?:what|how|why|the))\b|"
+    r"(?:compare|contrast|differentiate|distinguish)\b|"
+    r"(?:analyze|analyse)\b|"
+    r"what\s+(?:causes?|happens?\s+(?:when|if))\b|"
+    # "what is/are the [named knowledge concept]" — specific known knowledge terms
+    r"what\s+(?:is|are)\s+(?:the\s+)?(?:difference|relationship|connection|effect|cause|reason|purpose|role|function|mechanism|principle|formula|equation|process|concept|theory|law|stages?|types?|kinds?|symptoms?|characteristics?|properties|advantages?|disadvantages?)\b|"
+    # "what is/are the X of/in/for Y ..." — named concept with prepositional qualifier
+    # e.g. "Time OF Useful Consciousness", "capital OF France", "role OF gravity IN orbit"
+    r"what\s+(?:is|are|was|were)\s+(?:a\s+|an\s+|the\s+)?\w+\s+(?:of|for|in|behind|about)\s+\w+(?:\s+\w+)*\b|"
+    r"how\s+(?:does|do|did|would)\b|"
+    r"why\s+(?:does|do|did|is|are|was|were|would|will)\b|"
+    r"can\s+you\s+(?:explain|describe|clarify|help\s+me\s+understand)\b|"
+    r"(?:give\s+me|provide)\s+(?:an?\s+)?(?:overview|explanation|description|detail)\s+(?:of|about)\b|"
+    r"(?:identify|list|name)\s+(?:the\s+)?(?:main|key|primary|different|various|major|important|common|types?|kinds?|stages?|phases?|effects?|causes?|symptoms?|benefits?|advantages?|disadvantages?|characteristics?|properties|principles?|equations?|laws?)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 def _get_extract_app_names():
     try:
         from modules.system_control.app_launcher import extract_app_names  # noqa: PLC0415
@@ -9,6 +31,16 @@ def _get_extract_app_names():
         return lambda _text: []
 
 extract_app_names = _get_extract_app_names()
+
+_ARTIFACT_PRONOUNS = re.compile(
+    r"\b(it|that|this|the result|the output|that file|the code|the list|the summary)\b",
+    re.IGNORECASE,
+)
+_ORDINAL_PATTERN = re.compile(
+    r"\b(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last)"
+    r"(?:\s+(?:one|item|option|result|file))?\b",
+    re.IGNORECASE,
+)
 
 
 class IntentRecognizer:
@@ -19,6 +51,11 @@ class IntentRecognizer:
         cleaned = self._clean_text(text)
         if not cleaned:
             return []
+        # Knowledge/explanation questions must never route to a tool.
+        # Check before resolve_references so the raw user text is used.
+        if self._is_knowledge_question(cleaned):
+            return []
+        cleaned = self._resolve_references(cleaned)
 
         actions = []
         seen_read_only_actions = set()
@@ -41,10 +78,58 @@ class IntentRecognizer:
             }
         return actions
 
+    def _is_knowledge_question(self, text: str) -> bool:
+        """Return True for clear knowledge/explanation questions.
+
+        These must never be routed to a deterministic tool regardless of which
+        status-domain keywords (time, battery, hello, etc.) they happen to
+        contain. Minimum 4 words to avoid catching very short commands.
+        """
+        stripped = re.sub(r"^\[.*?\]\s*", "", text.strip())
+        if len(stripped.split()) < 4:
+            return False
+        return bool(_KNOWLEDGE_Q_RE.match(stripped))
+
     def _clean_text(self, text):
         text = " ".join(text.strip().split())
         text = re.sub(r"\s+", " ", text)
         return text.strip(" \t\r\n")
+
+    def _resolve_references(self, text: str) -> str:
+        """Resolve ordinal references and artifact pronouns using the session reference registry.
+
+        Examples:
+          "use the second one"  → "use <resolved item text>"
+          "save that"           → "[artifact:read_file result (text)] save that"
+        """
+        store = getattr(self.router, "context_store", None)
+        session_id = getattr(self.router, "session_id", "")
+        if not store or not session_id:
+            return text
+
+        # 1. Ordinal resolution — "the second one" → quoted item text
+        def _replace_ordinal(match):
+            ordinal = match.group(1).lower()
+            value = store.get_reference(session_id, ordinal)
+            return f'"{value}"' if value else match.group(0)
+
+        resolved = _ORDINAL_PATTERN.sub(_replace_ordinal, text)
+
+        # 2. Artifact pronoun prefix — tell the LLM there is a prior result available
+        if _ARTIFACT_PRONOUNS.search(resolved):
+            artifact = store.get_artifact(session_id)
+            if artifact and artifact.content:
+                stub = f"[artifact:{artifact.capability_name} ({artifact.output_type})] "
+                resolved = stub + resolved
+
+        # 3. Document follow-up: if no explicit file path in text but active_document exists,
+        #    inject it so query_document can handle conversational follow-ups without the user
+        #    re-specifying the file path each turn.
+        active_doc = store.get_reference(session_id, "active_document")
+        if active_doc and not re.search(r"[/~\\][^\s]+\.[a-zA-Z]{1,6}", resolved):
+            resolved = f"[active_document={active_doc}] {resolved}"
+
+        return resolved
 
     def _split_into_clauses(self, text):
         clauses = [text]
@@ -90,12 +175,12 @@ class IntentRecognizer:
 
     def _action_connectors_for(self, lower_clause):
         connectors = [" and "]
-        # Whisper sometimes hears "and time" as "on time". Only treat "on" as
-        # a connector in short status/time requests so normal phrases like
-        # "play this on YouTube" stay intact.
-        if re.search(
+        # Whisper sometimes hears "and time" as "on time". Only add " on " as
+        # a connector for short status/time requests (≤8 words) — never for
+        # longer sentences where "time" is part of a concept name.
+        if len(lower_clause.split()) <= 8 and re.search(
             r"\b(?:system info|system information|system status|system health|system details|"
-            r"current time|the time|time|current date|date|battery|cpu|ram|memory)\b",
+            r"current time|the time|current date|today'?s date|battery|cpu|ram|memory)\b",
             lower_clause,
         ):
             connectors.append(" on ")
@@ -126,7 +211,11 @@ class IntentRecognizer:
     def _looks_like_short_status_fragment(self, normalized):
         fragments = (
             "time",
+            "current time",
+            "the time",
             "date",
+            "today's date",
+            "current date",
             "system info",
             "system information",
             "system status",
@@ -156,6 +245,8 @@ class IntentRecognizer:
             self._parse_system,
             self._parse_time_date,
             self._parse_screenshot,
+            self._parse_vision_action,
+            self._parse_email_action,
             self._parse_file_action,
             self._parse_launch_app,
             self._parse_manage_file,
@@ -520,7 +611,11 @@ class IntentRecognizer:
 
     def _parse_time_date(self, clause, clause_lower, context):
         if re.search(
-            r"\b(?:what(?:'s| is)? (?:the )?time|what time is it|current time|tell me(?: the)? time)\b",
+            # "what time is it" / "current time" / "tell me the time" — always time queries.
+            # "what is the time" is a time query only when NOT followed by "of <noun>",
+            # which would indicate a concept name like "Time of Useful Consciousness".
+            r"\b(?:what time is it|current time|tell me(?: the)? time)\b"
+            r"|what(?:'s| is)?\s+(?:the\s+)?time\b(?!\s+of\b)",
             clause_lower,
         ) or re.fullmatch(r"(?:the\s+)?time", clause_lower.strip(" .!?")):
             return {"tool": "get_time", "args": {}, "text": clause, "domain": "time"}
@@ -536,6 +631,68 @@ class IntentRecognizer:
     def _parse_screenshot(self, clause, clause_lower, context):
         if re.search(r"\b(?:take|capture).*(?:screenshot|screen shot)\b", clause_lower) or "screenshot" in clause_lower:
             return {"tool": "take_screenshot", "args": {}, "text": clause, "domain": "screen"}
+        return None
+
+    def _parse_vision_action(self, clause, clause_lower, context):
+        """Route screen-analysis phrases to VLM tools before file parsers can intercept them."""
+        tools = getattr(self.router, "_tools_by_name", {})
+        if "summarize_screen" in tools and re.search(
+            r"\bsummarize\s+(?:my\s+|the\s+)?screen\b", clause_lower
+        ):
+            return {"tool": "summarize_screen", "args": {}, "text": clause, "domain": "screen"}
+        if "analyze_screen" in tools and re.search(
+            r"\b(?:analyze|explain|check|describe|inspect|look\s+at)\s+(?:my\s+|the\s+)?screen\b",
+            clause_lower,
+        ):
+            return {"tool": "analyze_screen", "args": {}, "text": clause, "domain": "screen"}
+        if "read_text_from_image" in tools and re.search(
+            r"\bread\s+(?:the\s+|my\s+)?(?:screen|text\s+(?:from|on)\s+(?:the\s+|my\s+)?screen)\b",
+            clause_lower,
+        ):
+            return {"tool": "read_text_from_image", "args": {}, "text": clause, "domain": "screen"}
+        if "summarize_screen" in tools and re.search(
+            r"\b(?:what\s+am\s+i\s+looking\s+at|give\s+me\s+(?:an?\s+)?(?:summary|overview)\s+of\s+(?:my\s+|the\s+)?screen)\b",
+            clause_lower,
+        ):
+            return {"tool": "summarize_screen", "args": {}, "text": clause, "domain": "screen"}
+        return None
+
+    def _parse_email_action(self, clause, clause_lower, context):
+        """Route email/inbox commands to workspace capabilities before generic parsers fire."""
+        tools = getattr(self.router, "_tools_by_name", {})
+
+        if "summarize_inbox" in tools and re.search(
+            r"\b(?:summarize|summary\s+of|digest|overview\s+of)\s+(?:my\s+|the\s+)?(?:emails?|inbox|mail|messages?)\b"
+            r"|\bemail\s+(?:summary|digest|overview)\b"
+            r"|\binbox\s+(?:summary|digest|overview)\b"
+            r"|\bwhat(?:'s|\s+is)\s+in\s+(?:my\s+)?(?:inbox|emails?)\b"
+            r"|\bgive\s+me\s+(?:a\s+)?(?:summary|digest|overview)\s+of\s+(?:my\s+)?(?:emails?|inbox|mail)\b",
+            clause_lower,
+        ):
+            return {"tool": "summarize_inbox", "args": {}, "text": clause, "domain": "email"}
+
+        if "check_unread_emails" in tools and re.search(
+            r"\b(?:check|show|list|get|any)\s+(?:my\s+)?(?:unread\s+)?(?:emails?|inbox|mail|messages?)\b"
+            r"|\b(?:unread|new)\s+(?:emails?|messages?|mail)\b"
+            r"|\bdo\s+i\s+have\s+(?:any\s+)?(?:emails?|messages?|mail)\b"
+            r"|\bhow\s+many\s+(?:unread\s+)?(?:emails?|messages?|mail)\b",
+            clause_lower,
+        ):
+            return {"tool": "check_unread_emails", "args": {}, "text": clause, "domain": "email"}
+
+        if "read_latest_email" in tools and re.search(
+            r"\bread\s+(?:my\s+)?(?:latest|last|most\s+recent|newest|top|first)\s+(?:unread\s+)?(?:email|message|mail)\b"
+            r"|\b(?:what(?:'s|\s+is)\s+(?:my\s+)?latest\s+(?:email|message|mail)|read\s+(?:the\s+)?latest\s+(?:email|message|mail))\b",
+            clause_lower,
+        ):
+            return {"tool": "read_latest_email", "args": {}, "text": clause, "domain": "email"}
+
+        if "daily_briefing" in tools and re.search(
+            r"\b(?:daily\s+briefing|morning\s+briefing|daily\s+update|morning\s+update|brief\s+me|give\s+me\s+(?:a\s+)?(?:daily\s+)?briefing)\b",
+            clause_lower,
+        ):
+            return {"tool": "daily_briefing", "args": {}, "text": clause, "domain": "email"}
+
         return None
 
     def _parse_file_action(self, clause, clause_lower, context):
@@ -567,7 +724,8 @@ class IntentRecognizer:
             return {"tool": "list_folder_contents", "args": {}, "text": clause, "domain": "files"}
 
         if re.search(r"\b(?:summarize|summary of|sum up)\b", clause_lower):
-            return {"tool": "summarize_file", "args": {}, "text": clause, "domain": "files"}
+            if not re.search(r"\b(?:screen|display|desktop|monitor|email|emails|inbox|mail|messages?)\b", clause_lower):
+                return {"tool": "summarize_file", "args": {}, "text": clause, "domain": "files"}
 
         if re.search(r"\b(?:read|show contents of|preview)\b", clause_lower) and (
             "file" in clause_lower or "folder" in clause_lower or "it" in clause_lower or context.get("domain") == "files"
@@ -738,7 +896,10 @@ class IntentRecognizer:
         return None
 
     def _parse_help(self, clause, clause_lower, context):
-        if re.search(r"\bhelp\b", clause_lower) or re.search(r"\bwhat\s+(?:else\s+)?can\s+you\s+do\b", clause_lower):
+        # Only route to show_help for explicit capability requests, not "help me understand X"
+        if re.search(r"\bwhat\s+(?:else\s+)?can\s+you\s+do\b", clause_lower):
+            return {"tool": "show_help", "args": {}, "text": clause, "domain": "help"}
+        if re.fullmatch(r"(?:help|help\s+friday|help\s+me)[.!?]?", clause_lower.strip()):
             return {"tool": "show_help", "args": {}, "text": clause, "domain": "help"}
         return None
 

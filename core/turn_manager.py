@@ -94,14 +94,28 @@ class TurnManager:
             session_id=self.app.session_id,
             turn_id=ctx.turn_id,
         )
-        response = self.app.turn_orchestrator.handle(request, ctx=ctx)
-        if feedback and turn:
-            if response.spoken_ack:
-                feedback.emit_ack(turn, response.spoken_ack)
-            if response.plan_mode in {"tool", "chat"} and response.duration_ms > 1500:
-                # Mirror the legacy "slow/generative/background" timer
-                # heuristic so any progress chimes still fire.
+
+        _ack_sent = [False]
+
+        def on_plan_ready(plan):
+            if not (feedback and turn):
+                return
+            ack = getattr(plan, "ack", None) or ""
+            mode = getattr(plan, "mode", "") or ""
+            latency = getattr(plan, "estimated_latency", "interactive") or "interactive"
+            if ack:
+                feedback.emit_ack(turn, ack)
+                _ack_sent[0] = True
+            # Start progress timers for anything that can take > 2.5s:
+            # online tools, slow/generative/background latency, or LLM chat.
+            if ack or mode == "chat" or latency in ("slow", "generative", "background"):
                 feedback.start_progress_timers(turn)
+
+        response = self.app.turn_orchestrator.handle(request, ctx=ctx, on_plan_ready=on_plan_ready)
+        # Fallback: forward spoken_ack from TurnResponse when on_plan_ready
+        # never fired (e.g. mocked orchestrator in tests).
+        if feedback and turn and response.spoken_ack and not _ack_sent[0]:
+            feedback.emit_ack(turn, response.spoken_ack)
         if response.error:
             raise RuntimeError(response.error)
         return response.response

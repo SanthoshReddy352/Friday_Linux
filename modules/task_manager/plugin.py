@@ -87,9 +87,15 @@ def _ensure_db():
             remind_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'scheduled',
             created_at TEXT NOT NULL,
-            fired_at TEXT
+            fired_at TEXT,
+            type TEXT NOT NULL DEFAULT 'reminder'
         )
     """)
+    # Migrate existing rows that pre-date the type column
+    try:
+        conn.execute("ALTER TABLE calendar_events ADD COLUMN type TEXT NOT NULL DEFAULT 'reminder'")
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -110,15 +116,17 @@ class TaskManagerPlugin(FridayPlugin):
         self.app.router.register_tool({
             "name": "set_reminder",
             "description": (
-                "Set a reminder or calendar event that FRIDAY will announce at a specified date and time. "
-                "Examples: 'remind me to call John in 5 minutes', "
-                "'remind me to purchase a gift tomorrow at 5 PM'."
+                "Set a personal time-based reminder that FRIDAY will announce at a future time. "
+                "Use for 'remind me to [action]' phrases — e.g. 'remind me to call John at 3pm', "
+                "'remind me in 10 minutes to take a break'. "
+                "Not for structured meetings or appointments with explicit event titles."
             ),
             "parameters": {
                 "message": "string – what to remind the user about",
                 "minutes": "integer – optional number of minutes from now to trigger the reminder",
                 "datetime": "string – optional exact or natural date and time for the reminder"
-            }
+            },
+            "context_terms": ["remind me", "reminder", "remind me to", "set a reminder"],
         }, self.handle_set_reminder)
 
         self.app.router.register_tool({
@@ -138,16 +146,17 @@ class TaskManagerPlugin(FridayPlugin):
         self.app.router.register_tool({
             "name": "create_calendar_event",
             "description": (
-                "Create a calendar event or scheduled reminder for a specific date and time. "
-                "Use when the user says things like 'create a calendar event titled standup tomorrow at 10', "
-                "'schedule a meeting on Friday at 3pm', or 'add an event called dinner tonight at 8'."
+                "Create a named calendar event or appointment with an explicit title. "
+                "Use when the user mentions a specific event name — e.g. 'schedule a standup tomorrow at 10', "
+                "'add a dentist appointment Friday at 2pm', 'create an event called team lunch at noon'. "
+                "Not for personal 'remind me to' requests — those use set_reminder."
             ),
             "parameters": {
                 "title": "string – event title",
                 "datetime": "string – ISO timestamp or natural-language date and time",
                 "minutes": "integer – minutes from now",
             },
-            "context_terms": ["create calendar event", "add calendar event", "schedule event", "schedule meeting", "add to calendar"],
+            "context_terms": ["create calendar event", "add calendar event", "schedule event", "schedule meeting", "add to calendar", "book appointment"],
         }, self.handle_create_calendar_event)
 
         self.app.router.register_tool({
@@ -235,8 +244,8 @@ class TaskManagerPlugin(FridayPlugin):
             if remind_at <= datetime.now():
                 return "That time has already passed. Please mention a future date and time."
             self._clear_reminder_workflow()
-            event_id = self._create_calendar_event(message, remind_at)
-            return self._format_confirmation(message, remind_at, event_id)
+            event_id = self._create_calendar_event(message, remind_at, event_type="reminder")
+            return self._format_reminder_confirmation(message, remind_at)
 
         missing = []
         if not parsed.get("date"):
@@ -276,10 +285,10 @@ class TaskManagerPlugin(FridayPlugin):
         if remind_at <= datetime.now():
             return "That time has already passed. Please mention a future date and time."
 
-        ok, payload = self.create_calendar_event(title, remind_at)
+        ok, payload = self.create_calendar_event(title, remind_at, event_type="calendar_event")
         if not ok:
             return payload if isinstance(payload, str) else "I couldn't create that event."
-        return self._format_confirmation(title, remind_at, payload.get("id"))
+        return self._format_event_confirmation(title, remind_at)
 
     def handle_move_calendar_event(self, text, args):
         args = dict(args or {})
@@ -580,8 +589,8 @@ class TaskManagerPlugin(FridayPlugin):
         response = f"Reminder: {message}"
         self.app.emit_assistant_message(f"⏰ {response}", source="reminder", spoken_text=response)
 
-    def _fire_calendar_event(self, event_id, message):
-        logger.info("[TaskManager] Firing calendar event %s: '%s'", event_id, message)
+    def _fire_calendar_event(self, event_id, message, event_type="reminder"):
+        logger.info("[TaskManager] Firing %s %s: '%s'", event_type, event_id, message)
         self._reminder_timers.pop(int(event_id), None)
         fired_at = datetime.now().isoformat(timespec="seconds")
         try:
@@ -591,12 +600,19 @@ class TaskManagerPlugin(FridayPlugin):
             conn.close()
         except Exception as exc:
             logger.warning("[TaskManager] Failed to remove completed event: %s", exc)
-        payload = {"id": event_id, "title": message, "fired_at": fired_at}
+        payload = {"id": event_id, "title": message, "fired_at": fired_at, "type": event_type}
         self.app.event_bus.publish("calendar_event_fired", payload)
+        if event_type == "calendar_event":
+            notif_title = "FRIDAY Calendar"
+            response = f"'{message}' is starting now."
+            source = "calendar"
+        else:
+            notif_title = "FRIDAY Reminder"
+            response = f"Reminder: {message}"
+            source = "reminder"
         if event_id not in self._system_notification_event_ids:
-            self._send_desktop_notification("FRIDAY Reminder", message)
-        response = f"Reminder: {message}"
-        self.app.emit_assistant_message(f"⏰ {response}", source="reminder", spoken_text=response)
+            self._send_desktop_notification(notif_title, message)
+        self.app.emit_assistant_message(f"⏰ {response}", source=source, spoken_text=response)
 
     def _parse_reminder_text(self, text):
         """Extract message and minutes from natural language fallback."""
@@ -856,34 +872,36 @@ class TaskManagerPlugin(FridayPlugin):
         if memory and session_id:
             memory.clear_workflow_state(session_id, REMINDER_WORKFLOW)
 
-    def _create_calendar_event(self, message, remind_at):
-        event_id = self._insert_calendar_event(message, remind_at)
+    def _create_calendar_event(self, message, remind_at, event_type="reminder"):
+        event_id = self._insert_calendar_event(message, remind_at, event_type=event_type)
         if self._schedule_system_notification(event_id, message, remind_at):
             self._system_notification_event_ids.add(event_id)
-        self._schedule_calendar_timer(event_id, message, remind_at)
+        self._schedule_calendar_timer(event_id, message, remind_at, event_type=event_type)
         payload = {
             "id": event_id,
             "title": message,
             "remind_at": remind_at.isoformat(timespec="seconds"),
             "status": "scheduled",
+            "type": event_type,
         }
         self.app.event_bus.publish("calendar_event_created", payload)
         return event_id
 
-    def create_calendar_event(self, message, remind_at):
+    def create_calendar_event(self, message, remind_at, event_type="reminder"):
         message = str(message or "").strip()
         if not message:
-            return False, "Please enter a reminder title."
+            return False, "Please enter a title."
         if not isinstance(remind_at, datetime):
-            return False, "Please choose a valid reminder date and time."
+            return False, "Please choose a valid date and time."
         if remind_at <= datetime.now():
             return False, "Please choose a future date and time."
-        event_id = self._create_calendar_event(message, remind_at)
+        event_id = self._create_calendar_event(message, remind_at, event_type=event_type)
         return True, {
             "id": event_id,
             "title": message,
             "remind_at": remind_at.isoformat(timespec="seconds"),
             "status": "scheduled",
+            "type": event_type,
         }
 
     def delete_calendar_event(self, event_id):
@@ -912,20 +930,20 @@ class TaskManagerPlugin(FridayPlugin):
         self.app.event_bus.publish("calendar_event_deleted", {"id": event_id})
         return True, "Reminder deleted."
 
-    def _insert_calendar_event(self, message, remind_at):
+    def _insert_calendar_event(self, message, remind_at, event_type="reminder"):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.execute(
-            "INSERT INTO calendar_events (title, remind_at, status, created_at) VALUES (?, ?, 'scheduled', ?)",
-            (message, remind_at.isoformat(timespec="seconds"), datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO calendar_events (title, remind_at, status, created_at, type) VALUES (?, ?, 'scheduled', ?, ?)",
+            (message, remind_at.isoformat(timespec="seconds"), datetime.now().isoformat(timespec="seconds"), event_type),
         )
         conn.commit()
         event_id = int(cursor.lastrowid)
         conn.close()
         return event_id
 
-    def _schedule_calendar_timer(self, event_id, message, remind_at):
+    def _schedule_calendar_timer(self, event_id, message, remind_at, event_type="reminder"):
         seconds = max(0.1, (remind_at - datetime.now()).total_seconds())
-        timer = threading.Timer(seconds, self._fire_calendar_event, args=[event_id, message])
+        timer = threading.Timer(seconds, self._fire_calendar_event, args=[event_id, message, event_type])
         timer.daemon = True
         timer.start()
         self._reminder_timers[int(event_id)] = timer
@@ -934,23 +952,23 @@ class TaskManagerPlugin(FridayPlugin):
         try:
             conn = sqlite3.connect(DB_PATH)
             rows = conn.execute(
-                "SELECT id, title, remind_at FROM calendar_events WHERE status = 'scheduled'"
+                "SELECT id, title, remind_at, type FROM calendar_events WHERE status = 'scheduled'"
             ).fetchall()
             conn.close()
         except Exception as exc:
             logger.warning("[TaskManager] Failed to load reminders: %s", exc)
             return
         now = datetime.now()
-        for event_id, title, remind_at_text in rows:
+        for event_id, title, remind_at_text, event_type in rows:
             remind_at = self._parse_iso_datetime(remind_at_text)
             if not remind_at:
                 continue
             if remind_at <= now:
-                self._fire_calendar_event(event_id, title)
+                self._fire_calendar_event(event_id, title, event_type or "reminder")
             else:
                 if self._schedule_system_notification(event_id, title, remind_at):
                     self._system_notification_event_ids.add(event_id)
-                self._schedule_calendar_timer(event_id, title, remind_at)
+                self._schedule_calendar_timer(event_id, title, remind_at, event_type=event_type or "reminder")
 
     def _cleanup_completed_calendar_events(self):
         try:
@@ -965,12 +983,12 @@ class TaskManagerPlugin(FridayPlugin):
         try:
             conn = sqlite3.connect(DB_PATH)
             rows = conn.execute(
-                "SELECT id, title, remind_at, status FROM calendar_events ORDER BY remind_at ASC LIMIT ?",
+                "SELECT id, title, remind_at, status, type FROM calendar_events ORDER BY remind_at ASC LIMIT ?",
                 (int(limit),),
             ).fetchall()
             conn.close()
             return [
-                {"id": row[0], "title": row[1], "remind_at": row[2], "status": row[3]}
+                {"id": row[0], "title": row[1], "remind_at": row[2], "status": row[3], "type": row[4] or "reminder"}
                 for row in rows
             ]
         except Exception:
@@ -978,42 +996,68 @@ class TaskManagerPlugin(FridayPlugin):
 
     def handle_list_calendar_events(self, text, args):
         limit = int((args or {}).get("limit") or 5)
-        events = [event for event in self.list_calendar_events(limit=50) if event.get("status") == "scheduled"]
+        all_events = [e for e in self.list_calendar_events(limit=50) if e.get("status") == "scheduled"]
         now = datetime.now()
-        upcoming = []
-        for event in events:
+        reminders, cal_events = [], []
+        for event in all_events:
             remind_at = self._parse_iso_datetime(event.get("remind_at"))
             if remind_at and remind_at >= now:
-                upcoming.append((remind_at, event))
-        upcoming.sort(key=lambda item: item[0])
-        if not upcoming:
-            return "You don't have any upcoming reminders."
+                bucket = cal_events if event.get("type") == "calendar_event" else reminders
+                bucket.append((remind_at, event))
+        reminders.sort(key=lambda x: x[0])
+        cal_events.sort(key=lambda x: x[0])
 
-        lines = ["Here are your upcoming reminders:"]
-        for remind_at, event in upcoming[:max(1, limit)]:
-            lines.append(f"{self._format_event_time(remind_at)}: {event.get('title', '')}")
-        return "\n".join(lines)
+        if not reminders and not cal_events:
+            return "You don't have any upcoming reminders or calendar events."
+
+        sections = []
+        if reminders:
+            header = "Here are your reminders:" if not cal_events else "Reminders:"
+            lines = [header]
+            for remind_at, event in reminders[:max(1, limit)]:
+                lines.append(f"  {self._format_event_time(remind_at)}: {event.get('title', '')}")
+            sections.append("\n".join(lines))
+        if cal_events:
+            header = "Here are your calendar events:" if not reminders else "Calendar events:"
+            lines = [header]
+            for remind_at, event in cal_events[:max(1, limit)]:
+                lines.append(f"  {self._format_event_time(remind_at)}: {event.get('title', '')}")
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
 
     def get_unfinished_task_briefing(self, limit=5):
-        events = [event for event in self.list_calendar_events(limit=50) if event.get("status") == "scheduled"]
+        all_events = [e for e in self.list_calendar_events(limit=50) if e.get("status") == "scheduled"]
         now = datetime.now()
-        upcoming = []
-        for event in events:
+        reminders, cal_events = [], []
+        for event in all_events:
             remind_at = self._parse_iso_datetime(event.get("remind_at"))
             if remind_at and remind_at >= now:
-                upcoming.append((remind_at, event))
-        upcoming.sort(key=lambda item: item[0])
-        if not upcoming:
-            return "You have no unfinished reminders."
+                bucket = cal_events if event.get("type") == "calendar_event" else reminders
+                bucket.append((remind_at, event))
+        reminders.sort(key=lambda x: x[0])
+        cal_events.sort(key=lambda x: x[0])
 
-        count = len(upcoming)
-        noun = "reminder" if count == 1 else "reminders"
-        lines = [f"You have {count} unfinished {noun}."]
-        for remind_at, event in upcoming[:max(1, int(limit))]:
-            lines.append(f"{self._format_event_time(remind_at)}: {event.get('title', '')}")
-        if count > limit:
-            lines.append(f"And {count - limit} more.")
-        return "\n".join(lines)
+        if not reminders and not cal_events:
+            return "You have no upcoming reminders or calendar events."
+
+        sections = []
+        if reminders:
+            noun = "reminder" if len(reminders) == 1 else "reminders"
+            lines = [f"You have {len(reminders)} unfinished {noun}."]
+            for remind_at, event in reminders[:max(1, int(limit))]:
+                lines.append(f"{self._format_event_time(remind_at)}: {event.get('title', '')}")
+            if len(reminders) > limit:
+                lines.append(f"And {len(reminders) - limit} more.")
+            sections.append("\n".join(lines))
+        if cal_events:
+            noun = "calendar event" if len(cal_events) == 1 else "calendar events"
+            lines = [f"You have {len(cal_events)} upcoming {noun}."]
+            for remind_at, event in cal_events[:max(1, int(limit))]:
+                lines.append(f"{self._format_event_time(remind_at)}: {event.get('title', '')}")
+            if len(cal_events) > limit:
+                lines.append(f"And {len(cal_events) - limit} more.")
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
 
     def _format_event_time(self, remind_at):
         today = datetime.now().date()
@@ -1105,10 +1149,15 @@ class TaskManagerPlugin(FridayPlugin):
         except Exception as exc:
             logger.debug("[TaskManager] Failed to cancel system notification unit %s: %s", unit_base, exc)
 
-    def _format_confirmation(self, message, remind_at, event_id):
+    def _format_reminder_confirmation(self, message, remind_at):
         time_str = remind_at.strftime("%I:%M %p").lstrip("0")
         when = remind_at.strftime("%A, %B %d, %Y") + " at " + time_str
         return f"Got it! I'll remind you to {message} on {when}."
+
+    def _format_event_confirmation(self, title, remind_at):
+        time_str = remind_at.strftime("%I:%M %p").lstrip("0")
+        date_str = remind_at.strftime("%A, %B %d, %Y")
+        return f"Created '{title}' — {date_str} at {time_str}."
 
     def _get_time(self):
         now = datetime.now()

@@ -81,7 +81,7 @@ class TurnOrchestrator:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def handle(self, request: TurnRequest, ctx=None) -> TurnResponse:
+    def handle(self, request: TurnRequest, ctx=None, *, on_plan_ready=None) -> TurnResponse:
         started = time.monotonic()
         trace_id = getattr(ctx, "trace_id", "") or request.turn_id
         session_id = request.session_id or getattr(self.app, "session_id", "")
@@ -150,6 +150,14 @@ class TurnOrchestrator:
             getattr(intent, "confidence", 0.0) if intent else 0.0,
             (time.monotonic() - started) * 1000,
         )
+
+        # Fire ack + progress timers before execution so they reach TTS
+        # before the (potentially slow) tool response arrives.
+        if on_plan_ready is not None:
+            try:
+                on_plan_ready(plan)
+            except Exception:
+                pass
 
         # 5. Execute
         try:

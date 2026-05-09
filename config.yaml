@@ -3,12 +3,14 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: on_demand
+  listening_mode: manual
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8
   delegate_multi_action_threshold: 2
-  progress_delays_s: []
+  progress_delays_s:
+  - 4.0
+  - 14.0
 capabilities:
   registry_mode: internal_mcp_compatible
   allow_external_mcp: false
@@ -33,12 +35,12 @@ routing:
   orchestrator: v2
   policy: selective_executor
   tool_timeout_ms: 6000
-  tool_max_tokens: 96
-  tool_target_max_tokens: 64
+  tool_max_tokens: 256
+  tool_target_max_tokens: 128
   tool_top_p: 0.2
   tool_json_response: true
   execution_engine: parallel
-  chat_max_tokens: 512
+  chat_max_tokens: 2048
 gui:
   window_width: 500
   window_height: 700
@@ -47,11 +49,12 @@ voice:
   stt_compute_type: int8
   stt_language: en
   stt_cpu_threads: 8
+  stt_max_utterance_s: 20.0
   wake_model_path: models/hey_friday.onnx
   wake_transcript_fallback: true
   media_max_uninvoked_words: 4
   input_device:
-    id: 89
+    id: 63
     kind: pipewire
     label: Nirvana Ion
 modules:
@@ -69,6 +72,61 @@ browser_automation:
   use_system_profile: true
   chrome_user_data_dir: ''
   chrome_profile_directory: ''
+document_intel:
+  enabled: true
+  chroma_path: data/chroma
+  db_path: data/friday.db
+  collection_name: friday_documents
+  max_chunks: 4
+  max_context_tokens: 1500
+  chunk_size_tokens: 400
+  chunk_overlap_tokens: 80
+  auto_index: false
+  workspace_folders:
+  - ~/Documents
+  index_extensions:
+  - .pdf
+  - .docx
+  - .pptx
+  - .xlsx
+  - .md
+  - .txt
+  index_idle_only: true
+  index_batch_size: 3
+vision:
+  enabled: true
+  model_path: models/SmolVLM2-2.2B-Instruct-Q4_K_M.gguf
+  mmproj_path: models/mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf
+  n_ctx: 2048
+  n_batch: 256
+  max_image_width: 1024
+  idle_timeout_s: 300
+  features:
+    screenshot_explainer: true
+    ocr_reader: true
+    screen_summarizer: true
+    clipboard_analyzer: true
+    code_debugger: true
+    compare_screenshots: true
+    ui_element_finder: true
+    smart_error_detector: true
+    fun_features: true
+memory:
+  enabled: false
+  extraction_server:
+    enabled: true
+    host: 127.0.0.1
+    port: 8181
+    model_path: models/mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf
+    n_ctx: 1024
+    n_batch: 128
+    auto_start: true
+  collection_name: friday_mem0
+  chroma_path: data/chroma
+  history_db_path: data/mem0_history.db
+  max_facts_per_turn: 5
+  gate_on_idle: true
+  extraction_timeout_s: 10
 world_monitor:
   api_base_url: https://api.worldmonitor.app
   web_base_url: https://www.worldmonitor.app

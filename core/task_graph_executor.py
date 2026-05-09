@@ -209,9 +209,38 @@ class TaskGraphExecutor:
                     )
                 self._apply_success_side_effects(step, args, result.output)
                 self._record_outcome(node, ok=True)
+                self._save_artifact(step, result)
                 return self.app.response_finalizer.finalize(result.output), result.output
 
             last_error = result.error
+
+        # All retries exhausted — try fallback capability if configured.
+        fallback_name = (getattr(node.step, "fallback_capability", "") or "").strip()
+        if not fallback_name:
+            d = self._descriptor_for(node.step.capability_name)
+            if d:
+                fallback_name = (getattr(d, "fallback_capability", "") or "").strip()
+        if fallback_name:
+            logger.info(
+                "[task_graph] %s failed — trying fallback: %s",
+                node.step.capability_name, fallback_name,
+            )
+            try:
+                fallback_result = self.app.capability_executor.execute(
+                    fallback_name, raw_text, args
+                )
+                if fallback_result.ok:
+                    self._apply_success_side_effects(node.step, args, fallback_result.output)
+                    self._record_outcome(node, ok=True)
+                    self._save_artifact(node.step, fallback_result)
+                    return (
+                        self.app.response_finalizer.finalize(fallback_result.output),
+                        str(fallback_result.output),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[task_graph] fallback %s also failed: %s", fallback_name, exc
+                )
 
         self._record_outcome(node, ok=False)
         return f"Error running command: {last_error}", ""
@@ -257,6 +286,26 @@ class TaskGraphExecutor:
             return None
         getter = getattr(registry, "get_descriptor", None)
         return getter(name) if callable(getter) else None
+
+    def _save_artifact(self, step, result) -> None:
+        """Persist the tool result as the session's working artifact."""
+        output = getattr(result, "output", "")
+        if not output:
+            return
+        try:
+            from core.context_store import WorkingArtifact
+            artifact = WorkingArtifact(
+                content=str(output),
+                output_type=getattr(result, "output_type", "text"),
+                capability_name=step.capability_name,
+                artifact_type=getattr(result, "output_type", "text"),
+            )
+            memory = getattr(self.app, "memory_service", None)
+            session_id = getattr(self.app, "session_id", "")
+            if memory and session_id:
+                memory.save_artifact(session_id, artifact)
+        except Exception:
+            logger.debug("[task_graph] artifact save failed", exc_info=True)
 
     def _apply_success_side_effects(self, step, args, output):
         # Match OrderedToolExecutor exactly so swapping backends is invisible.

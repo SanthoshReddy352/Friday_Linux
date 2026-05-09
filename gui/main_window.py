@@ -2,12 +2,55 @@ import sys
 import os
 import time
 from html import escape as html_escape
+from core.model_output import math_to_display
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel
+    QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel, QFileDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QUrl
 from PyQt5.QtGui import QTextCursor
+
+
+# ------------------------------------------------------------------
+# Custom chat display with reliable file drag-and-drop.
+# Subclassing QTextEdit is more reliable than event filters because
+# QTextEdit handles DragEnter, DragMove, and Drop separately — an
+# event filter that only intercepts DragEnter will not receive Drop.
+# ------------------------------------------------------------------
+
+class _ChatDisplay(QTextEdit):
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setAcceptDrops(True)
+
+    def _local_file_from(self, event):
+        urls = event.mimeData().urls()
+        if urls and urls[0].isLocalFile():
+            return urls[0].toLocalFile()
+        return None
+
+    def dragEnterEvent(self, event):
+        if self._local_file_from(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._local_file_from(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        path = self._local_file_from(event)
+        if path:
+            self.file_dropped.emit(path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 # ------------------------------------------------------------------
@@ -55,10 +98,10 @@ class MainWindow(QMainWindow):
         self.companion_display.setStyleSheet("font-family: 'Courier New', Courier, monospace; font-size: 16px; min-height: 30px; color: #a8a8a8;")
         main_layout.addWidget(self.companion_display)
 
-        # Chat display area
-        self.chat_display = QTextEdit()
-        self.chat_display.setReadOnly(True)
+        # Chat display area — _ChatDisplay subclass handles file drag-and-drop
+        self.chat_display = _ChatDisplay()
         self.chat_display.setStyleSheet("background-color: #0d0d0d; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; font-size: 14px; border: none;")
+        self.chat_display.file_dropped.connect(self._load_rag_file)
         main_layout.addWidget(self.chat_display)
 
         # Input area
@@ -84,11 +127,22 @@ class MainWindow(QMainWindow):
         self.stop_button.setToolTip("Stop FRIDAY from speaking")
         self.stop_button.clicked.connect(self.stop_speaking)
 
+        self.file_button = QPushButton("@")
+        self.file_button.setStyleSheet(btn_style)
+        self.file_button.setToolTip("Load file as session context (or drag & drop onto chat)")
+        self.file_button.setFixedWidth(36)
+        self.file_button.clicked.connect(self.open_file_picker)
+
         input_layout.addWidget(self.mic_button)
         input_layout.addWidget(self.stop_button)
         input_layout.addWidget(self.input_field)
+        input_layout.addWidget(self.file_button)
         input_layout.addWidget(self.send_button)
         main_layout.addLayout(input_layout)
+
+        # Accept drops anywhere on the window as a fallback for areas
+        # outside the _ChatDisplay (title bar, buttons, input row).
+        self.setAcceptDrops(True)
 
         # Animation State
         self.companion_state = "idle"
@@ -170,6 +224,66 @@ class MainWindow(QMainWindow):
             tts.stop()
 
     # ------------------------------------------------------------------
+    # File context (session RAG)
+    # ------------------------------------------------------------------
+
+    _SUPPORTED_EXTENSIONS = (
+        ".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".html", ".csv"
+    )
+
+    def open_file_picker(self):
+        ext_filter = "Documents (*.pdf *.docx *.pptx *.xlsx *.md *.txt *.html *.csv)"
+        path, _ = QFileDialog.getOpenFileName(self, "Load file as session context", "", ext_filter)
+        if path:
+            self._load_rag_file(path)
+
+    def _load_rag_file(self, path: str):
+        import threading
+        suffix = os.path.splitext(path)[1].lower()
+        if suffix not in self._SUPPORTED_EXTENSIONS:
+            self._insert_status(f"Unsupported file type: {suffix}")
+            return
+        name = os.path.basename(path)
+        self._insert_status(f"Loading '{name}'...")
+
+        def _do_load():
+            try:
+                msg = self.app_core.load_session_rag_file(path)
+                # message_ready is thread-safe; _status key routes to _insert_status
+                self.message_ready.emit({"_status": f"Context loaded: {msg}"})
+            except Exception as exc:
+                self.message_ready.emit({"_status": f"Failed to load '{name}': {exc}"})
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _insert_status(self, text: str):
+        safe = html_escape(text)
+        html = (
+            f'<p align="center">'
+            f'<span style="color:#5a9a7a;font-size:11px;">[ {safe} ]</span>'
+            f'</p>'
+        )
+        self._insert_raw_html(html)
+
+    # Window-level drop fallback — catches drops on any area outside _ChatDisplay
+    def dragEnterEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls and urls[0].isLocalFile():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if path:
+                self._load_rag_file(path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    # ------------------------------------------------------------------
     # Async message sending
     # ------------------------------------------------------------------
 
@@ -189,6 +303,21 @@ class MainWindow(QMainWindow):
         if not text:
             return
         self.input_field.clear()
+        # File paths and file:// URIs dropped or typed into the input field
+        # are intercepted here before reaching the LLM. The app-level
+        # process_input also has this guard as a final safety net.
+        if text.startswith("/") and os.path.isfile(text):
+            self._load_rag_file(text)
+            return
+        if text.startswith("file://"):
+            from urllib.parse import urlparse, unquote
+            try:
+                path = unquote(urlparse(text).path)
+                if os.path.isfile(path):
+                    self._load_rag_file(path)
+                    return
+            except Exception:
+                pass
         self.app_core.process_input(text, source="gui")
 
     def handle_send_button_clicked(self):
@@ -208,6 +337,11 @@ class MainWindow(QMainWindow):
     def render_message(self, payload):
         if isinstance(payload, str):
             self._insert_bubble("assistant", payload)
+            return
+
+        # Background file-load completion — route to status bar, not chat bubble
+        if "_status" in payload:
+            self._insert_status(payload["_status"])
             return
 
         role = payload.get("role", "assistant")
@@ -235,7 +369,8 @@ class MainWindow(QMainWindow):
         self._insert_raw_html(html)
 
     def _insert_bubble(self, role: str, text: str):
-        safe = html_escape(text.strip()).replace("\n", "<br/>")
+        display_text = math_to_display(text.strip()) if role != "user" else text.strip()
+        safe = html_escape(display_text).replace("\n", "<br/>")
         ts = time.strftime("%H:%M")
         if role == "user":
             html = (

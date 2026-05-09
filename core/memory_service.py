@@ -26,13 +26,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.logger import logger
+
 
 class MemoryService:
     """Single read/write surface over ContextStore + MemoryBroker."""
 
-    def __init__(self, context_store, memory_broker=None):
+    def __init__(self, context_store, memory_broker=None, mem0_client=None, extractor=None):
         self._store = context_store
         self._broker = memory_broker
+        self._mem0 = mem0_client       # None when Mem0 is unavailable
+        self._extractor = extractor    # TurnGatedMemoryExtractor
 
     # Convenience accessor — used by code that still needs the raw store
     # during the migration. New code should NOT use this; it exists to
@@ -51,9 +55,21 @@ class MemoryService:
     # ------------------------------------------------------------------
 
     def build_context_bundle(self, session_id: str, query: str) -> dict:
-        if self._broker is None or not session_id:
-            return {}
-        return self._broker.build_context_bundle(query, session_id) or {}
+        bundle = {}
+        if self._broker is not None and session_id:
+            bundle = self._broker.build_context_bundle(query, session_id) or {}
+
+        # Inject Mem0 facts — ~15-30ms retrieval, ~60 tokens injected
+        if self._mem0 and query:
+            try:
+                results = self._mem0.search(query, user_id="default", limit=5)
+                facts = [r["memory"] for r in (results.get("results") or [])]
+                if facts:
+                    bundle["user_facts"] = "\n".join(facts)
+            except Exception as exc:
+                logger.debug("[mem0] Retrieval failed (non-fatal): %s", exc)
+
+        return bundle
 
     def record_turn(
         self,
@@ -68,6 +84,10 @@ class MemoryService:
             self._store.append_turn(session_id, "user", user_text, source=trace_id or None)
         if assistant_text:
             self._store.append_turn(session_id, "assistant", assistant_text, source=trace_id or None)
+
+        # Queue Mem0 extraction (fires only after active_turns == 0)
+        if self._extractor and user_text and assistant_text:
+            self._extractor.queue_turn(user_text, assistant_text, user_id="default")
 
     def learn_fact(
         self,
@@ -176,3 +196,26 @@ class MemoryService:
             sensitivity=sensitivity,
             metadata=metadata,
         )
+
+    # ------------------------------------------------------------------
+    # Working artifact façade
+    # ------------------------------------------------------------------
+
+    def save_artifact(self, session_id: str, artifact) -> None:
+        self._store.save_artifact(session_id, artifact)
+
+    def get_artifact(self, session_id: str):
+        return self._store.get_artifact(session_id)
+
+    # ------------------------------------------------------------------
+    # Reference registry façade
+    # ------------------------------------------------------------------
+
+    def save_reference(self, session_id: str, key: str, value: str) -> None:
+        self._store.save_reference(session_id, key, value)
+
+    def get_reference(self, session_id: str, key: str) -> "str | None":
+        return self._store.get_reference(session_id, key)
+
+    def get_all_references(self, session_id: str) -> dict:
+        return self._store.get_all_references(session_id)

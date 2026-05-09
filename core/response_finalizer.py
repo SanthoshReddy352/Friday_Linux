@@ -29,7 +29,9 @@ class ResponseFinalizer:
         assistant_context = getattr(self._app, "assistant_context", None)
         if assistant_context and hasattr(assistant_context, "humanize_tool_result"):
             response = assistant_context.humanize_tool_result(response)
-        return self._detect_clarification(response)
+        response = self._detect_clarification(response)
+        self._update_reference_registry(response)
+        return response
 
     def remember_tool_use(self, tool_name: str, args: dict) -> None:
         assistant_context = getattr(self._app, "assistant_context", None)
@@ -75,3 +77,41 @@ class ResponseFinalizer:
                 cancel_message="Okay. Please say it again in a different way.",
             )
         return response
+
+    def _update_reference_registry(self, response: str) -> None:
+        """Scan the finalized response for lists and file paths; update reference registry.
+
+        Runs once per turn after response generation — negligible cost (~0.5 ms).
+        """
+        session_id = getattr(self._app, "session_id", "")
+        store = getattr(self._app, "context_store", None)
+        if not session_id or not store:
+            return
+
+        # Numbered list items: "1. item", "2. item"
+        items = re.findall(r"^\s*\d+\.\s+(.+)$", response, re.MULTILINE)
+        if items:
+            _ORDINALS = (
+                "first", "second", "third", "fourth", "fifth",
+                "sixth", "seventh", "eighth", "ninth", "tenth",
+            )
+            for i, item in enumerate(items[:10]):
+                if i < len(_ORDINALS):
+                    store.save_reference(session_id, _ORDINALS[i], item.strip())
+            store.save_reference(session_id, "last_list", "\n".join(items))
+
+        # File paths mentioned in the response
+        file_match = re.search(
+            r"[`'\"]([/~][^\s`'\"]+\.[a-zA-Z]{1,6})[`'\"]", response
+        )
+        if file_match:
+            store.save_reference(session_id, "last_file", file_match.group(1))
+
+        # Active document (consumed by MarkItDown conversational follow-up, Phase 5)
+        doc_match = re.search(
+            r"\b(?:document|file|paper|note)s?\s+['\"]([^'\"]+)['\"]",
+            response,
+            re.IGNORECASE,
+        )
+        if doc_match:
+            store.save_reference(session_id, "active_document", doc_match.group(1))

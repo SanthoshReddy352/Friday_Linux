@@ -70,7 +70,10 @@ class STTEngine:
         self.stream_channels = 1
         self.stream_blocksize = 800
         self._startup_device_selected = False
-        self.max_utterance_duration = float(os.getenv("FRIDAY_MAX_UTTERANCE_S", "4.0"))
+        self.max_utterance_duration = float(
+            os.getenv("FRIDAY_MAX_UTTERANCE_S")
+            or self._config_float("voice.stt_max_utterance_s", 20.0)
+        )
         self.min_utterance_duration = float(os.getenv("FRIDAY_MIN_UTTERANCE_S", "0.35"))
         self.listen_resume_delay_s = float(os.getenv("FRIDAY_LISTEN_RESUME_DELAY_S", "0.35"))
         self._listen_request_id = 0

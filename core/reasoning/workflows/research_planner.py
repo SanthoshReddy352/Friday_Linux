@@ -32,12 +32,13 @@ _AFFIRMATIVE_TOKENS = ("yes", "yeah", "yep", "sure", "ok", "okay", "go", "do it"
 
 _MODE_CAPS = {"speed": 4, "balanced": 8, "quality": 12}
 
+# Default mode and source count — used when the user doesn't specify.
+_DEFAULT_PLANNER_MODE = "quality"
+_DEFAULT_PLANNER_SOURCES = 12
+
 _AWAITING_STEPS = frozenset({
     "awaiting_topic",
-    "awaiting_mode",
-    "awaiting_sources",
     "awaiting_focus",
-    "awaiting_confirm",
     "awaiting_readout",
 })
 
@@ -59,25 +60,29 @@ class ResearchPlannerWorkflow(BaseWorkflow):
     # ------------------------------------------------------------------
 
     def begin(self, topic: str, session_id: str) -> str:
-        """Save the initial state and return the first prompt to the user."""
+        """Save the initial state and return the first (and usually only) prompt."""
         topic = (topic or "").strip(" .!?:'\"")
         if not topic:
-            initial = {"step": "awaiting_topic"}
+            initial = {
+                "step": "awaiting_topic",
+                "mode": _DEFAULT_PLANNER_MODE,
+                "max_sources": _DEFAULT_PLANNER_SOURCES,
+            }
             self._memory().save_workflow_state(session_id, self.name, initial)
             return "What would you like me to research, sir?"
 
         state = {
-            "step": "awaiting_mode",
+            "step": "awaiting_focus",
             "topic": topic,
-            "mode": None,
-            "max_sources": None,
+            "mode": _DEFAULT_PLANNER_MODE,
+            "max_sources": _DEFAULT_PLANNER_SOURCES,
             "focus": None,
         }
         self._memory().save_workflow_state(session_id, self.name, state)
         return (
-            f"Got it — research on '{topic}'. "
-            "What depth would you like? **speed** (~2 iterations, fast), "
-            "**balanced** (~6 iterations, default), or **quality** (~25 iterations, deep dive)?"
+            f"Researching '{topic}' — up to {_DEFAULT_PLANNER_SOURCES} sources. "
+            "Any specific angle? Say 'general' to start now, or describe your focus. "
+            "You can also say 'speed' or 'balanced' to adjust the depth."
         )
 
     # ------------------------------------------------------------------
@@ -95,53 +100,26 @@ class ResearchPlannerWorkflow(BaseWorkflow):
             if not topic:
                 return self._reply(state, ws, "I still need a topic, sir — what should I research?")
             ws["topic"] = topic
-            ws["step"] = "awaiting_mode"
-            self._save(session_id, ws)
-            return self._reply(state, ws,
-                f"Researching '{topic}'. Depth — speed, balanced, or quality?")
-
-        if step == "awaiting_mode":
-            mode = self._parse_mode(user_text)
-            ws["mode"] = mode
-            ws["step"] = "awaiting_sources"
-            self._save(session_id, ws)
-            cap = _MODE_CAPS[mode]
-            return self._reply(state, ws,
-                f"{mode.capitalize()} mode. How many sources should I gather? "
-                f"(1–{cap}, default 5)")
-
-        if step == "awaiting_sources":
-            n = self._parse_sources(user_text, ws.get("mode") or "balanced")
-            ws["max_sources"] = n
             ws["step"] = "awaiting_focus"
             self._save(session_id, ws)
             return self._reply(state, ws,
-                f"{n} sources. Any specific focus or angle to emphasize? "
-                "(say it now, or 'no' for general coverage)")
+                f"Researching '{topic}' in quality mode with up to {_DEFAULT_PLANNER_SOURCES} sources. "
+                "Any specific angle? Say 'general' to start now.")
 
         if step == "awaiting_focus":
-            focus = "" if self._is_negative(user_text) else user_text.strip(" .!?:'\"")
+            if self._is_negative(user_text) or user_text.strip(" .!?:'\"").lower() in ("general", "broad", "any", "none", ""):
+                focus = ""
+            else:
+                focus = user_text.strip(" .!?:'\"")
+                # Allow inline mode/source overrides in the focus reply
+                mode_override = self._parse_mode(user_text)
+                if mode_override != "balanced" or any(m in user_text.lower() for m in _MODE_CAPS):
+                    ws["mode"] = mode_override
+                    ws["max_sources"] = min(ws.get("max_sources", _DEFAULT_PLANNER_SOURCES), _MODE_CAPS[mode_override])
+                n_override = self._parse_sources_inline(user_text)
+                if n_override:
+                    ws["max_sources"] = min(n_override, _MODE_CAPS[ws.get("mode", _DEFAULT_PLANNER_MODE)])
             ws["focus"] = focus
-            ws["step"] = "awaiting_confirm"
-            self._save(session_id, ws)
-            recap_parts = [
-                f"Researching '{ws['topic']}'",
-                f"in **{ws['mode']}** mode",
-                f"across **{ws['max_sources']}** sources",
-            ]
-            if focus:
-                recap_parts.append(f"focused on: *{focus}*")
-            recap = ", ".join(recap_parts)
-            return self._reply(state, ws,
-                f"{recap}. Shall I proceed?")
-
-        if step == "awaiting_confirm":
-            if self._is_negative(user_text):
-                ws["step"] = "cancelled"
-                self._save(session_id, ws)
-                return self._reply(state, ws,
-                    "Cancelled, sir. Let me know when you'd like to revisit it.")
-            # Kick off the actual research.
             return self._kick_off_research(state, ws, session_id)
 
         if step == "awaiting_readout":
@@ -204,8 +182,8 @@ class ResearchPlannerWorkflow(BaseWorkflow):
                 f"Couldn't start research: {exc}")
 
         return self._reply(state, ws,
-            f"On it — researching '{full_topic}', {ws['mode']} mode, "
-            f"{ws['max_sources']} sources. I'll let you know when the briefing is ready.")
+            f"Researching '{full_topic}' in {ws['mode']} mode across {ws['max_sources']} sources. "
+            f"I'll let you know when it's ready.")
 
     def _on_research_done(self, report, session_id, prior_ws):
         """Async completion: update workflow state + announce the result.
@@ -293,6 +271,16 @@ class ResearchPlannerWorkflow(BaseWorkflow):
             return min(5, cap)
         return max(1, min(n, cap))
 
+    def _parse_sources_inline(self, text: str) -> int:
+        """Extract an explicit source count from a free-form reply (e.g. '6 sources')."""
+        m = re.search(r"\b(\d+)\s+source", (text or "").lower())
+        if not m:
+            return 0
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return 0
+
     def _is_negative(self, text: str) -> bool:
         t = (text or "").lower().strip(" .!?")
         if not t:
@@ -310,8 +298,9 @@ class ResearchPlannerWorkflow(BaseWorkflow):
         except OSError as exc:
             return f"Couldn't open the summary: {exc}"
 
-        # Markdown stripping for TTS — strip headings/citations/code/emphasis.
+        # Markdown stripping for TTS — strip think tags, headings, citations, emphasis.
         text = content
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^#+\s*", "", text, flags=re.M)
         text = re.sub(r"\[(\d+)\]", r"reference \1", text)
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)

@@ -7,6 +7,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
@@ -26,22 +27,25 @@ from modules.voice_io.audio_devices import (
 )
 
 
-MIN_THRESHOLD = float(os.getenv("FRIDAY_CLAP_MIN_THRESHOLD", "0.065"))
-DYNAMIC_MULT = float(os.getenv("FRIDAY_CLAP_DYNAMIC_MULT", "1.6"))
-CREST_FACTOR_MIN = float(os.getenv("FRIDAY_CLAP_CREST_FACTOR_MIN", "4.2"))
-TARGET_SAMPLERATE = int(os.getenv("FRIDAY_CLAP_SAMPLERATE", "16000"))
-SECOND_CLAP_THRESHOLD_MULT = float(os.getenv("FRIDAY_CLAP_SECOND_THRESHOLD_MULT", "0.65"))
-SECOND_CLAP_CREST_MULT = float(os.getenv("FRIDAY_CLAP_SECOND_CREST_MULT", "0.75"))
+MIN_THRESHOLD = float(os.getenv("FRIDAY_CLAP_PEAK_THRESHOLD", "0.30"))
 
-MIN_GAP = float(os.getenv("FRIDAY_CLAP_MIN_GAP", "0.06"))
-MAX_GAP = float(os.getenv("FRIDAY_CLAP_MAX_GAP", "1.75"))
-TRIGGER_COOLDOWN = float(os.getenv("FRIDAY_CLAP_COOLDOWN", "2.50"))
-FLOOR_MAX = float(os.getenv("FRIDAY_CLAP_FLOOR_MAX", "0.25"))
+TARGET_SAMPLERATE = int(os.getenv("FRIDAY_CLAP_SAMPLERATE", "16000"))
+
+MIN_GAP = float(os.getenv("FRIDAY_CLAP_MIN_GAP", "0.08"))
+MAX_GAP = float(os.getenv("FRIDAY_CLAP_MAX_GAP", "1.0"))
+TRIGGER_COOLDOWN = float(os.getenv("FRIDAY_CLAP_COOLDOWN", "2.0"))
 SIGNAL_NORM_TARGET = 1.0
 
-STATUS_LOG_INTERVAL_S = float(os.getenv("FRIDAY_CLAP_STATUS_LOG_INTERVAL_S", "5.0"))
-WARMUP_SECONDS = float(os.getenv("FRIDAY_CLAP_WARMUP_S", "1.5"))
+STATUS_LOG_INTERVAL_S = float(os.getenv("FRIDAY_CLAP_STATUS_LOG_INTERVAL_S", "10.0"))
+WARMUP_SECONDS = float(os.getenv("FRIDAY_CLAP_WARMUP_S", "2.0"))
+# Skip this many seconds at mic-open to avoid hardware turn-on transients
+WARMUP_SETTLE_S = float(os.getenv("FRIDAY_CLAP_WARMUP_SETTLE_S", "0.5"))
 STREAM_RETRY_DELAY_S = float(os.getenv("FRIDAY_CLAP_RETRY_DELAY_S", "2.0"))
+# Burst detection: each frame is split into N_SUB_FRAMES chunks; a clap concentrates
+# energy in 1-2 chunks (high burst ratio). Sustained noise spreads evenly (ratio ~1.0).
+N_SUB_FRAMES = int(os.getenv("FRIDAY_CLAP_SUB_FRAMES", "10"))
+BURST_RATIO_THRESHOLD = float(os.getenv("FRIDAY_CLAP_BURST_RATIO", "1.8"))
+
 
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 CLAP_LOG_PATH = os.path.join(LOGS_DIR, "clap_detector.log")
@@ -56,25 +60,34 @@ THIS_SCRIPT = os.path.abspath(__file__)
 DETECTOR_MODULE = "modules.voice_io.clap_detector"
 
 
+class TraceIdFilter(logging.Filter):
+    """Injects a dummy trace_id into log records to prevent formatting errors."""
+    def filter(self, record):
+        if not hasattr(record, "trace_id"):
+            record.trace_id = "-"
+        return True
+
 def setup_logger():
+    """Configure rotating file logger and console output."""
     os.makedirs(LOGS_DIR, exist_ok=True)
+    logger = logging.getLogger("clap_detector")
 
-    logger = logging.getLogger("FRIDAY.clap_detector")
     logger.setLevel(logging.DEBUG)
-
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - PID:%(process)d - [%(trace_id)s] - %(levelname)s - %(message)s")
 
     file_handler = RotatingFileHandler(CLAP_LOG_PATH, maxBytes=1_000_000, backupCount=3)
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(TraceIdFilter())
     logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(TraceIdFilter())
     logger.addHandler(console_handler)
 
     return logger
@@ -244,45 +257,66 @@ class DoubleClapStateMachine:
             return "first"
 
         gap = now - self.last_spike_at
-        self.last_spike_at = now
         if gap <= self.max_gap:
             self.waiting_for_second = False
             self.cooldown_until = now + self.cooldown
+            self.last_spike_at = now  # Keep it as now to prevent immediate re-trigger during cooldown
             return "double"
 
+
+        # Gap too long, restart sequence with this spike as the new 'first'
+        self.last_spike_at = now
         self.waiting_for_second = True
         return "restart"
+
 
 
 class ClapDetectorEngine:
     def __init__(
         self,
         min_threshold=MIN_THRESHOLD,
-        dynamic_mult=DYNAMIC_MULT,
-        crest_factor_min=CREST_FACTOR_MIN,
-        second_clap_threshold_mult=SECOND_CLAP_THRESHOLD_MULT,
-        second_clap_crest_mult=SECOND_CLAP_CREST_MULT,
         min_gap=MIN_GAP,
         max_gap=MAX_GAP,
         cooldown=TRIGGER_COOLDOWN,
         warmup_seconds=WARMUP_SECONDS,
+        warmup_settle_s=WARMUP_SETTLE_S,
         status_log_interval_s=STATUS_LOG_INTERVAL_S,
+        n_sub_frames=N_SUB_FRAMES,
+        burst_ratio_threshold=BURST_RATIO_THRESHOLD,
     ):
         self.min_threshold = min_threshold
-        self.dynamic_mult = dynamic_mult
-        self.crest_factor_min = crest_factor_min
-        self.second_clap_threshold_mult = second_clap_threshold_mult
-        self.second_clap_crest_mult = second_clap_crest_mult
+        self.n_sub_frames = n_sub_frames
+        self.burst_ratio_threshold = burst_ratio_threshold
         self.status_log_interval_s = status_log_interval_s
         self.state = DoubleClapStateMachine(min_gap=min_gap, max_gap=max_gap, cooldown=cooldown)
-        self.background_rms = 0.01
-        self.prev_data = np.zeros(0, dtype=np.float32)
         self.last_log_time = 0.0
         self.warmup_seconds = warmup_seconds
-        self.warmup_until = time.monotonic() + warmup_seconds
+        self.warmup_settle_s = warmup_settle_s
+        self._warmup_start = time.monotonic()
+        self.warmup_until = self._warmup_start + warmup_seconds
+        self._warmup_peaks = []
+        self._warmup_done = False
+
+    def _finish_warmup(self):
+        if self._warmup_peaks:
+            noise_floor = float(np.percentile(self._warmup_peaks, 75))
+            LOGGER.info("Warmup complete. Noise floor p75=%.4f. Using burst-ratio detection (threshold=%.2fx).",
+                        noise_floor, self.burst_ratio_threshold)
+            if noise_floor > 0.5:
+                LOGGER.warning(
+                    "High ambient noise (noise_floor=%.4f). If false triggers persist, "
+                    "reduce microphone gain in system audio settings.",
+                    noise_floor,
+                )
+        self._warmup_peaks = []
+        self._warmup_done = True
 
     def begin_warmup(self):
-        self.warmup_until = time.monotonic() + self.warmup_seconds
+        now = time.monotonic()
+        self._warmup_start = now
+        self.warmup_until = now + self.warmup_seconds
+        self._warmup_peaks = []
+        self._warmup_done = False
         self.state.waiting_for_second = False
         self.state.last_spike_at = 0.0
         self.state.cooldown_until = 0.0
@@ -293,76 +327,61 @@ class ClapDetectorEngine:
         if audio.ndim <= 1:
             samples = audio.reshape(-1)
         else:
-            # Mix frames to mono instead of flattening interleaved channels.
             samples = np.mean(audio, axis=1, dtype=np.float32)
         if samples.size == 0:
             return None
 
-        # Remove frame-level DC offset without smearing a clap impulse across the full block.
-        transient_data = samples - float(np.mean(samples))
-        self.prev_data = transient_data.copy()
+        # DC removal
+        samples_centered = samples - np.mean(samples)
+        peak = float(np.max(np.abs(samples_centered)))
 
-        rms = float(np.sqrt(np.mean(transient_data**2)))
-        peak = float(np.max(np.abs(transient_data)))
+        # Sub-frame burst ratio: split frame into N chunks, compare loudest chunk to mean.
+        # A clap concentrates energy in 1-2 chunks → high ratio.
+        # Sustained ambient noise spreads energy evenly → ratio near 1.0.
+        n = self.n_sub_frames
+        chunk_size = max(1, len(samples_centered) // n)
+        sub_rms = [
+            float(np.sqrt(np.mean(samples_centered[i:i + chunk_size] ** 2)))
+            for i in range(0, len(samples_centered) - chunk_size + 1, chunk_size)
+        ]
+        mean_sub_rms = float(np.mean(sub_rms)) if sub_rms else 0.0
+        max_sub_rms = float(np.max(sub_rms)) if sub_rms else 0.0
+        burst_ratio = max_sub_rms / max(mean_sub_rms, 1e-6)
 
-        # Handle non-normalized audio levels (e.g., if gain > 1.0 or driver glitch)
-        if peak > 1.1:
-            scale = SIGNAL_NORM_TARGET / (peak + 1e-6)
-            transient_data *= scale
-            rms *= scale
-            peak *= scale
-
-        capped_sample = min(rms, max(self.background_rms * 1.25, self.min_threshold * 0.5))
-        self.background_rms = min(self.background_rms * 0.985 + capped_sample * 0.015, FLOOR_MAX)
-
-        target_threshold = max(self.min_threshold, self.background_rms * self.dynamic_mult)
         if now - self.last_log_time >= self.status_log_interval_s:
             LOGGER.info(
-                "Floor=%.4f RMS=%.4f Peak=%.4f Target=%.4f WaitingSecond=%s",
-                self.background_rms,
-                rms,
-                peak,
-                target_threshold,
-                self.state.waiting_for_second,
+                "Peak=%.4f BurstRatio=%.2f BurstThresh=%.2f WaitingSecond=%s",
+                peak, burst_ratio, self.burst_ratio_threshold, self.state.waiting_for_second,
             )
             self.last_log_time = now
 
         if now < self.warmup_until:
+            if (now - self._warmup_start) >= self.warmup_settle_s:
+                self._warmup_peaks.append(peak)
             return None
 
-        if rms <= 0.0001:
+        if not self._warmup_done:
+            self._finish_warmup()
+
+        # Noise gate: ignore very quiet frames
+        if peak < self.min_threshold:
             self.state.expire(now)
             return None
 
-        crest = peak / rms
-        required_rms = target_threshold
-        required_crest = self.crest_factor_min
-        if self.state.waiting_for_second:
-            required_rms = max(self.min_threshold * self.second_clap_threshold_mult, target_threshold * self.second_clap_threshold_mult)
-            required_crest = self.crest_factor_min * self.second_clap_crest_mult
-
-        if rms <= required_rms or crest <= required_crest:
+        # Burst gate: require a transient shape, not just loud amplitude
+        if burst_ratio < self.burst_ratio_threshold:
             self.state.expire(now)
             return None
 
         event = self.state.note_spike(now)
         if event == "first":
-            LOGGER.info(
-                "First clap candidate detected. RMS=%.3f Floor=%.3f Crest=%.2f",
-                rms,
-                self.background_rms,
-                crest,
-            )
+            LOGGER.info("First clap detected. Peak=%.3f BurstRatio=%.2f", peak, burst_ratio)
         elif event == "restart":
-            LOGGER.info("Clap gap exceeded %.2fs. Restarting double-clap window.", self.state.max_gap)
+            LOGGER.info("Clap gap exceeded. Restarting sequence. Peak=%.3f BurstRatio=%.2f", peak, burst_ratio)
         elif event == "double":
-            LOGGER.info(
-                "Double clap confirmed. RMS=%.3f Floor=%.3f Crest=%.2f. Scheduling FRIDAY launch.",
-                rms,
-                self.background_rms,
-                crest,
-            )
+            LOGGER.info("Double clap confirmed. Peak=%.3f BurstRatio=%.2f. Triggering launch.", peak, burst_ratio)
         return event
+
 
 
 class ClapDetectorService:
@@ -372,6 +391,8 @@ class ClapDetectorService:
         self._startup_device_selected = False
         self.detector = ClapDetectorEngine()
         self.events = queue.Queue(maxsize=4)
+        # Signals the main loop that a launch was fired by the worker thread
+        self._launched_event = threading.Event()
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -386,15 +407,14 @@ class ClapDetectorService:
         except queue.Full:
             LOGGER.debug("Launch event queue already contains a pending trigger.")
 
-    def handle_pending_events(self):
-        handled = 0
+    def _launch_worker(self):
+        """Daemon thread: blocks on the event queue and launches FRIDAY immediately on double-clap."""
         while True:
             try:
-                event = self.events.get_nowait()
+                event = self.events.get(timeout=1.0)
             except queue.Empty:
-                return handled
+                continue
 
-            handled += 1
             if event != "double_clap":
                 continue
 
@@ -404,6 +424,13 @@ class ClapDetectorService:
 
             try:
                 launch_friday()
+                self._launched_event.set()
+                # Drain any extra events queued during the same gesture
+                while not self.events.empty():
+                    try:
+                        self.events.get_nowait()
+                    except queue.Empty:
+                        break
             except Exception as exc:
                 LOGGER.exception("Failed to launch FRIDAY: %s", exc)
 
@@ -418,6 +445,9 @@ class ClapDetectorService:
         LOGGER.info("FRIDAY Double Clap Detector")
         LOGGER.info("Monitoring for clap pairs to launch FRIDAY.")
         LOGGER.info("====================================================")
+
+        worker = threading.Thread(target=self._launch_worker, daemon=True, name="clap-launch-worker")
+        worker.start()
 
         while True:
             try:
@@ -444,10 +474,26 @@ class ClapDetectorService:
                 ):
                     LOGGER.info("Listener ACTIVE. Clap twice to launch FRIDAY.")
                     while True:
-                        self.detector.state.expire(time.monotonic())
-                        self.handle_pending_events()
-                        time.sleep(0.25)
+                        if self._launched_event.wait(timeout=0.5):
+                            # Worker already launched FRIDAY; give the process a moment to appear
+                            self._launched_event.clear()
+                            LOGGER.info("Launch triggered. Releasing microphone.")
+                            time.sleep(0.5)
+                            break
+
+                        if is_friday_running():
+                            LOGGER.info("FRIDAY is running. Releasing microphone.")
+                            break
+
+
+                # Wait for FRIDAY to exit before trying to re-acquire the mic
+                while is_friday_running():
+                    time.sleep(5)
+                LOGGER.info("FRIDAY stopped. Re-acquiring microphone.")
+
+
             except KeyboardInterrupt:
+
                 LOGGER.info("Stopping clap detector.")
                 return
             except Exception as exc:

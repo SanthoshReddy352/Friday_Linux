@@ -31,6 +31,9 @@ class WorldMonitorPlugin(FridayPlugin):
             },
             "aliases": [
                 "world monitor",
+                "world monitor briefing",
+                "world monitor news",
+                "world monitor top stories",
                 "global intelligence",
                 "global news",
                 "global news brief",
@@ -39,6 +42,9 @@ class WorldMonitorPlugin(FridayPlugin):
                 "latest news",
                 "news briefing",
                 "news brief",
+                "briefing",
+                "give me a briefing",
+                "give me a news briefing",
                 "world news",
                 "world news intelligence",
                 "tech news",
@@ -55,11 +61,14 @@ class WorldMonitorPlugin(FridayPlugin):
                 "happy news",
             ],
             "patterns": [
+                r"\bworld\s*monitor\b",
+                r"\btop\s*\d*\s*(?:world\s+|news\s+)?(?:stories|headlines|articles)\b",
                 r"\b(?:what(?:'s| is)?|give me|show me|tell me|read me|open)?\s*(?:the\s+)?(?:latest\s+|current\s+)?world news\b",
                 r"\b(?:what(?:'s| is)?|give me|show me|tell me|read me|brief me on|summarize)?\s*(?:the\s+)?(?:latest\s+|current\s+)?(?:news|news briefing|news brief)\b",
-                r"\b(?:global intelligence|global news|geopolitical brief|world monitor)\b",
+                r"\b(?:global intelligence|global news|geopolitical brief)\b",
                 r"\b(?:what(?:'s| is)?|give me|show me|tell me|read me|brief me on|summarize|open)?\s*(?:the\s+)?(?:latest\s+|current\s+)?(?:tech|technology|finance|financial|market|commodity|commodities|energy|good|happy) news\b",
                 r"\b(?:what(?:'s| is)?|give me|show me|tell me|read me|brief me on|summarize)?\s*(?:the\s+)?(?:latest|current)\s+(?:tech|technology|technique)\b",
+                r"\b(?:give me|show me|tell me|read me)\s+(?:a\s+|the\s+)?(?:full\s+)?briefing\b",
             ],
             "context_terms": [
                 "worldmonitor",
@@ -88,7 +97,7 @@ class WorldMonitorPlugin(FridayPlugin):
             ],
         }, self.handle_world_monitor_news, capability_meta={
             "connectivity": "online",
-            "latency_class": "interactive",
+            "latency_class": "slow",
             "permission_mode": "always_ok",
             "side_effect_level": "write",
             "resources": [
@@ -106,6 +115,8 @@ class WorldMonitorPlugin(FridayPlugin):
 
     def handle_world_monitor_news(self, text, args):
         args = dict(args or {})
+        if self._is_full_briefing_request(text, args):
+            return self._handle_full_briefing(text, args)
         category = args.get("category") or self._infer_category(text)
         focus = args.get("focus") or self._infer_focus(text)
         country_code = args.get("country_code") or ""
@@ -128,6 +139,55 @@ class WorldMonitorPlugin(FridayPlugin):
                 f"Reason: {exc}. "
                 "If this keeps happening, set world_monitor.api_key in config.yaml."
             )
+
+    def _is_full_briefing_request(self, text: str, args: dict) -> bool:
+        """Return True when the user wants all 6 categories (full briefing)."""
+        if args.get("category"):
+            return False
+        lowered = str(text or "").lower()
+        # Explicit single-category keywords → single-category request
+        if re.search(
+            r"\b(?:tech|technology|finance|financial|market|markets|stocks?|"
+            r"commodity|commodities|metals?|energy|oil|gas|power|good news|happy)\b",
+            lowered,
+        ):
+            return False
+        return bool(re.search(r"\bbriefing\b", lowered))
+
+    def _handle_full_briefing(self, text: str, args: dict) -> str:
+        args = dict(args or {})
+        top_n = max(1, min(5, self._safe_int(args.get("limit") or 3, 3)))
+        window_hours = self._safe_int(args.get("window_hours") or 20, 20)
+        try:
+            digests = self.service.get_full_briefing(top_n=top_n, window_hours=window_hours)
+        except Exception as exc:
+            return f"I could not fetch the full WorldMonitor briefing. Reason: {exc}"
+
+        formatted = self.service.format_full_briefing(digests, top_n=top_n)
+        speech = formatted["speech_segments"]
+
+        browser = getattr(self.app, "browser_media_service", None)
+        if browser is not None and not self._browser_disabled_reason():
+            try:
+                browser_name = self._config_get("browser_automation.preferred_browser", "chrome") or "chrome"
+                browser.open_browser_url(
+                    "https://worldmonitor.app/",
+                    browser_name=browser_name,
+                    platform="world_monitor",
+                )
+            except Exception as exc:
+                logger.warning("WorldMonitor dashboard open failed: %s", exc)
+
+        max_segments = self._safe_int(self._config_get("world_monitor.spoken_limit", 30), 30)
+        max_segments = max(1, min(50, max_segments))
+        for segment in speech[:max_segments]:
+            self.app.event_bus.publish("voice_response", segment)
+
+        routing_state = getattr(self.app, "routing_state", None)
+        if routing_state is not None:
+            routing_state.mark_voice_spoken()
+
+        return "Opening and reading the full WorldMonitor briefing."
 
     def _present_digest(self, digest):
         routing_state = getattr(self.app, "routing_state", None)

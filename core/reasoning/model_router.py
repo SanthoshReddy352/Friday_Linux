@@ -129,6 +129,9 @@ class ModelRouter:
             return self._tool_llm
         if self._failed:
             return None
+        # Don't block the turn waiting for model loading from disk.
+        if not self._model_manager.is_loaded("tool"):
+            return None
         with self._lock:
             if self._tool_llm is not None:
                 return self._tool_llm

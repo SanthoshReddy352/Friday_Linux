@@ -73,7 +73,7 @@ _DEFAULT_ALIASES: dict[str, set[str]] = {
     "get_calendar_week": {"this week's calendar", "week schedule", "upcoming events", "what's this week"},
     "get_calendar_agenda": {"agenda", "next events", "upcoming", "calendar"},
     "search_drive": {"search drive", "find in drive", "drive search"},
-    "daily_briefing": {"daily briefing", "morning briefing", "briefing", "daily summary"},
+    "daily_briefing": {"daily briefing", "morning briefing", "daily summary"},
 }
 
 _DEFAULT_CONTEXT_TERMS: dict[str, set[str]] = {
@@ -161,7 +161,7 @@ _DEFAULT_PATTERNS: dict[str, list[str]] = {
     "get_calendar_week": [r"\bweek(?:ly)?\s+(?:schedule|calendar|events?)\b", r"\bthis\s+week\b"],
     "get_calendar_agenda": [r"\b(?:upcoming\s+)?events?\b", r"\bagenda\b", r"\bschedule\b"],
     "search_drive": [r"\b(?:find|search|look\s+for)\s+(?:in\s+)?drive\b", r"\bgoogle\s+drive\b"],
-    "daily_briefing": [r"\b(?:daily\s+)?briefing\b", r"\bmorning\s+(?:briefing|summary)\b", r"\bwhat'?s?\s+(?:on\s+)?(?:today|the\s+agenda)\b"],
+    "daily_briefing": [r"\b(?:daily|morning)\s+(?:briefing|summary)\b", r"\bwhat'?s?\s+(?:on\s+)?(?:today|the\s+agenda)\b"],
 }
 
 

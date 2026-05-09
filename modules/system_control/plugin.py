@@ -87,7 +87,8 @@ class SystemControlPlugin(FridayPlugin):
         self.app.router.register_tool({
             "name": "take_screenshot",
             "description": "Capture the current screen and save it as an image file.",
-            "parameters": {}
+            "parameters": {},
+            "side_effect_level": "write",
         }, lambda t, a: take_screenshot())
 
         self.app.router.register_tool({
