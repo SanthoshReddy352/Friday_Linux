@@ -36,37 +36,40 @@ def register():
             return False
 
     else:
+        import subprocess
         venv_python = os.path.join(PROJECT_ROOT, ".venv", "bin", "python3")
         if not os.path.exists(venv_python):
             print(f"Error: Virtual environment not found at {venv_python}")
             return False
 
-        AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
-        DESKTOP_FILE = os.path.join(AUTOSTART_DIR, "friday_clap.desktop")
-        os.makedirs(AUTOSTART_DIR, exist_ok=True)
+        SYSTEMD_DIR = os.path.expanduser("~/.config/systemd/user")
+        SERVICE_FILE = os.path.join(SYSTEMD_DIR, "friday-clap.service")
+        os.makedirs(SYSTEMD_DIR, exist_ok=True)
 
-        content = f"""[Desktop Entry]
-Type=Application
-Path={PROJECT_ROOT}
-TryExec={venv_python}
-Exec={venv_python} {clap_detector} --start
-Hidden=false
-NoDisplay=false
-StartupNotify=false
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=3
-X-GNOME-Autostart-Phase=Application
-Name=Friday Clap Detector
-Comment=Starts Friday on double clap
-Icon=utilities-terminal
-Terminal=false
-Categories=Utility;
+        content = f"""[Unit]
+Description=Friday Clap Detector
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={venv_python} {clap_detector} --start
+WorkingDirectory={PROJECT_ROOT}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
 """
         try:
-            with open(DESKTOP_FILE, "w") as f:
+            with open(SERVICE_FILE, "w") as f:
                 f.write(content)
-            os.chmod(DESKTOP_FILE, 0o755)
-            print(f"Successfully registered autostart at: {DESKTOP_FILE}")
+            print(f"Successfully created systemd service at: {SERVICE_FILE}")
+            
+            # Enable and start the service
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "--user", "enable", "friday-clap.service"], check=True)
+            subprocess.run(["systemctl", "--user", "start", "friday-clap.service"], check=True)
+            print("Successfully started and enabled friday-clap.service")
             return True
         except Exception as e:
             print(f"Failed to register autostart: {e}")
@@ -93,18 +96,28 @@ def unregister():
             print("Autostart file not found.")
             return True
     else:
-        AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
-        DESKTOP_FILE = os.path.join(AUTOSTART_DIR, "friday_clap.desktop")
-        if os.path.exists(DESKTOP_FILE):
+        import subprocess
+        SYSTEMD_DIR = os.path.expanduser("~/.config/systemd/user")
+        SERVICE_FILE = os.path.join(SYSTEMD_DIR, "friday-clap.service")
+        
+        # Try to stop and disable first
+        try:
+            subprocess.run(["systemctl", "--user", "stop", "friday-clap.service"], check=False, stderr=subprocess.DEVNULL)
+            subprocess.run(["systemctl", "--user", "disable", "friday-clap.service"], check=False, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+        if os.path.exists(SERVICE_FILE):
             try:
-                os.remove(DESKTOP_FILE)
-                print(f"Successfully removed autostart: {DESKTOP_FILE}")
+                os.remove(SERVICE_FILE)
+                print(f"Successfully removed systemd service file: {SERVICE_FILE}")
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
                 return True
             except Exception as e:
-                print(f"Failed to remove autostart: {e}")
+                print(f"Failed to remove systemd service: {e}")
                 return False
         else:
-            print("Autostart file not found.")
+            print("Systemd service file not found.")
             return True
 
 

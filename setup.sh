@@ -148,8 +148,8 @@ python3 scripts/download_stt_model.py
 # 6. Final Configuration & Permissions
 echo -e "\n${YELLOW}[6/7] Finalizing setup...${NC}"
 
-# 7. Snap-to-Start Integration
-echo -e "\n${YELLOW}[7/7] Configuring Snap-to-Start (Autostart)...${NC}"
+# 7. Clap Trigger Integration
+echo -e "\n${YELLOW}[7/7] Configuring Clap Trigger (Systemd/Autostart)...${NC}"
 if [ -f "modules/voice_io/register_autostart.py" ]; then
     python3 modules/voice_io/register_autostart.py
 else

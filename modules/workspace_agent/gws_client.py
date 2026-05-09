@@ -10,6 +10,7 @@ CLI produces them; callers handle the formatting.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from typing import Any
@@ -23,11 +24,32 @@ def _run(*args: str, timeout: int = 20) -> Any:
     """Run a gws command and return parsed JSON output."""
     gws_path = shutil.which("gws")
     if gws_path is None:
-        raise GWSError("gws CLI not found. Install from https://github.com/googleworkspace/cli")
+        # Fallback to common installation directories
+        common_paths = [
+            os.path.expanduser("~/.local/bin/gws"),
+            os.path.expanduser("~/go/bin/gws"),
+            os.path.expanduser("~/.cargo/bin/gws"),
+            os.path.expanduser("~/.npm-global/bin/gws"),
+            os.path.expanduser("~/bin/gws"),
+            "/usr/local/bin/gws",
+            "/usr/bin/gws",
+            "/opt/homebrew/bin/gws",
+            "/home/linuxbrew/.linuxbrew/bin/gws",
+            "/snap/bin/gws",
+        ]
+        for p in common_paths:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                gws_path = p
+                break
+
+    if gws_path is None:
+        cmd = ["bash", "-lc", 'exec gws "$@"', "--", *args]
+    else:
+        cmd = [gws_path, *args]
 
     try:
         result = subprocess.run(
-            [gws_path, *args],
+            cmd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -41,6 +63,11 @@ def _run(*args: str, timeout: int = 20) -> Any:
 
     stdout = (result.stdout or "").strip()
     stderr = (result.stderr or "").strip()
+    
+    # Check if bash failed to find gws
+    if result.returncode == 127 and "gws: command not found" in stderr:
+         raise GWSError("gws CLI not found. Install from https://github.com/googleworkspace/cli")
+
     if result.returncode != 0 and not stdout:
         msg = stderr or f"gws exited with status {result.returncode}"
         raise GWSError(msg)

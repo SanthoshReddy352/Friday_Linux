@@ -48,3 +48,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+#logs
+logs/*.log
+
+#env
+.env
+
+#graphify
+graphify-out/

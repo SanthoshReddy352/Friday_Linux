@@ -24,12 +24,16 @@
     "hash": "50d839ed0071ebfa23d4250fc66c979c"
   },
   "/home/tricky/Friday_Linux/core/response_finalizer.py": {
-    "mtime": 1777956780.1749706,
-    "hash": "427400dbb456d686162afbb5dbb2e426"
+    "mtime": 1778314782.7905555,
+    "hash": "5eaa7ed6eb85c8524d54d3da32589840"
+  },
+  "/home/tricky/Friday_Linux/core/session_rag.py": {
+    "mtime": 1778325421.967487,
+    "hash": "514386a005d0e57493ac4524a4e163e3"
   },
   "/home/tricky/Friday_Linux/core/capability_registry.py": {
-    "mtime": 1777733803.592923,
-    "hash": "308fa4e384e79fcec52c3235c81751ff"
+    "mtime": 1778314782.7894907,
+    "hash": "8c8a16206aa50c6a45003b5f08691568"
   },
   "/home/tricky/Friday_Linux/core/skill.py": {
     "mtime": 1776191531.2857187,
@@ -51,33 +55,41 @@
     "mtime": 1777948619.4141753,
     "hash": "1076bec4595192c1caf2eeea33d70649"
   },
+  "/home/tricky/Friday_Linux/core/resource_monitor.py": {
+    "mtime": 1778212991.5327115,
+    "hash": "3194344dc704118bb27b3ab42260b66b"
+  },
   "/home/tricky/Friday_Linux/core/app.py": {
-    "mtime": 1777956783.0709484,
-    "hash": "331f811fbad1e715ca1765d8764beda3"
+    "mtime": 1778325220.052821,
+    "hash": "5881627a9d06c11e3ee507723d05c54e"
   },
   "/home/tricky/Friday_Linux/core/context_store.py": {
-    "mtime": 1777733803.5969229,
-    "hash": "6d9b3bb05c91c473a7922919b5ad04dd"
+    "mtime": 1778314782.7898972,
+    "hash": "7279b073cd36327109c85b1530a07da5"
   },
   "/home/tricky/Friday_Linux/core/config.py": {
     "mtime": 1777358706.632169,
     "hash": "b6ca5ada6704ee5e77aca5f22f9bec9d"
   },
+  "/home/tricky/Friday_Linux/core/mem0_client.py": {
+    "mtime": 1778230278.082733,
+    "hash": "7be21c17902e3e6e9b4aa2916676c0d9"
+  },
   "/home/tricky/Friday_Linux/core/turn_feedback.py": {
-    "mtime": 1777356620.1158433,
-    "hash": "1b2bd8f73f34b8e52d3bbc50743533f5"
+    "mtime": 1778324728.8918192,
+    "hash": "8b162eb0d6ff4d21b64422738c63f454"
   },
   "/home/tricky/Friday_Linux/core/capability_broker.py": {
-    "mtime": 1777956246.1392581,
-    "hash": "5d114811a256e5d6b3b1da2070f4f5cd"
+    "mtime": 1778314782.7894907,
+    "hash": "99c4b496dad5d97743f0aee52fa8a858"
   },
   "/home/tricky/Friday_Linux/core/conversation_agent.py": {
     "mtime": 1777735153.8294754,
     "hash": "f625bc77e563aeab026a866be194e608"
   },
   "/home/tricky/Friday_Linux/core/router.py": {
-    "mtime": 1777957412.1343575,
-    "hash": "ba7ed8b04aa1bfab1a153c16d0fd6dfa"
+    "mtime": 1778316278.1553242,
+    "hash": "092bff38d9821a1614a2df9fa0a8ec46"
   },
   "/home/tricky/Friday_Linux/core/result_cache.py": {
     "mtime": 1777459615.4117165,
@@ -88,32 +100,36 @@
     "hash": "25288ca93c58dffd47fff714a3b95a1c"
   },
   "/home/tricky/Friday_Linux/core/memory_service.py": {
-    "mtime": 1777733475.9238417,
-    "hash": "2466117a1e7547c56644064af41e7865"
+    "mtime": 1778314782.7905555,
+    "hash": "a4314f83706aecc9858e56bfaec6a5d8"
   },
   "/home/tricky/Friday_Linux/core/model_manager.py": {
-    "mtime": 1777947852.793798,
-    "hash": "0aa1ea397da595a0d9fdd78d6d61b5ff"
+    "mtime": 1778316144.296095,
+    "hash": "6b1228d1af57a3728b2d0dc5d4771067"
+  },
+  "/home/tricky/Friday_Linux/core/memory_extractor.py": {
+    "mtime": 1778230060.6199374,
+    "hash": "bd3caa4489de56c410b20a336b4be22d"
   },
   "/home/tricky/Friday_Linux/core/dialog_state.py": {
     "mtime": 1776191531.2829592,
     "hash": "8b5ac121fb8a8363a4522f936cd9ec5b"
   },
   "/home/tricky/Friday_Linux/core/turn_manager.py": {
-    "mtime": 1777733803.5969229,
-    "hash": "d01fe33e101ccf50be27a96e067d9530"
+    "mtime": 1778314782.791744,
+    "hash": "c3af8c83d1adc3fa16c2a549a3aafed0"
   },
   "/home/tricky/Friday_Linux/core/task_runner.py": {
     "mtime": 1777464827.3484144,
     "hash": "590025b489a146cb8faf270609a8c332"
   },
   "/home/tricky/Friday_Linux/core/assistant_context.py": {
-    "mtime": 1777741384.590532,
-    "hash": "c26f769f4ddc39244288cb5c2b303394"
+    "mtime": 1778323116.680099,
+    "hash": "46d4e2fcfbf1804d0702701c57573b72"
   },
   "/home/tricky/Friday_Linux/core/tool_execution.py": {
-    "mtime": 1777733803.5969229,
-    "hash": "66b73cada387a9be8cb4bfe5f4de1002"
+    "mtime": 1778314782.7915437,
+    "hash": "a31f9a34f5163251dcdf724fa48b00a2"
   },
   "/home/tricky/Friday_Linux/core/turn_context.py": {
     "mtime": 1777697467.1979399,
@@ -132,16 +148,16 @@
     "hash": "37404e22e3d156255fd469e72b21282d"
   },
   "/home/tricky/Friday_Linux/core/model_output.py": {
-    "mtime": 1777956768.9910567,
-    "hash": "3d2a8941f6ba440d20d096efdf0c0920"
+    "mtime": 1778345756.9575706,
+    "hash": "c1f56b919ec52989c9c862352479d3a3"
   },
   "/home/tricky/Friday_Linux/core/speech_coordinator.py": {
     "mtime": 1777356620.1158433,
     "hash": "a5a1b067a046043bf430cce72d02e8de"
   },
   "/home/tricky/Friday_Linux/core/intent_recognizer.py": {
-    "mtime": 1777957489.4338624,
-    "hash": "bb952eed0e5132075e0a62213d6283d3"
+    "mtime": 1778328424.3699074,
+    "hash": "472f97db78f910026b80720f067faec4"
   },
   "/home/tricky/Friday_Linux/core/persona_manager.py": {
     "mtime": 1776676422.266551,
@@ -156,12 +172,12 @@
     "hash": "76167360371281c6445587313431b9c1"
   },
   "/home/tricky/Friday_Linux/core/dialogue_manager.py": {
-    "mtime": 1777956266.8136394,
-    "hash": "b7a1d9286a336a3ce5a7a5f08f1d79e2"
+    "mtime": 1778314782.7898972,
+    "hash": "3bff0fbb2a31369cbe5633a98f34636c"
   },
   "/home/tricky/Friday_Linux/core/task_graph_executor.py": {
-    "mtime": 1777714925.966568,
-    "hash": "ab09960c57a3d616cb2ca0ef7d6344e5"
+    "mtime": 1778314782.7914228,
+    "hash": "c768d93ed17a98f6b37e98a2a9c9088f"
   },
   "/home/tricky/Friday_Linux/core/event_bus.py": {
     "mtime": 1777733803.5969229,
@@ -212,8 +228,8 @@
     "hash": "a6797fce0a04c9305abac1b60d451cda"
   },
   "/home/tricky/Friday_Linux/core/planning/turn_orchestrator.py": {
-    "mtime": 1777737558.1757805,
-    "hash": "68b71842972902248737d2d52775080a"
+    "mtime": 1778314782.7905555,
+    "hash": "a0eeb1b652fbf6586b885517df08cd65"
   },
   "/home/tricky/Friday_Linux/core/planning/planner_engine.py": {
     "mtime": 1777698372.2759345,
@@ -236,20 +252,20 @@
     "hash": "87a52758cb7827f149f3549331a54a7f"
   },
   "/home/tricky/Friday_Linux/core/reasoning/route_scorer.py": {
-    "mtime": 1777957415.3943367,
-    "hash": "3dd8baf1560b0918bad3ce4ff924354e"
+    "mtime": 1778314782.7905555,
+    "hash": "d912cd37863374133c6178dd0ba054f5"
   },
   "/home/tricky/Friday_Linux/core/reasoning/model_router.py": {
-    "mtime": 1777459476.5163922,
-    "hash": "06ab5be5c32be075f05cfb58d24afd33"
+    "mtime": 1778316168.9839525,
+    "hash": "260b4a1a1941a4e23c3cdbd298a5efa7"
   },
   "/home/tricky/Friday_Linux/core/reasoning/workflows/__init__.py": {
     "mtime": 1777948754.0444708,
     "hash": "bd63e303e0490c20a21243230e532253"
   },
   "/home/tricky/Friday_Linux/core/reasoning/workflows/research_planner.py": {
-    "mtime": 1777948737.5166774,
-    "hash": "3aaebdf5557d622daea782892fc2100d"
+    "mtime": 1778314782.7905555,
+    "hash": "9cb2881bb06b42e0555237975b1f14b1"
   },
   "/home/tricky/Friday_Linux/core/reasoning/workflows/research_mode.py": {
     "mtime": 1777460941.0309887,
@@ -299,6 +315,42 @@
     "mtime": 1776316701.6282349,
     "hash": "fcefb63f8f33ea357fd2a046186ea3a0"
   },
+  "/home/tricky/Friday_Linux/modules/document_intel/__init__.py": {
+    "mtime": 1778218776.8631222,
+    "hash": "e4e44d14b1082c73c4bdcf140e29326f"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/plugin.py": {
+    "mtime": 1778236539.8094084,
+    "hash": "35dba163b64a11c16b79a2021306bb3c"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/service.py": {
+    "mtime": 1778229719.2060208,
+    "hash": "fb5ef8ec7373cb67885ffa6308c4aa5e"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/chunker.py": {
+    "mtime": 1778218938.6620045,
+    "hash": "48b9b69941ffa97e46306e1eadd8a42b"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/workspace_watcher.py": {
+    "mtime": 1778229758.4937646,
+    "hash": "d6186382ffe9300e64dd41f083f0da35"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/converter.py": {
+    "mtime": 1778218783.2230759,
+    "hash": "e5e35efe905c9459bdde211d7a852575"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/retriever.py": {
+    "mtime": 1778218840.8786657,
+    "hash": "db67c7b78b7cbb1e354018985aa8296b"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/embedder.py": {
+    "mtime": 1778218806.534908,
+    "hash": "c56aa693d1cc292730fec9f5f9807a96"
+  },
+  "/home/tricky/Friday_Linux/modules/document_intel/document_store.py": {
+    "mtime": 1778218827.8267572,
+    "hash": "1eb1f84e4cff5167ad2b0613898c418f"
+  },
   "/home/tricky/Friday_Linux/modules/focus_session/__init__.py": {
     "mtime": 1777548274.2758017,
     "hash": "0215c03730b5c09772263e1cebadfdf8"
@@ -312,8 +364,36 @@
     "hash": "806cfb3212d01990a3c5941df7c9b7c7"
   },
   "/home/tricky/Friday_Linux/modules/llm_chat/plugin.py": {
-    "mtime": 1777956776.2070012,
-    "hash": "bf40ff2b568274aaa962cc1ce186d4eb"
+    "mtime": 1778327743.3598998,
+    "hash": "8ed9b38b3babde090a5f0b5be172c68c"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/prompts.py": {
+    "mtime": 1778213410.387612,
+    "hash": "31a7303f4add3d7b816227a716c7431d"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/smart_error_detector.py": {
+    "mtime": 1778218504.3973432,
+    "hash": "630b42976059509e80e5ac84c7776d73"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/screenshot.py": {
+    "mtime": 1778297965.1182873,
+    "hash": "c1c30a857db25ef194fac67dcae560e7"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/__init__.py": {
+    "mtime": 1778213477.130581,
+    "hash": "1efd60e82f9bcdcbc33bda80151bee75"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/preprocess.py": {
+    "mtime": 1778213418.6034806,
+    "hash": "749e166670c89406ab0fea8d277a40ec"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/plugin.py": {
+    "mtime": 1778310956.2385743,
+    "hash": "aa6181e7782cfd48e1982b320981a302"
+  },
+  "/home/tricky/Friday_Linux/modules/vision/service.py": {
+    "mtime": 1778314606.225574,
+    "hash": "a7d28015c110b72ff718b98e37a548b2"
   },
   "/home/tricky/Friday_Linux/modules/research_agent/__init__.py": {
     "mtime": 1777548986.1119924,
@@ -324,8 +404,8 @@
     "hash": "4215dc3dd80ad48e7b16582f05841bbb"
   },
   "/home/tricky/Friday_Linux/modules/research_agent/service.py": {
-    "mtime": 1777888585.5441594,
-    "hash": "08ec801993e8d44ce1c627bcf6362995"
+    "mtime": 1778314782.8987386,
+    "hash": "525f7828ca06c79f9743c1a02aeea866"
   },
   "/home/tricky/Friday_Linux/modules/research_agent/searxng_client.py": {
     "mtime": 1777888439.748558,
@@ -340,16 +420,16 @@
     "hash": "60e0688e90596b9d50a4c63abac373a2"
   },
   "/home/tricky/Friday_Linux/modules/system_control/screenshot.py": {
-    "mtime": 1777371127.1394486,
-    "hash": "eb69346c5ebcfeb89878b66461780104"
+    "mtime": 1778314782.8994305,
+    "hash": "302424ac5296942989a769bf5bc33d31"
   },
   "/home/tricky/Friday_Linux/modules/system_control/__init__.py": {
     "mtime": 1776191533.6991754,
     "hash": "8c0442e31c8dbca5bf03a25a3f1751a5"
   },
   "/home/tricky/Friday_Linux/modules/system_control/plugin.py": {
-    "mtime": 1777356725.5680625,
-    "hash": "375180fe5a64aad22e285e31e86d8cd2"
+    "mtime": 1778314782.899115,
+    "hash": "7798bedd0c47853a9a83905af178b9a2"
   },
   "/home/tricky/Friday_Linux/modules/system_control/file_workspace.py": {
     "mtime": 1777957498.449804,
@@ -388,12 +468,12 @@
     "hash": "2b97ba45318237f5b9fde6e2eb17b37a"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/stt.py": {
-    "mtime": 1777882862.3804212,
-    "hash": "a382df50d189ea645f58175ffd762e57"
+    "mtime": 1778314782.9012554,
+    "hash": "7cf502f611b08f1aff192c055b297618"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/clap_detector.py": {
-    "mtime": 1777882862.380124,
-    "hash": "039c9489e8f67574b6a4109c1711df41"
+    "mtime": 1778314782.9005983,
+    "hash": "5b9119dd7b2c31eabcf329ea944af49c"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/tts.py": {
     "mtime": 1777884462.5190127,
@@ -416,8 +496,8 @@
     "hash": "28e6a7d1ba0cab51a9ca27af40db3c00"
   },
   "/home/tricky/Friday_Linux/modules/task_manager/plugin.py": {
-    "mtime": 1777882862.3799148,
-    "hash": "d7f18cbcaacc6e4e63f4a8e3523f365c"
+    "mtime": 1778314782.9000926,
+    "hash": "db0e24278480cce8980193271b79f980"
   },
   "/home/tricky/Friday_Linux/modules/dictation/__init__.py": {
     "mtime": 1777547687.9210885,
@@ -432,8 +512,8 @@
     "hash": "a064bc9162a65e111893bd8d85660550"
   },
   "/home/tricky/Friday_Linux/modules/workspace_agent/extension.py": {
-    "mtime": 1777882862.3806694,
-    "hash": "484046388d87169330ad635a869ffbfa"
+    "mtime": 1778321917.968144,
+    "hash": "d8c051fd39c147591014372f9487c087"
   },
   "/home/tricky/Friday_Linux/modules/workspace_agent/__init__.py": {
     "mtime": 1777460841.7676964,
@@ -442,6 +522,14 @@
   "/home/tricky/Friday_Linux/modules/workspace_agent/gws_client.py": {
     "mtime": 1777882862.3806694,
     "hash": "c689e4a740c13344d7cf8057f35c4f43"
+  },
+  "/home/tricky/Friday_Linux/modules/memory_manager/__init__.py": {
+    "mtime": 1778230303.4745963,
+    "hash": "051b83d1401b68f0bfcdefcbedf21c33"
+  },
+  "/home/tricky/Friday_Linux/modules/memory_manager/plugin.py": {
+    "mtime": 1778230298.130625,
+    "hash": "a79184f7eb5e0053333bc5f03c99e353"
   },
   "/home/tricky/Friday_Linux/modules/browser_automation/__init__.py": {
     "mtime": 1776191533.6945312,
@@ -460,12 +548,12 @@
     "hash": "998ac0cba3858e4c71975c72c8336ad1"
   },
   "/home/tricky/Friday_Linux/modules/world_monitor/plugin.py": {
-    "mtime": 1777733803.6224732,
-    "hash": "45a4b1cb5d25ecd76559cc116ac5ea76"
+    "mtime": 1778314782.9014843,
+    "hash": "412a9517d3dfc057c9208d131a6c0aca"
   },
   "/home/tricky/Friday_Linux/modules/world_monitor/service.py": {
-    "mtime": 1777368547.4484994,
-    "hash": "f98f174c31b9cc87ee1a1cef227ff65f"
+    "mtime": 1778314782.9017775,
+    "hash": "979d3be05a3591f6c4486436a1223458"
   },
   "/home/tricky/Friday_Linux/tests/test_workspace_calendar.py": {
     "mtime": 1777611620.6131754,
@@ -480,8 +568,8 @@
     "hash": "f3e0bc98160feb1e06897f9854ceba36"
   },
   "/home/tricky/Friday_Linux/tests/test_turn_runtime.py": {
-    "mtime": 1777956248.9442937,
-    "hash": "85e4fc184eab8b5be10e026aaf511c65"
+    "mtime": 1778314782.9017775,
+    "hash": "d500e529b7f3dbb7ec95210e217a465c"
   },
   "/home/tricky/Friday_Linux/tests/test_whisper.py": {
     "mtime": 1776191533.7266998,
@@ -528,8 +616,8 @@
     "hash": "5965e5922eadd1c3f367f62932b8e231"
   },
   "/home/tricky/Friday_Linux/tests/test_clap_detector.py": {
-    "mtime": 1777354295.7710457,
-    "hash": "7ab881786dc8cfad148b13dff0b77904"
+    "mtime": 1778314782.9017775,
+    "hash": "f862da5ba37aa2601a2e7a07a4fa6655"
   },
   "/home/tricky/Friday_Linux/tests/test_audio_devices.py": {
     "mtime": 1777372452.4427996,
@@ -540,8 +628,8 @@
     "hash": "7f8b2f59d9d7a6296b29838cb9041654"
   },
   "/home/tricky/Friday_Linux/tests/test_world_monitor.py": {
-    "mtime": 1777368589.4641879,
-    "hash": "256d1d36e0f3cdce05099607fe055d6c"
+    "mtime": 1778314782.9017775,
+    "hash": "003251365023c523bfc98c8d4d311529"
   },
   "/home/tricky/Friday_Linux/tests/test_system_control_tools.py": {
     "mtime": 1777371151.347355,
@@ -558,6 +646,10 @@
   "/home/tricky/Friday_Linux/tests/test_hud.py": {
     "mtime": 1777371653.5138316,
     "hash": "da5f746b5d892b687049ddd5a1846d69"
+  },
+  "/home/tricky/Friday_Linux/tests/test_mem0_standalone.py": {
+    "mtime": 1778236837.6754248,
+    "hash": "12fd123c2591d1caf36afc21a16eeff5"
   },
   "/home/tricky/Friday_Linux/tests/test_greeter_help.py": {
     "mtime": 1777733803.6229117,
@@ -588,8 +680,8 @@
     "hash": "98444f4d1ac14d21c70ec029b8590778"
   },
   "/home/tricky/Friday_Linux/tests/test_workflow_orchestration.py": {
-    "mtime": 1777957425.6342714,
-    "hash": "33f15edab0939d854bd6602590ca7449"
+    "mtime": 1778314782.9017775,
+    "hash": "c2d13a2b5ce0c8b8ff6407e74d65d5a1"
   },
   "/home/tricky/Friday_Linux/libs_backup/sounddevice.py": {
     "mtime": 1776191533.568483,
@@ -2404,8 +2496,8 @@
     "hash": "d5cd5cf9cf656e389ed711e007cb5823"
   },
   "/home/tricky/Friday_Linux/gui/main_window.py": {
-    "mtime": 1777739719.424525,
-    "hash": "1d8d4be3599f765f61053e5649c31ea6"
+    "mtime": 1778327761.5077376,
+    "hash": "c6e0b0d0678a14efedcc5a8c3f718111"
   },
   "/home/tricky/Friday_Linux/cli/__init__.py": {
     "mtime": 1776191531.280512,
@@ -2488,8 +2580,8 @@
     "hash": "f950d72652869fe328312fdea6535248"
   },
   "/home/tricky/Friday_Linux/config.yaml": {
-    "mtime": 1777947817.5544739,
-    "hash": "ea0383fd188b8ac0c26c8f6fd3864a1e"
+    "mtime": 1778322129.1023104,
+    "hash": "b71e1abf26e6fe380cc6f08b8c671059"
   },
   "/home/tricky/Friday_Linux/SETUP_GUIDE.md": {
     "mtime": 1777865777.2855847,
@@ -2500,8 +2592,8 @@
     "hash": "92a8dff6705f7ead94835c796bbaf13c"
   },
   "/home/tricky/Friday_Linux/CLAUDE.md": {
-    "mtime": 1777885023.1395328,
-    "hash": "3f6d20a56686e967d10a504bbc0e9059"
+    "mtime": 1778314782.7889295,
+    "hash": "fb5086604f47ade3fca6e45d2138b673"
   },
   "/home/tricky/Friday_Linux/requirements.txt": {
     "mtime": 1777733803.6224732,
@@ -2511,6 +2603,10 @@
     "mtime": 1776191532.0252633,
     "hash": "f9a12c0f477dfd105b69492d1dfaee5c"
   },
+  "/home/tricky/Friday_Linux/docs/Feed Prism Public API Documentation.md": {
+    "mtime": 1778345710.71508,
+    "hash": "69e3b2a4b40db125daed02234d8eae52"
+  },
   "/home/tricky/Friday_Linux/docs/friday_markitdown_final_strategic_decision.md": {
     "mtime": 1778208634.0257416,
     "hash": "919c2682e195c50da5de5d68a162e972"
@@ -2518,6 +2614,10 @@
   "/home/tricky/Friday_Linux/docs/friday_markitdown_rag_strategy.md": {
     "mtime": 1778208634.0545573,
     "hash": "8da318bba2d09d20955ef7d3e330eb2b"
+  },
+  "/home/tricky/Friday_Linux/docs/vlm_features_implementation_plan.md": {
+    "mtime": 1778210964.8453588,
+    "hash": "a0dc69e88a660431bb0dc25d1b87a220"
   },
   "/home/tricky/Friday_Linux/docs/friday_final_architecture_conclusion.md": {
     "mtime": 1778208634.0895984,
@@ -2531,6 +2631,10 @@
     "mtime": 1778208634.0817742,
     "hash": "79515091d13457ab84c8b9d92be06be8"
   },
+  "/home/tricky/Friday_Linux/docs/phasewise_implementation_plan.md": {
+    "mtime": 1778212459.5776055,
+    "hash": "0305a7361949ab22f1561acd84debfbe"
+  },
   "/home/tricky/Friday_Linux/docs/friday_markitdown_phasewise_implementation_plan.md": {
     "mtime": 1778208634.047465,
     "hash": "253cc317ffdfdc7ae6e37a3db0d3d155"
@@ -2538,6 +2642,10 @@
   "/home/tricky/Friday_Linux/docs/refactor_roadmap.md": {
     "mtime": 1777461468.6759365,
     "hash": "4b3c8004f3cda66595108c747ee3ee39"
+  },
+  "/home/tricky/Friday_Linux/docs/memory_management_strategy.md": {
+    "mtime": 1778211747.8174856,
+    "hash": "60bc40a1bc88bddb86b41c9669d6df82"
   },
   "/home/tricky/Friday_Linux/docs/testing_plan.md": {
     "mtime": 1777464761.5776665,
@@ -2563,9 +2671,25 @@
     "mtime": 1778208634.1163204,
     "hash": "33c95d28a418c33535feb8378ca42429"
   },
+  "/home/tricky/Friday_Linux/docs/architecture_final_implementation_priorities.md": {
+    "mtime": 1778210902.2013185,
+    "hash": "a6f723a15e98cfe7eb2bc2cd06a63545"
+  },
+  "/home/tricky/Friday_Linux/docs/architecture_validation_and_implementation_plan.md": {
+    "mtime": 1778210298.0784903,
+    "hash": "dbee34b851fe51a33fda0a9ce8e2b3da"
+  },
+  "/home/tricky/Friday_Linux/docs/LLM Memory Management Research.md": {
+    "mtime": 1778210264.966078,
+    "hash": "9b0f93013850344f3fba406bca187516"
+  },
   "/home/tricky/Friday_Linux/docs/whisper_gemma_architecture.md": {
     "mtime": 1776676754.301582,
     "hash": "1f83dc4b4c0349d39ee60c56683cfe5d"
+  },
+  "/home/tricky/Friday_Linux/docs/testing_guide.md": {
+    "mtime": 1778345367.1432297,
+    "hash": "8f793d5ed7029eb2a54608b8df46e3aa"
   },
   "/home/tricky/Friday_Linux/docs/architecture.md": {
     "mtime": 1777715929.2526658,
@@ -2586,6 +2710,10 @@
   "/home/tricky/Friday_Linux/docs/clap_trigger_turn_off.md": {
     "mtime": 1776674667.196335,
     "hash": "4b1152cc2323b2a5312467fab70013fe"
+  },
+  "/home/tricky/Friday_Linux/docs/markitdown_integration_plan.md": {
+    "mtime": 1778210454.3078263,
+    "hash": "934b5ad998b2cce54b04169eb82cf0b1"
   },
   "/home/tricky/Friday_Linux/tests/snapshots/routing_snapshots.yaml": {
     "mtime": 1777439767.3783774,
@@ -2766,6 +2894,14 @@
   "/home/tricky/Friday_Linux/libs_backup/cffi-2.0.0.dist-info/entry_points.txt": {
     "mtime": 1776191533.2571878,
     "hash": "688ceebec0652fc05ac25caec3e15043"
+  },
+  "/home/tricky/Friday_Linux/RAG Testing Dataset_ Aerospace Engineering.pdf": {
+    "mtime": 1778326756.5716245,
+    "hash": "4cc1e8b6830a38d5a1877a88f8f7a3dd"
+  },
+  "/home/tricky/Friday_Linux/RAG Testing File Generation - Google Gemini.pdf": {
+    "mtime": 1778326756.5250688,
+    "hash": "782bf5fb9078b47ec1dda389fa968869"
   },
   "/home/tricky/Friday_Linux/docs/image.png": {
     "mtime": 1777655565.6594148,

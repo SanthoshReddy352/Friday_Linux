@@ -247,6 +247,7 @@ class IntentRecognizer:
             self._parse_screenshot,
             self._parse_vision_action,
             self._parse_email_action,
+            self._parse_news_action,
             self._parse_file_action,
             self._parse_launch_app,
             self._parse_manage_file,
@@ -692,6 +693,101 @@ class IntentRecognizer:
             clause_lower,
         ):
             return {"tool": "daily_briefing", "args": {}, "text": clause, "domain": "email"}
+
+        return None
+
+    def _parse_news_action(self, clause, clause_lower, context):
+        """Route Feed Prism news commands using natural category language.
+
+        World monitor is disabled. All category terms ("tech news", "global news",
+        "briefing", etc.) route directly to Feed Prism tools.
+        Note: "daily briefing" / "morning briefing" / "brief me" are handled by
+        _parse_email_action (runs earlier) and will not reach this parser.
+        """
+        tools = getattr(self.router, "_tools_by_name", {})
+
+        # ── Technology (TechCrunch, The Verge, Wired) ──────────────────────────
+        if "get_technology_news" in tools and re.search(
+            r"\b(?:"
+            r"tech(?:nology)?\s+news|"
+            r"tech(?:nology)?\s+(?:articles?|stories|headlines?|updates?)|"
+            r"latest\s+(?:tech(?:nology)?|technology)(?:\s+news)?|"
+            r"techcrunch|the\s+verge\b|wired\b"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_technology_news", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Global news (Al Jazeera, BBC World, NPR) ──────────────────────────
+        if "get_global_news_feed" in tools and re.search(
+            r"\b(?:"
+            r"global\s+news|world\s+news|international\s+news|"
+            r"latest\s+(?:global|world|international)\s+news|"
+            r"al\s+jazeera|bbc\s+(?:world|news)|npr(?:\s+news)?\b"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_global_news_feed", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Company news (Google Blog, Apple Newsroom) ─────────────────────────
+        if "get_company_news" in tools and re.search(
+            r"\b(?:"
+            r"company\s+news|corporate\s+news|"
+            r"(?:google|apple)\s+(?:newsroom|blog|news|announcements?)|"
+            r"big\s+(?:company|tech)\s+news"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_company_news", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Startup news (Product Hunt) ─────────────────────────────────────────
+        if "get_startup_news" in tools and re.search(
+            r"\b(?:"
+            r"startup\s+(?:news|stories|launches?|updates?)|"
+            r"product\s+hunt(?:\s+(?:news|launches?|picks?|today))?|"
+            r"(?:new|latest|top)\s+startups?"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_startup_news", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Security news (The Hacker News Security) ───────────────────────────
+        if "get_security_news" in tools and re.search(
+            r"\b(?:"
+            r"(?:cyber)?security\s+news|cyber\s+news|"
+            r"(?:latest|top|recent)\s+(?:cyber)?security(?:\s+news)?|"
+            r"the\s+hacker\s+news|hacker\s+news\s+security|"
+            r"cyber(?:security)?\s+(?:threats?|breaches?|attacks?|alerts?)"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_security_news", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Business news (Forbes Business) ────────────────────────────────────
+        if "get_business_news" in tools and re.search(
+            r"\b(?:"
+            r"business\s+news|finance\s+news|financial\s+news|market\s+news|"
+            r"(?:latest|top|recent)\s+business(?:\s+news)?|"
+            r"forbes(?:\s+(?:news|business))?|bloomberg(?:\s+(?:news|business))?|"
+            r"cnbc(?:\s+(?:news|business))?"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_business_news", "args": {}, "text": clause, "domain": "news"}
+
+        # ── Cumulative briefing — all Feed Prism categories ────────────────────
+        if "get_news_briefing" in tools and re.search(
+            r"\b(?:"
+            r"news\s+(?:briefing|brief\b|summary|roundup|feed|aggregat(?:ion|ed|or)|compilation)|"
+            r"(?:give\s+me\s+(?:the|a)|get\s+(?:the|a)|what(?:'s|\s+is)\s+(?:the\s+)?)\s*news\b|"
+            r"(?:all|full|complete|cumulative|combined|aggregated)\s+news|"
+            r"news\s+from\s+all\s+(?:categories|sources)|"
+            r"today(?:'s)?\s+news|"
+            r"feed\s+prism\s+(?:briefing|news)"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_news_briefing", "args": {}, "text": clause, "domain": "news"}
 
         return None
 

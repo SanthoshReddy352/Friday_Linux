@@ -1,0 +1,5 @@
+# Force-stop any old orphaned instances
+python3 modules/voice_io/clap_detector.py --stop
+
+# Restart the new systemd service with the updated threshold logic
+systemctl --user restart friday-clap

@@ -206,7 +206,7 @@ class WorkspaceAgentExtension(Extension):
         if not messages:
             return "You have no unread emails, sir."
 
-        lines = [f"You have {len(messages)} unread email(s), sir:"]
+        lines = [f"You have {len(messages)} unread emails, sir:"]
         for i, msg in enumerate(messages, 1):
             sender = _short_sender(msg.get("from", ""))
             subject = msg.get("subject") or "(no subject)"
@@ -597,7 +597,7 @@ class WorkspaceAgentExtension(Extension):
                 logger.warning("[workspace] LLM inbox summary failed: %s", exc)
 
         # Fallback: plain spoken list when LLM is unavailable
-        parts = [f"You have {count} unread email(s), sir."]
+        parts = [f"You have {count} unread emails, sir."]
         for msg in messages:
             sender = _short_sender(msg.get("from", ""))
             subject = msg.get("subject") or "(no subject)"
@@ -626,19 +626,12 @@ class WorkspaceAgentExtension(Extension):
     # ------------------------------------------------------------------
 
     def _handle_daily_briefing(self, raw_text: str, args: dict) -> str:
-        hour = datetime.now().hour
-        if 5 <= hour < 12:
-            greeting = "Good morning"
-        elif 12 <= hour < 17:
-            greeting = "Good afternoon"
-        else:
-            greeting = "Good evening"
-        parts = [f"{greeting}, sir. Here's your daily briefing:\n"]
+        parts = ["Tricky!. Here's your daily briefing:\n"]
 
         try:
             events = gws.calendar_agenda(today=True)
             if events:
-                parts.append(f"CALENDAR — {len(events)} event(s) today:")
+                parts.append(f"CALENDAR — {len(events)} events today:")
                 for event in events[:5]:
                     parts.append(_format_event(event))
             else:
@@ -651,7 +644,7 @@ class WorkspaceAgentExtension(Extension):
         try:
             messages = gws.gmail_list_unread(max_results=5)
             if messages:
-                parts.append(f"EMAIL — {len(messages)} unread message(s):")
+                parts.append(f"EMAIL — {len(messages)} unread messages:")
                 for msg in messages[:5]:
                     sender = _short_sender(msg.get("from", ""))
                     subject = msg.get("subject") or "(no subject)"

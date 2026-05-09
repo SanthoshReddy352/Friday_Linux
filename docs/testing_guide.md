@@ -41,6 +41,8 @@
 | 2026-05-09 | §1, §19 | Keyword hijacking fix: `IntentRecognizer._is_knowledge_question()` pre-check returns `[]` for explanation/analysis questions (explain, describe, compare, how does, why, etc.) before any tool parser runs; `_looks_like_action_start` no longer treats "what"/"tell" as action starters; `_action_connectors_for` "on" connector now requires ≤8-word clause and explicit time/status phrase (bare "time" removed); `_looks_like_short_status_fragment` "time" fragment replaced with "current time"/"the time"; `_parse_time_date` adds negative lookahead `(?!\s+of\b)` so "Time of Useful Consciousness" is never routed to get_time; `_parse_help` tightened to fullmatch only. |
 | 2026-05-09 | §19 | Math rendering: `math_to_speech()` and `math_to_display()` added to `core/model_output.py`; `llm_chat/plugin.py` applies `math_to_speech` before every `voice_response` event; `gui/main_window.py` applies `math_to_display` in `_insert_bubble` for assistant messages. Greek letters, operators, fractions, roots, super/subscripts converted to spoken words (TTS) and Unicode (GUI). |
 | 2026-05-09 | §19 | Math rendering — chemistry and biology layer: reaction arrows (→ yields, ⇌ is in equilibrium with, ← reverses to give), concentration brackets ([A] → "concentration of A"), named constants (pH, pKa, pKb, Keq, Ksp, Ka, Kb, Vmax, Km, Kd, Ki, kcat), ion charges (Ca^{2+} → "2 positive"), inline fraction handler (`k_{cat}/K_m` → "k cat over K m"). Display bug fixed: `_e` subscript no longer greedily matches multi-char subscripts (K_eq was becoming Kₑq). |
+| 2026-05-09 | §20 | Feed Prism news feed: `modules/news_feed/` added; 6 single-category tools (`get_technology_news`, `get_global_news_feed`, `get_company_news`, `get_startup_news`, `get_security_news`, `get_business_news`) fetch top 5 articles via Feed Prism API; `get_news_briefing` fetches 3 per category, opens worldmonitor.app in browser, and LLM-summarises the corpus. `IntentRecognizer._parse_news_action` added to dispatch chain (runs before file-action parser). API key loaded from `FEED_PRISM_API_KEY` in `.env`. World monitor briefings preserved — bare "global news"/"briefing"/"world news"/"tech news"/"finance news" all still route to world monitor. Feed Prism triggered only by source names (TechCrunch, Al Jazeera, BBC, NPR, Forbes, etc.) or non-overlapping phrasing ("tech articles", "news feed", "security news"). Global News sources updated with correct IDs: Al Jazeera (`096ddc57`), BBC World (`466ac9ac`), NPR News (`48a62ef3`). |
+| 2026-05-09 | §20 | World monitor removed: `modules/world_monitor/__init__.py` returns None from `setup()` (plugin disabled). `_parse_news_action` rewritten with natural category language — "tech news", "technology news", "global news", "world news", "business news", "finance news", "security news", "briefing" etc. now all route directly to Feed Prism tools. worldmonitor.app is opened in browser by `NewsFeedService._open_worldmonitor_browser()` on every news call. |
 | 2026-05-09 | §18 | Session RAG belt-and-suspenders: `process_input` now intercepts file paths and `file://` URIs at the app level via `_resolve_rag_file_path()` before any routing — file loads in background thread, emits proper assistant response + TTS. Window-level `dragEnterEvent`/`dropEvent` added to `MainWindow` as fallback for drops outside the chat area. `handle_return_pressed` also handles `file://` URIs. |
 
 ---
@@ -2543,7 +2545,62 @@ If any of these fail, the build is **not shippable**:
 
 ---
 
-## 20. Reporting a failure
+## 20. Feed Prism news feed
+
+### [T-20.1] Technology news — natural language trigger
+**You say:** `"Tech news"` or `"Technology news"` or `"latest tech"` or `"TechCrunch news"`
+**Expect:** worldmonitor.app opens in browser; FRIDAY reads 5 articles from TechCrunch, The Verge, or Wired.
+**Pass:** Spoken response starts "Here are the top 5 Technology stories"; source names heard; browser visible on worldmonitor.app.
+
+### [T-20.2] Global news — natural language trigger
+**You say:** `"Global news"` or `"World news"` or `"International news"` or `"Al Jazeera"` or `"BBC news"`
+**Expect:** worldmonitor.app opens; top 5 articles from Al Jazeera, BBC World, or NPR News.
+**Pass:** Source names spoken; articles are international in scope; browser open.
+
+### [T-20.3] Company news — natural language trigger
+**You say:** `"Company news"` or `"Google newsroom"` or `"Apple newsroom"` or `"corporate news"`
+**Expect:** Top 5 articles from Google Blog and/or Apple Newsroom; browser opens to worldmonitor.app.
+**Pass:** Source names "Google Blog" or "Apple Newsroom" spoken; 5 articles delivered.
+
+### [T-20.4] Startup news — natural language trigger
+**You say:** `"Startup news"` or `"Product Hunt"` or `"latest startups"`
+**Expect:** Top 5 articles from Product Hunt; browser opens.
+**Pass:** Source name "Product Hunt" spoken; launch-oriented titles read aloud.
+
+### [T-20.5] Security news — natural language trigger
+**You say:** `"Security news"` or `"Cybersecurity news"` or `"the hacker news"` or `"cyber threats"`
+**Expect:** Top 5 articles from The Hacker News (Security); browser opens.
+**Pass:** Security-focused titles and bodies; no weather or business articles mixed in.
+
+### [T-20.6] Business news — natural language trigger
+**You say:** `"Business news"` or `"Finance news"` or `"Forbes"` or `"market news"`
+**Expect:** Top 5 articles from Forbes Business; browser opens.
+**Pass:** Source name "Forbes Business" spoken; financial/business titles read.
+
+### [T-20.7] Cumulative news briefing — all categories + worldmonitor.app
+**You say:** `"News briefing"` or `"News feed"` or `"Give me the news"` or `"All news"` or `"Today's news"`
+**Expect:** worldmonitor.app opens in the browser; FRIDAY speaks a 4–6 paragraph LLM-summarised briefing covering technology, global, company, startup, security, and business stories.
+**Pass:** Browser visible on worldmonitor.app; briefing is flowing prose (no bullet lists); covers multiple categories.
+
+### [T-20.8] World monitor disabled — no routing conflict
+**You say:** `"Tech news"` then `"Global news"` then `"briefing"`
+**Expect:** All three route to Feed Prism tools (NOT world monitor which is now disabled).
+**Pass:** worldmonitor.app opens in browser for all three; Feed Prism articles spoken; no world monitor RSS content.
+
+### [T-20.9] API key missing — graceful error
+**Setup:** Temporarily rename/remove `FEED_PRISM_API_KEY` from `.env`.
+**You say:** `"Tech news"`
+**Expect:** FRIDAY says "The Feed Prism API key is not configured."
+**Pass:** No crash; informative message spoken; key error not exposed to user.
+
+### [T-20.10] No articles returned — graceful fallback
+**Setup:** Use a valid key but a category with no results (or simulate network error).
+**Expect:** "I couldn't fetch [Category] articles right now. Please try again shortly."
+**Pass:** No crash; no empty spoken response.
+
+---
+
+## 21. Reporting a failure
 
 When a test fails:
 

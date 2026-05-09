@@ -284,6 +284,7 @@ class ClapDetectorEngine:
         n_sub_frames=N_SUB_FRAMES,
         burst_ratio_threshold=BURST_RATIO_THRESHOLD,
     ):
+        self.base_min_threshold = min_threshold
         self.min_threshold = min_threshold
         self.n_sub_frames = n_sub_frames
         self.burst_ratio_threshold = burst_ratio_threshold
@@ -300,8 +301,15 @@ class ClapDetectorEngine:
     def _finish_warmup(self):
         if self._warmup_peaks:
             noise_floor = float(np.percentile(self._warmup_peaks, 75))
-            LOGGER.info("Warmup complete. Noise floor p75=%.4f. Using burst-ratio detection (threshold=%.2fx).",
-                        noise_floor, self.burst_ratio_threshold)
+            
+            # Dynamically adjust minimum threshold to be safely above the noise floor
+            # A clap must be at least 1.5x louder than the ambient noise floor to avoid false triggers
+            dynamic_threshold = max(self.base_min_threshold, noise_floor * 1.5)
+            self.min_threshold = dynamic_threshold
+
+            LOGGER.info("Warmup complete. Noise floor p75=%.4f. Using burst-ratio detection (threshold=%.2fx). Adjusted min_threshold=%.4f",
+                        noise_floor, self.burst_ratio_threshold, self.min_threshold)
+            
             if noise_floor > 0.5:
                 LOGGER.warning(
                     "High ambient noise (noise_floor=%.4f). If false triggers persist, "
