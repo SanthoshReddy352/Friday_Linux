@@ -3,6 +3,7 @@ import re
 
 from core.dialog_state import DialogState
 from core.logger import logger
+from core.model_output import with_no_think_user_message
 from core.plugin_manager import FridayPlugin
 from .app_launcher import extract_app_names, launch_application
 from .file_readers import read_file_preview, summarize_file_offline
@@ -22,6 +23,29 @@ from .file_workspace import WorkspaceFileController
 from .media_control import set_volume
 from .screenshot import take_screenshot
 from .sys_info import get_battery_status, get_cpu_ram_status, get_system_status
+
+
+_TRIVIAL_KEYWORDS = frozenset({
+    "time", "date", "battery", "volume", "weather", "status",
+    "cpu", "ram", "memory usage", "temperature", "charging",
+    "what time", "what date", "current time", "current date",
+    "system status", "friday status", "how's the weather",
+})
+
+
+def _is_trivial_session(context: str) -> bool:
+    """Return True if every user turn was a quick status/info query."""
+    user_turns = [
+        l[5:].strip().lower()
+        for l in context.split("\n")
+        if l.lower().startswith("user:")
+    ]
+    if not user_turns:
+        return True
+    return all(
+        len(turn) < 100 and any(kw in turn for kw in _TRIVIAL_KEYWORDS)
+        for turn in user_turns
+    )
 
 
 class SystemControlPlugin(FridayPlugin):
@@ -181,7 +205,7 @@ class SystemControlPlugin(FridayPlugin):
             "name": "shutdown_assistant",
             "description": "Close the application and say goodbye.",
             "parameters": {},
-            "aliases": ["bye", "goodbye", "exit program", "close assistant", "switch off"]
+            "aliases": ["bye", "goodbye", "good bye", "exit program", "close assistant", "switch off"]
         }, self.handle_shutdown)
 
         logger.info("SystemControlPlugin loaded.")
@@ -283,22 +307,155 @@ class SystemControlPlugin(FridayPlugin):
         return self.file_controller.select_candidate(text, args)
 
     def handle_yes(self, text, args):
+        # If FRIDAY asked about resuming a previous session at startup, handle it here.
+        # (The intent recognizer routes bare "yes/yeah/sure" to confirm_yes before the
+        # LLM can ever match the resume_session capability description.)
+        if hasattr(self.app, "context_store"):
+            try:
+                facts = {f["key"]: f["value"]
+                         for f in self.app.context_store.get_facts_by_namespace("system")}
+                if facts.get("has_pending_session") == "true":
+                    summary = facts.get("last_session_summary", "")
+                    self.app.context_store.store_fact("has_pending_session", "", namespace="system")
+                    if summary:
+                        lines = [l.strip() for l in summary.split("\n") if l.strip()]
+                        for line in reversed(lines):
+                            if line.lower().startswith("user:"):
+                                topic = line[5:].strip()
+                                topic = (topic[:70] + "…") if len(topic) > 70 else topic
+                                return f"Picking up where we left off, sir. You were asking: \"{topic}\". Go ahead."
+                    return "Back on track, sir. What would you like to do?"
+            except Exception as e:
+                logger.error(f"[handle_yes] Session resume check failed: {e}")
         return self.file_controller.confirm_yes(text, args)
 
     def handle_no(self, text, args):
+        # Parallel check: if FRIDAY asked about resuming a session, "no" means fresh start.
+        if hasattr(self.app, "context_store"):
+            try:
+                facts = {f["key"]: f["value"]
+                         for f in self.app.context_store.get_facts_by_namespace("system")}
+                if facts.get("has_pending_session") == "true":
+                    self.app.context_store.store_fact("has_pending_session", "", namespace="system")
+                    self.app.context_store.store_fact("last_session_summary", "", namespace="system")
+                    import random
+                    return random.choice([
+                        "Of course, sir. Fresh start — how can I help you today?",
+                        "Sure thing, sir. New session. What can I do for you?",
+                        "Right, sir. Clean slate. Go ahead.",
+                    ])
+            except Exception as e:
+                logger.error(f"[handle_no] Session dismiss check failed: {e}")
         return self.file_controller.confirm_no(text, args)
 
     def handle_shutdown(self, text, args):
         """Signal the system to perform a clean shutdown."""
         import threading
         import time
-        
+        import re
+        import random
+
+        session_id = getattr(self.app.router, "session_id", None)
+        llm = getattr(self.app.router, "get_llm", lambda: None)()
+
+        farewell_phrases = [
+            "Goodbye sir, I'll remember where we left off.",
+            "Powering down, sir. Have a great day.",
+            "Closing protocols. Talk to you later, sir.",
+            "Goodbye sir, saving our session for next time.",
+            "Bye sir, see you soon.",
+        ]
+        farewell = random.choice(farewell_phrases)
+        topic_context = ""
+
+        if session_id and hasattr(self.app, "context_store"):
+            summary = self.app.context_store.summarize_session(session_id, limit=20)
+            # Count only real role-prefixed turns, not stray continuation lines
+            turn_lines = [l for l in (summary or "").split("\n")
+                          if l.lower().startswith(("user:", "assistant:"))]
+            if len(turn_lines) >= 4 and not _is_trivial_session(summary):
+                topic_context = summary
+                # Store synchronously so it's ready at zero latency next startup
+                self.app.context_store.store_fact("last_session_summary", topic_context, namespace="system")
+                self.app.context_store.store_fact("has_pending_session", "true", namespace="system")
+
+        # Pre-compute TTS budget so the LLM timeout is bounded to the same window.
+        sleep_time = max(3.5, len(farewell.split()) / 1.8 + 2.0)
+        llm_budget = max(2.0, sleep_time - 0.8)  # Leave 0.8 s for the DB write + shutdown
+
         def _trigger_shutdown():
-            time.sleep(3.5) # Wait for 'Bye' TTS
+            import concurrent.futures
+            start_time = time.time()
+
+            if topic_context and session_id and hasattr(self.app, "context_store") and llm:
+                greeting_prompt = (
+                    "You are FRIDAY. The user is returning after ending their session.\n"
+                    "Write ONLY a short continuation sentence — the time-of-day greeting is already "
+                    "prepended separately, so do NOT include any greeting words.\n\n"
+                    "Rules:\n"
+                    "- ONE sentence, under 15 words\n"
+                    "- Reference specifically what the user was doing (use their actual words/topics)\n"
+                    "- Ask casually if they want to continue — sound like a real person\n"
+                    "- No greeting words: no 'Good morning', 'Hello', 'Welcome back', 'Hi', etc.\n\n"
+                    "Examples of good output:\n"
+                    "  We left off on that Python script — want to carry on?\n"
+                    "  You were asking about the weather in Mumbai. Continue from there?\n"
+                    "  Left off mid-search — shall we pick that up?\n\n"
+                    f"Session:\n{topic_context}\n\nOutput:"
+                )
+
+                def _call_llm():
+                    if hasattr(llm, "create_chat_completion"):
+                        messages = with_no_think_user_message([
+                            {"role": "system", "content": "You are FRIDAY. Be concise and natural. Never add greetings."},
+                            {"role": "user", "content": greeting_prompt},
+                        ])
+                        resp = llm.create_chat_completion(
+                            messages=messages,
+                            max_tokens=60,
+                            temperature=0.7,
+                        )
+                        raw = resp["choices"][0]["message"]["content"].strip()
+                    else:
+                        resp = llm(greeting_prompt + "\n\n/no_think", max_tokens=60, temperature=0.7, stop=["\n"])
+                        raw = resp["choices"][0].get("text", "").strip()
+
+                    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+                    if "<think>" in raw:
+                        raw = raw.split("<think>")[0].strip()
+                    raw = raw.replace('"', '').replace('\n', ' ').strip()
+                    for prefix in ("output:", "greeting:", "friday:"):
+                        if raw.lower().startswith(prefix):
+                            raw = raw[len(prefix):].strip()
+                    return raw or None
+
+                next_greeting = None
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_llm)
+                    try:
+                        next_greeting = future.result(timeout=llm_budget)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("[handle_shutdown] LLM greeting timed out — using fallback")
+                    except Exception as e:
+                        logger.error(f"[handle_shutdown] LLM greeting failed: {e}")
+
+                stored = (
+                    f"{{time_greeting}}, sir. {next_greeting}"
+                    if next_greeting
+                    else "{time_greeting}, sir. Want to pick up where we left off?"
+                )
+                self.app.context_store.store_fact("next_startup_greeting", stored, namespace="system")
+                logger.info(f"[handle_shutdown] Stored next greeting: {stored[:80]}")
+
+            # Wait for TTS to finish, accounting for time already spent on LLM.
+            elapsed = time.time() - start_time
+            if elapsed < sleep_time:
+                time.sleep(sleep_time - elapsed)
+
             self.app.event_bus.publish("system_shutdown", {})
-            
+
         threading.Thread(target=_trigger_shutdown, daemon=True).start()
-        return "Bye sir, see you soon."
+        return farewell
 
     def handle_friday_status(self, text, args):
         capabilities = getattr(self.app, "capabilities", None)

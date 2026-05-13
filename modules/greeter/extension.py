@@ -13,6 +13,8 @@ INTERNAL_HELP_TOOL_NAMES = {
     "confirm_no",
     "select_file_candidate",
     "shutdown_assistant",
+    "resume_session",
+    "start_fresh_session",
 }
 
 
@@ -135,6 +137,63 @@ class GreeterExtension(Extension):
         return random.choice(jarvis_flair)
 
     @capability(
+        name="resume_session",
+        description=(
+            "Resume the previous session. Use ONLY when FRIDAY asked at startup whether to continue "
+            "from the last session and the user agrees — says yes, sure, continue, absolutely, yep, "
+            "pick up where we left off, or similar affirmations."
+        ),
+    )
+    def handle_resume_session(self):
+        context_store = self.ctx.get_service("context_store")
+        if not context_store:
+            return "Back in action, sir. What can I do for you?"
+
+        facts = {f["key"]: f["value"] for f in context_store.get_facts_by_namespace("system")}
+        if facts.get("has_pending_session") != "true":
+            return "Ready for anything, sir. What can I do for you today?"
+
+        summary = facts.get("last_session_summary", "")
+        context_store.store_fact("has_pending_session", "", namespace="system")
+
+        if summary:
+            lines = [l.strip() for l in summary.split("\n") if l.strip()]
+            last_user = ""
+            for line in reversed(lines):
+                if line.lower().startswith("user:"):
+                    last_user = line[5:].strip()
+                    break
+            if last_user:
+                topic = (last_user[:70] + "…") if len(last_user) > 70 else last_user
+                return f"Picking up where we left off, sir. You were asking: \"{topic}\". Go ahead."
+
+        return "Back on track, sir. What would you like to do?"
+
+    @capability(
+        name="start_fresh_session",
+        description=(
+            "Start a new session and discard the previous one. Use ONLY when FRIDAY asked at startup "
+            "whether to continue from the last session and the user declines — says no, fresh start, "
+            "new session, never mind, start over, different topic, or similar."
+        ),
+    )
+    def handle_fresh_session(self):
+        context_store = self.ctx.get_service("context_store")
+        if context_store:
+            facts = {f["key"]: f["value"] for f in context_store.get_facts_by_namespace("system")}
+            if facts.get("has_pending_session") == "true":
+                context_store.store_fact("has_pending_session", "", namespace="system")
+                context_store.store_fact("last_session_summary", "", namespace="system")
+
+        fresh_phrases = [
+            "Of course, sir. Fresh start — how can I help you today?",
+            "Understood, sir. Starting clean. What's on your mind?",
+            "Sure thing, sir. New session. What can I do for you?",
+            "Right, sir. Clean slate. Go ahead.",
+        ]
+        return random.choice(fresh_phrases)
+
+    @capability(
         name="show_help",
         description="Show a list of things FRIDAY can do. Use when the user asks for help or what you can do.",
     )
@@ -186,9 +245,41 @@ class GreeterExtension(Extension):
     def handle_startup(self):
         """Vocal greeting when the app first loads."""
         greeting = f"{self._get_time_of_day_greeting()}, sir. FRIDAY is online and ready."
+
+        context_store = self.ctx.get_service("context_store")
+        if context_store:
+            try:
+                facts = {f["key"]: f["value"] for f in context_store.get_facts_by_namespace("system")}
+                next_greeting = facts.get("next_startup_greeting", "")
+                has_pending = facts.get("has_pending_session") == "true"
+                summary = facts.get("last_session_summary", "")
+
+                # Validate: only show a continuation greeting if there is real session content.
+                # This clears stale flags left over from previous runs.
+                summary_is_valid = bool(summary) and len(
+                    [l for l in summary.split("\n") if l.lower().startswith(("user:", "assistant:"))]
+                ) >= 4
+
+                if next_greeting and has_pending and summary_is_valid:
+                    greeting = next_greeting.replace("{time_greeting}", self._get_time_of_day_greeting())
+                    context_store.store_fact("next_startup_greeting", "", namespace="system")
+                elif has_pending and summary_is_valid:
+                    # LLM greeting didn't finish in time — use plain fallback
+                    greeting = f"{self._get_time_of_day_greeting()}, sir. Want to pick up where we left off?"
+                    context_store.store_fact("next_startup_greeting", "", namespace="system")
+                else:
+                    # No valid pending session — clear any stale flags
+                    if has_pending:
+                        context_store.store_fact("has_pending_session", "", namespace="system")
+                        context_store.store_fact("last_session_summary", "", namespace="system")
+                        context_store.store_fact("next_startup_greeting", "", namespace="system")
+            except Exception as e:
+                logger.error(f"Failed to fetch next startup greeting: {e}")
+
         task_briefing = self._get_unfinished_task_briefing()
         if task_briefing:
-            return f"{greeting}\n{task_briefing}"
+            greeting = f"{greeting}\n{task_briefing}"
+        logger.info(f"[greeter] Startup greeting: {greeting}")
         return greeting
 
     def get_pause_phrase(self):

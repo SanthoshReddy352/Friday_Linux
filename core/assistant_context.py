@@ -181,24 +181,40 @@ class AssistantContext:
         if self.session_rag and self.session_rag.is_active:
             rag_context = self.session_rag.get_context_block(query)
 
+        last_topic = ""
+        if self.context_store:
+            try:
+                facts = self.context_store.get_facts_by_namespace("system")
+                last_topic = next((f["value"] for f in facts if f["key"] == "last_session_topic"), "")
+            except Exception:
+                pass
+
         if is_short:
             guidance = persona
+            if last_topic:
+                guidance += f"\nNote: In the previous session, you discussed: {last_topic}"
         else:
             guidance = (
                 f"{persona}\n"
                 f"Active workflow: {workflow_summary or 'none'}\n"
                 f"Session summary: {session_summary or 'none'}\n"
-                f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
             )
+            if last_topic:
+                guidance += f"Previous session topic: {last_topic}\n"
+            guidance += f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
 
         if rag_context:
             guidance = f"{guidance}\n\n{rag_context}"
 
-        recent_limit = 6 if is_short else 12
-        recent = [
-            {"role": item.get("role"), "content": item.get("text", "")}
-            for item in list(self.history)[-recent_limit:]
-        ]
+        recent_limit = 4 if is_short else 6
+        recent = []
+        for item in list(self.history)[-recent_limit:]:
+            role = item.get("role")
+            content = item.get("text", "")
+            # Truncate long past assistant responses to save prompt processing time
+            if role == "assistant" and len(content.split()) > 100:
+                content = " ".join(content.split()[:100]) + "... [truncated]"
+            recent.append({"role": role, "content": content})
         alternating = self._coerce_alternating_history(recent)
 
         messages = []

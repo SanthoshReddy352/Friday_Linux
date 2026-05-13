@@ -44,6 +44,7 @@
 | 2026-05-09 | §20 | Feed Prism news feed: `modules/news_feed/` added; 6 single-category tools (`get_technology_news`, `get_global_news_feed`, `get_company_news`, `get_startup_news`, `get_security_news`, `get_business_news`) fetch top 5 articles via Feed Prism API; `get_news_briefing` fetches 3 per category, opens worldmonitor.app in browser, and LLM-summarises the corpus. `IntentRecognizer._parse_news_action` added to dispatch chain (runs before file-action parser). API key loaded from `FEED_PRISM_API_KEY` in `.env`. World monitor briefings preserved — bare "global news"/"briefing"/"world news"/"tech news"/"finance news" all still route to world monitor. Feed Prism triggered only by source names (TechCrunch, Al Jazeera, BBC, NPR, Forbes, etc.) or non-overlapping phrasing ("tech articles", "news feed", "security news"). Global News sources updated with correct IDs: Al Jazeera (`096ddc57`), BBC World (`466ac9ac`), NPR News (`48a62ef3`). |
 | 2026-05-09 | §20 | World monitor removed: `modules/world_monitor/__init__.py` returns None from `setup()` (plugin disabled). `_parse_news_action` rewritten with natural category language — "tech news", "technology news", "global news", "world news", "business news", "finance news", "security news", "briefing" etc. now all route directly to Feed Prism tools. worldmonitor.app is opened in browser by `NewsFeedService._open_worldmonitor_browser()` on every news call. |
 | 2026-05-09 | §18 | Session RAG belt-and-suspenders: `process_input` now intercepts file paths and `file://` URIs at the app level via `_resolve_rag_file_path()` before any routing — file loads in background thread, emits proper assistant response + TTS. Window-level `dragEnterEvent`/`dropEvent` added to `MainWindow` as fallback for drops outside the chat area. `handle_return_pressed` also handles `file://` URIs. |
+| 2026-05-11 | §2 | Session continuation — on "goodbye/bye", FRIDAY saves `last_session_summary` and `has_pending_session` synchronously; background thread generates a personalised "want to continue?" greeting via LLM; next startup greets with that question. Two new capabilities: `resume_session` (yes/continue → loads previous context, zero latency) and `start_fresh_session` (no/fresh start → clears flags). Both hidden from help list. |
 
 ---
 
@@ -203,6 +204,26 @@ matches the last setting.
 **You say:** `"Friday goodbye."` or `"Friday exit program."`
 **Expect:** A farewell, then graceful shutdown.
 **Pass:** Process exits with status 0 (`echo $?` after `python main.py`).
+
+### [T-2.4] Session continuation — goodbye saves context
+**Setup:** Have a real conversation (at least 2 exchanges), then say `"Friday goodbye."`
+**Expect:** Farewell spoken. In `data/friday.db` (query `SELECT value FROM facts WHERE key='has_pending_session'`), value is `"true"`. `last_session_summary` contains recent turns.
+**Pass:** Both facts are set; process exits cleanly.
+
+### [T-2.5] Session continuation — startup asks to continue
+**Setup:** After T-2.4, restart FRIDAY (`python main.py`).
+**Expect:** Startup greeting references what you were doing last time and asks if you want to continue (e.g. "We were working on X — want to continue?").
+**Pass:** Greeting is personalised and ends with a continuation question; sounds natural.
+
+### [T-2.6] Session continuation — user says yes
+**Setup:** After T-2.5, say `"Friday yes."` or `"Friday continue."` or `"Friday pick up where we left off."`
+**Expect:** FRIDAY responds with "Picking up where we left off, sir. You were asking: …" and quotes the last user turn.
+**Pass:** Response is immediate (no LLM call latency); `has_pending_session` is cleared in the DB.
+
+### [T-2.7] Session continuation — user says no
+**Setup:** After T-2.5, say `"Friday no."` or `"Friday fresh start."` or `"Friday new session."`
+**Expect:** FRIDAY responds with a clean "fresh start" phrase and is ready for new commands.
+**Pass:** Response is immediate; `has_pending_session` and `last_session_summary` are cleared in the DB.
 
 ---
 
@@ -2629,6 +2650,8 @@ When a test fails:
 | `greet` | T-2.1 | greeter |
 | `show_help` | T-2.2 | greeter, dynamic catalog |
 | `shutdown_assistant` | T-2.3 | system_control |
+| `resume_session` | T-2.6 | greeter, zero-latency session continuation |
+| `start_fresh_session` | T-2.7 | greeter, clear pending session |
 | `get_system_status` | T-3.1 | |
 | `get_friday_status` | T-3.4 | |
 | `get_battery` | T-3.2 | |
