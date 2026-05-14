@@ -45,6 +45,7 @@
 | 2026-05-09 | §20 | World monitor removed: `modules/world_monitor/__init__.py` returns None from `setup()` (plugin disabled). `_parse_news_action` rewritten with natural category language — "tech news", "technology news", "global news", "world news", "business news", "finance news", "security news", "briefing" etc. now all route directly to Feed Prism tools. worldmonitor.app is opened in browser by `NewsFeedService._open_worldmonitor_browser()` on every news call. |
 | 2026-05-09 | §18 | Session RAG belt-and-suspenders: `process_input` now intercepts file paths and `file://` URIs at the app level via `_resolve_rag_file_path()` before any routing — file loads in background thread, emits proper assistant response + TTS. Window-level `dragEnterEvent`/`dropEvent` added to `MainWindow` as fallback for drops outside the chat area. `handle_return_pressed` also handles `file://` URIs. |
 | 2026-05-11 | §2 | Session continuation — on "goodbye/bye", FRIDAY saves `last_session_summary` and `has_pending_session` synchronously; background thread generates a personalised "want to continue?" greeting via LLM; next startup greets with that question. Two new capabilities: `resume_session` (yes/continue → loads previous context, zero latency) and `start_fresh_session` (no/fresh start → clears flags). Both hidden from help list. |
+| 2026-05-13 | §2, core | Production fixes — (1) "goodbye" utterance no longer surfaces as the resume topic: `_strip_shutdown_tail()` trims farewell turns from summary before storing, plus a `_SHUTDOWN_PHRASES` guard in `handle_yes` and `handle_resume_session`; (2) silent exception swallowing in `app.py` (app registry, Mem0 queue) and `context_store.py` (workflow expiry, vector recall, vector init) replaced with `logger.warning`; (3) inlined `import random/threading/re/concurrent` moved to module level in `system_control/plugin.py`; (4) redundant `import datetime` inside `prune_old_turns` removed (module-level import used). 3 new automated tests. |
 
 ---
 
@@ -224,6 +225,16 @@ matches the last setting.
 **Setup:** After T-2.5, say `"Friday no."` or `"Friday fresh start."` or `"Friday new session."`
 **Expect:** FRIDAY responds with a clean "fresh start" phrase and is ready for new commands.
 **Pass:** Response is immediate; `has_pending_session` and `last_session_summary` are cleared in the DB.
+
+### [T-2.8] Session continuation — goodbye not shown as topic
+**Setup:** Have a multi-turn conversation, then say `"Friday goodbye"`. Restart, wait for startup greeting, say `"yes"`.
+**Expect:** FRIDAY refers to the actual conversation topic (e.g. "programming languages"), NOT "goodbye".
+**Pass:** The resume response mentions something from the real conversation; word "goodbye" does not appear.
+**Automated:** `test_strip_shutdown_tail_removes_goodbye`, `test_handle_yes_skips_goodbye_topic`, `test_resume_session_skips_goodbye_as_topic`.
+
+### [T-2.9] Session continuation — typo farewell handled
+**Setup:** Say a misspelled farewell like `"goobye"` or `"goodby"`. Restart and say `"yes"`.
+**Pass:** Same as T-2.8 — typo variants are in `_SHUTDOWN_PHRASES` and will not surface as the topic.
 
 ---
 
@@ -2433,6 +2444,7 @@ If any of these fail, the build is **not shippable**:
 - [ ] T-19.1 ("Time of Useful Consciousness" question must NEVER route to get_time)
 - [ ] T-19.2 ("What time is it?" must still route to get_time after the keyword fix)
 - [ ] T-19.7 ("help me understand X" must NOT show help menu)
+- [ ] T-2.8 (goodbye must never appear as the resume topic — `_strip_shutdown_tail` removes farewell turns)
 
 ---
 

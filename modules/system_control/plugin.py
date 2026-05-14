@@ -1,4 +1,5 @@
 import os
+import random
 import re
 
 from core.dialog_state import DialogState
@@ -31,6 +32,55 @@ _TRIVIAL_KEYWORDS = frozenset({
     "what time", "what date", "current time", "current date",
     "system status", "friday status", "how's the weather",
 })
+
+# Short farewell phrases that should never appear as the resume topic.
+_SHUTDOWN_PHRASES = frozenset({
+    "goodbye", "bye", "good bye", "goobye", "goodby", "exit", "quit",
+    "exit program", "close assistant", "switch off", "see you", "see ya",
+    "later", "farewell", "close", "shutdown", "shut down", "stop",
+})
+
+
+def _inject_session_into_context(assistant_context, summary: str, max_turns: int = 8) -> None:
+    """Replay the last N turns of a session summary into the live assistant_context history."""
+    if not assistant_context or not summary:
+        return
+    lines = [l.strip() for l in summary.split("\n") if l.strip()]
+    # Keep only the most recent max_turns lines to avoid overflowing the context window.
+    lines = lines[-max_turns:]
+    for line in lines:
+        if line.lower().startswith("user:"):
+            assistant_context.record_message("user", line[5:].strip(), source="resumed_session")
+        elif line.lower().startswith("assistant:"):
+            assistant_context.record_message("assistant", line[10:].strip(), source="resumed_session")
+
+
+def _strip_shutdown_tail(summary: str) -> str:
+    """Remove trailing farewell turns so they never surface as the resume topic."""
+    lines = [l for l in summary.split("\n") if l.strip()]
+
+    def _is_farewell_user_line(line: str) -> bool:
+        if not line.lower().startswith("user:"):
+            return False
+        user_text = line[5:].strip().lower()
+        return user_text in _SHUTDOWN_PHRASES or (
+            len(user_text.split()) <= 3
+            and any(kw in user_text for kw in ("bye", "goodbye", "exit", "quit", "close", "later", "farewell"))
+        )
+
+    while lines:
+        last = lines[-1].strip()
+        if last.lower().startswith("assistant:") and len(lines) >= 2:
+            # If the assistant line follows a user farewell, strip both.
+            if _is_farewell_user_line(lines[-2].strip()):
+                lines.pop()
+                lines.pop()
+                continue
+        elif _is_farewell_user_line(last):
+            lines.pop()
+            continue
+        break
+    return "\n".join(lines)
 
 
 def _is_trivial_session(context: str) -> bool:
@@ -317,11 +367,19 @@ class SystemControlPlugin(FridayPlugin):
                 if facts.get("has_pending_session") == "true":
                     summary = facts.get("last_session_summary", "")
                     self.app.context_store.store_fact("has_pending_session", "", namespace="system")
+                    self.app.context_store.store_fact("last_session_summary", "", namespace="system")
                     if summary:
+                        # Replay the previous session turns into live history so
+                        # follow-ups like "answer it" have immediate context.
+                        _inject_session_into_context(
+                            getattr(self.app, "assistant_context", None), summary
+                        )
                         lines = [l.strip() for l in summary.split("\n") if l.strip()]
                         for line in reversed(lines):
                             if line.lower().startswith("user:"):
                                 topic = line[5:].strip()
+                                if topic.lower() in _SHUTDOWN_PHRASES:
+                                    continue
                                 topic = (topic[:70] + "…") if len(topic) > 70 else topic
                                 return f"Picking up where we left off, sir. You were asking: \"{topic}\". Go ahead."
                     return "Back on track, sir. What would you like to do?"
@@ -338,7 +396,6 @@ class SystemControlPlugin(FridayPlugin):
                 if facts.get("has_pending_session") == "true":
                     self.app.context_store.store_fact("has_pending_session", "", namespace="system")
                     self.app.context_store.store_fact("last_session_summary", "", namespace="system")
-                    import random
                     return random.choice([
                         "Of course, sir. Fresh start — how can I help you today?",
                         "Sure thing, sir. New session. What can I do for you?",
@@ -350,10 +407,9 @@ class SystemControlPlugin(FridayPlugin):
 
     def handle_shutdown(self, text, args):
         """Signal the system to perform a clean shutdown."""
+        import concurrent.futures
         import threading
         import time
-        import re
-        import random
 
         session_id = getattr(self.app.router, "session_id", None)
         llm = getattr(self.app.router, "get_llm", lambda: None)()
@@ -370,8 +426,10 @@ class SystemControlPlugin(FridayPlugin):
 
         if session_id and hasattr(self.app, "context_store"):
             summary = self.app.context_store.summarize_session(session_id, limit=20)
+            # Strip trailing farewell turns so they never appear as the resume topic.
+            summary = _strip_shutdown_tail(summary or "")
             # Count only real role-prefixed turns, not stray continuation lines
-            turn_lines = [l for l in (summary or "").split("\n")
+            turn_lines = [l for l in summary.split("\n")
                           if l.lower().startswith(("user:", "assistant:"))]
             if len(turn_lines) >= 4 and not _is_trivial_session(summary):
                 topic_context = summary
@@ -384,7 +442,6 @@ class SystemControlPlugin(FridayPlugin):
         llm_budget = max(2.0, sleep_time - 0.8)  # Leave 0.8 s for the DB write + shutdown
 
         def _trigger_shutdown():
-            import concurrent.futures
             start_time = time.time()
 
             if topic_context and session_id and hasattr(self.app, "context_store") and llm:

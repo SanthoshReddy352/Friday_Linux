@@ -7,7 +7,9 @@ import threading
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from core.logger import logger
 
 
 def _utc_now():
@@ -169,8 +171,8 @@ class ContextStore:
         if _is_workflow_expired(row[7]):
             try:
                 self._mark_workflow_expired(session_id, row[0])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[context_store] Failed to mark workflow expired: %s", e)
             return None
         return self._row_to_workflow(row)
 
@@ -596,8 +598,8 @@ class ContextStore:
                 )
                 documents = response.get("documents", [[]])[0]
                 return [doc for doc in documents if doc]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[context_store] Semantic recall failed, using fallback: %s", e)
         return self._fallback_semantic_recall(query, session_id, limit=limit)
 
     def summarize_session(self, session_id, limit=6):
@@ -647,8 +649,7 @@ class ContextStore:
         Phase 7: episodic rolling-window pruning.
         Returns number of rows deleted.
         """
-        import datetime as _dt
-        cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=older_than_days)).isoformat()
+        cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
         with self._connect() as conn:
             cur = conn.execute(
                 "DELETE FROM turns WHERE session_id = ? AND created_at < ?",
@@ -853,7 +854,8 @@ class ContextStore:
                 embedding_function=HashEmbeddingFunction(),
             )
             self._vector_available = True
-        except Exception:
+        except Exception as e:
+            logger.info("[context_store] Vector store unavailable: %s", e)
             self._vector_collection = None
             self._vector_available = False
 

@@ -156,6 +156,30 @@ def test_startup_fallback_greeting_when_no_llm_greeting(monkeypatch):
     assert "pick up where we left off" in response.lower()
 
 
+def test_resume_session_skips_goodbye_as_topic():
+    store = _make_context_store_with_facts({
+        "has_pending_session": "true",
+        "last_session_summary": (
+            "user: what are programming languages\n"
+            "assistant: Programming languages are tools we use to tell computers what to do.\n"
+            "user: can you give me an example\n"
+            "assistant: Sure — Python is great for beginners.\n"
+            "user: goodbye\n"
+            "assistant: Goodbye sir, talk to you later."
+        ),
+    })
+    ctx = ExtensionContext(registry=MagicMock(), events=MagicMock(), consent=MagicMock(), config=MagicMock())
+    ctx.get_service = lambda name: store if name == "context_store" else None
+    plugin = GreeterExtension()
+    plugin.ctx = ctx
+    plugin.load(ctx)
+
+    response = plugin.handle_resume_session()
+
+    assert "goodbye" not in response.lower()
+    assert "programming languages" in response.lower() or "example" in response.lower() or "left off" in response.lower()
+
+
 def test_resume_session_with_pending_session():
     store = _make_context_store_with_facts({
         "has_pending_session": "true",

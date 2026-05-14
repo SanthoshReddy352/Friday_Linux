@@ -241,8 +241,8 @@ class FridayApp:
         try:
             from modules.system_control.app_launcher import configure_app_registry  # noqa: PLC0415
             configure_app_registry(self.capabilities)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("App registry configuration failed: %s", e)
         if hasattr(self.router, "refresh_runtime_settings"):
             self.router.refresh_runtime_settings()
         if hasattr(self.router, "model_manager"):
@@ -400,8 +400,8 @@ class FridayApp:
                 if _extractor:
                     try:
                         _extractor.queue_turn(route_text, response)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Mem0 extraction queue failed: %s", e)
             return response
         finally:
             if source == "voice":

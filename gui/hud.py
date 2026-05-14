@@ -808,23 +808,19 @@ class MicSelector(QFrame):
 def button_style(danger=False):
     if danger:
         bg = "rgba(255, 69, 58, 200)"
-        hover_bg = "rgba(255, 69, 58, 255)"
         border = "rgba(255, 255, 255, 40)"
     else:
         bg = "rgba(10, 132, 255, 200)"
-        hover_bg = "rgba(10, 132, 255, 255)"
         border = "rgba(255, 255, 255, 40)"
     
     return (
-        f"QPushButton {{ background-color: {bg};"
-        f"color: #ffffff;"
-        f"border: 1px solid {border};"
-        "border-radius: 8px;"
-        "padding: 10px 16px;"
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-        "font-weight: 600; }}"
-        f"QPushButton:hover {{ background-color: {hover_bg}; }}"
-        f"QPushButton:pressed {{ background-color: rgba(255, 255, 255, 50); }}"
+        f"background-color: {bg}; "
+        f"color: #ffffff; "
+        f"border: 1px solid {border}; "
+        "border-radius: 8px; "
+        "padding: 10px 16px; "
+        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif; "
+        "font-weight: 600;"
     )
 
 

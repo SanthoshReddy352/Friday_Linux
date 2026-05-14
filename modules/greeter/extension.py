@@ -5,6 +5,12 @@ from core.extensions.protocol import Extension, ExtensionContext
 from core.extensions.decorators import capability
 from core.logger import logger
 
+_SHUTDOWN_PHRASES = frozenset({
+    "goodbye", "bye", "good bye", "goobye", "goodby", "exit", "quit",
+    "exit program", "close assistant", "switch off", "see you", "see ya",
+    "later", "farewell", "close", "shutdown", "shut down", "stop",
+})
+
 
 INTERNAL_HELP_TOOL_NAMES = {
     "greet",
@@ -161,8 +167,10 @@ class GreeterExtension(Extension):
             last_user = ""
             for line in reversed(lines):
                 if line.lower().startswith("user:"):
-                    last_user = line[5:].strip()
-                    break
+                    candidate = line[5:].strip()
+                    if candidate.lower() not in _SHUTDOWN_PHRASES:
+                        last_user = candidate
+                        break
             if last_user:
                 topic = (last_user[:70] + "…") if len(last_user) > 70 else last_user
                 return f"Picking up where we left off, sir. You were asking: \"{topic}\". Go ahead."

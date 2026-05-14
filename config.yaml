@@ -3,7 +3,7 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: manual
+  listening_mode: wake_word
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8

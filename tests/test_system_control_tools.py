@@ -373,6 +373,58 @@ def test_open_file_in_downloads_folder_extracts_filename_correctly(monkeypatch, 
     assert response == "Opening Registrations.xlsx..."
 
 
+def test_strip_shutdown_tail_removes_goodbye():
+    from modules.system_control.plugin import _strip_shutdown_tail
+    summary = (
+        "user: what are programming languages\n"
+        "assistant: Programming languages are tools...\n"
+        "user: goodbye\n"
+        "assistant: Goodbye sir, see you later."
+    )
+    result = _strip_shutdown_tail(summary)
+    assert "goodbye" not in result.lower()
+    assert "programming languages" in result.lower()
+
+
+def test_strip_shutdown_tail_preserves_normal_content():
+    from modules.system_control.plugin import _strip_shutdown_tail
+    summary = (
+        "user: can you explain Python\n"
+        "assistant: Python is a high-level language.\n"
+        "user: what about machine learning\n"
+        "assistant: Machine learning is a subset of AI."
+    )
+    result = _strip_shutdown_tail(summary)
+    assert "machine learning" in result.lower()
+    assert result == summary
+
+
+def test_handle_yes_skips_goodbye_topic():
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    plugin = SystemControlPlugin(app)
+
+    store = MagicMock()
+    store.get_facts_by_namespace.return_value = [
+        {"key": "has_pending_session", "value": "true"},
+        {"key": "last_session_summary", "value": (
+            "user: what are programming languages\n"
+            "assistant: Programming languages are tools we use...\n"
+            "user: thanks\n"
+            "assistant: You're welcome!\n"
+            "user: goodbye\n"
+            "assistant: Goodbye sir."
+        )},
+    ]
+    app.context_store = store
+
+    response = plugin.handle_yes("yes", {})
+
+    assert "goodbye" not in response.lower()
+    assert "programming languages" in response.lower() or "thanks" in response.lower() or "left off" in response.lower()
+
+
 def test_manage_file_appends_content(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     desktop = tmp_path / "Desktop"

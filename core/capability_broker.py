@@ -55,6 +55,7 @@ class CapabilityBroker:
 
     def __init__(self, app):
         self.app = app
+        self._consent_preapproved = False
 
     def _memory(self):
         """Return MemoryService when wired (production); fall back to the
@@ -90,7 +91,7 @@ class CapabilityBroker:
         action_plan = self._plan_actions(cleaned_text)
         if action_plan:
             steps = [self._action_to_step(action, cleaned_text) for action in action_plan]
-            online = self._first_online_confirmation_needed(steps, cleaned_text)
+            online = None if self._consent_preapproved else self._first_online_confirmation_needed(steps, cleaned_text)
             if online:
                 self._record_route_duration(route_start)
                 return self._build_online_proposal(online, cleaned_text, turn_id, style_hint)
@@ -109,7 +110,7 @@ class CapabilityBroker:
         if best_route and best_route["spec"]["name"] != "llm_chat":
             step = self._route_to_step(best_route, cleaned_text, {})
             descriptor = self.app.capability_registry.get_descriptor(step.capability_name)
-            if self.app.consent_service.evaluate(step.capability_name, descriptor, cleaned_text).needs_confirmation:
+            if not self._consent_preapproved and self.app.consent_service.evaluate(step.capability_name, descriptor, cleaned_text).needs_confirmation:
                 self._record_route_duration(route_start)
                 return self._build_online_proposal(step, cleaned_text, turn_id, style_hint)
             self._record_route_duration(route_start)
@@ -123,7 +124,7 @@ class CapabilityBroker:
             )
 
         # --- 5. Online/current-info detection ---
-        if self.app.consent_service.is_current_info_request(cleaned_text):
+        if self.app.consent_service.is_current_info_request(cleaned_text) and not self._consent_preapproved:
             online_capabilities = self.app.capability_registry.list_capabilities(connectivity="online")
             if online_capabilities and not self.app.consent_service.is_explicit_online_request(cleaned_text):
                 self._memory().set_pending_online(
@@ -276,10 +277,17 @@ class CapabilityBroker:
                 estimated_latency=descriptor.latency_class,
                 final_style=style_hint,
             )
-        # No specific online tool was captured — clear and fall through to
-        # normal routing on the *original* request text. Avoids re-entering
-        # planner mode on the bare "yes" (which used to recurse).
+        # No specific online tool was captured — re-route the *original*
+        # request text with consent pre-approved so the online detection
+        # step in build_plan() won't re-prompt.
         self._memory().clear_pending_online(self.app.session_id)
+        original_text = (pending.get("text") or "").strip()
+        if original_text:
+            self._consent_preapproved = True
+            try:
+                return self.build_plan(original_text, turn_id, style_hint=style_hint)
+            finally:
+                self._consent_preapproved = False
         return None
 
     # ------------------------------------------------------------------
