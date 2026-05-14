@@ -105,8 +105,14 @@ class MemoryCuratorAgent:
         (re.compile(r"\bi prefer ([a-z0-9 ,._'-]{2,80})\b", re.IGNORECASE), "preference"),
         (re.compile(r"\bmy favorite ([a-z0-9 _'-]{2,40}) is ([a-z0-9 ,._'-]{1,80})\b", re.IGNORECASE), "favorite"),
     )
+    # Require an explicit anchor (colon, "that …", or "to …") so phrases like
+    # "remember this is important" don't extract garbage. The previous loose
+    # `[:\s]*(.+)` form captured everything after the word "remember" even when
+    # it was a normal sentence fragment, polluting memory_items.
     EXPLICIT_MEMORY_PATTERN = re.compile(
-        r"\b(?:remember|keep in mind|note that|save this memory)\b[:\s]*(.+)",
+        r"\b(?:remember|keep in mind|note that|save this memory)"
+        r"(?:\s*[:\-]\s*|\s+that\s+|\s+the\s+fact\s+that\s+)"
+        r"(.+?)(?:[.!?]\s*$|$)",
         re.IGNORECASE,
     )
 
@@ -119,7 +125,7 @@ class MemoryCuratorAgent:
             return []
 
         candidates = []
-        lowered = text.lower()
+        memory = getattr(self.app, "memory_service", None) or self.app.context_store
         for pattern, key in self.SAFE_PATTERNS:
             match = pattern.search(text)
             if not match:
@@ -127,25 +133,53 @@ class MemoryCuratorAgent:
             if key == "favorite":
                 item_key = f"favorite_{match.group(1).strip().lower().replace(' ', '_')}"
                 item_value = match.group(2).strip()
+            elif key in {"likes", "preference"}:
+                # Multiple preferences are valid simultaneously ("I like coffee",
+                # "I like rain"). Using a single fixed key under store_fact's
+                # (session, namespace, key) primary key would overwrite each new
+                # one. Slugify the value into the key so each preference is
+                # retained as its own row.
+                value_text = match.group(1).strip()
+                slug = re.sub(r"[^a-z0-9]+", "_", value_text.lower()).strip("_")[:48] or "value"
+                item_key = f"{key}:{slug}"
+                item_value = value_text
             else:
                 item_key = key
                 item_value = match.group(1).strip()
-            (getattr(self.app, "memory_service", None) or self.app.context_store).store_fact(
+            memory.store_fact(
                 item_key, item_value, session_id=session_id, namespace="profile",
             )
             candidates.append({"key": item_key, "value": item_value, "memory_type": "profile"})
 
         explicit = self.EXPLICIT_MEMORY_PATTERN.search(text)
         if explicit and explicit.group(1).strip():
-            (getattr(self.app, "memory_service", None) or self.app.context_store).store_memory_item(
+            content = explicit.group(1).strip()
+            memory.store_memory_item(
                 session_id=session_id,
-                content=explicit.group(1).strip(),
+                content=content,
                 memory_type="episodic",
                 persona_id=persona_id,
                 sensitivity="explicit_user",
                 metadata={"role": "user", "source": "explicit_memory"},
             )
-            candidates.append({"memory_type": "episodic", "content": explicit.group(1).strip(), "confidence": 0.95})
+            candidates.append({"memory_type": "episodic", "content": content, "confidence": 0.95})
+
+        # Forward every completed turn to MemoryService.record_turn so that
+        # (a) ContextStore gets the canonical user/assistant turn rows and
+        # (b) the Mem0 extractor's queue is fed. Previously record_turn was
+        # defined but never invoked — Mem0 received no writes from the
+        # conversation pipeline even when memory.enabled was true.
+        memory_service = getattr(self.app, "memory_service", None)
+        if memory_service is not None and hasattr(memory_service, "record_turn"):
+            try:
+                memory_service.record_turn(
+                    session_id=session_id,
+                    user_text=user_text or "",
+                    assistant_text=assistant_text or "",
+                )
+            except Exception:
+                # Memory pipeline failures must never break the turn.
+                pass
         return candidates
 
 

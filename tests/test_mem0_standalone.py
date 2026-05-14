@@ -306,12 +306,12 @@ class TestMemoryServiceWithMem0(unittest.TestCase):
         store = ContextStore(db_path=":memory:")
         svc = MemoryService(store, memory_broker=None, mem0_client=mock_client)
 
-        context = svc.build_context_bundle("what theme do you prefer")
-        mem_facts = context.get("mem0_facts", [])
-        self.assertIsInstance(mem_facts, list)
+        context = svc.build_context_bundle("", "what theme do you prefer")
+        user_facts = context.get("user_facts", "")
+        self.assertIsInstance(user_facts, str)
         # search should have been called with the query text
         mock_client.search.assert_called_once()
-        print(f"\n  mem0_facts injected: {mem_facts}")
+        print(f"\n  user_facts injected: {user_facts}")
 
 
 # ---------------------------------------------------------------------------

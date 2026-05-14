@@ -16,51 +16,71 @@ class AppLaunchTarget:
     aliases: set[str] = field(default_factory=set)
 
 
+# Command lists are scanned in order; the first one that resolves via
+# shutil.which is used. Mixing Linux and Windows commands in the same tuple
+# is intentional so the registry survives unchanged on both OSes — `which`
+# is the only filter.
 APP_PREFERENCES = (
     {
         "canonical": "calculator",
         "aliases": {"calculator", "calc"},
-        "commands": ("gnome-calculator", "mate-calc", "qalculate-gtk", "calc"),
+        "commands": ("gnome-calculator", "mate-calc", "qalculate-gtk", "calc.exe", "calc"),
     },
     {
         "canonical": "chrome",
         "aliases": {"chrome", "google chrome"},
-        "commands": ("google-chrome", "google-chrome-stable"),
+        "commands": ("google-chrome", "google-chrome-stable", "chrome.exe", "chrome"),
     },
     {
         "canonical": "brave",
         "aliases": {"brave", "brave browser", "brave web browser"},
-        "commands": ("brave-browser", "brave-browser-stable"),
+        "commands": ("brave-browser", "brave-browser-stable", "brave.exe", "brave"),
+    },
+    {
+        "canonical": "edge",
+        "aliases": {"edge", "microsoft edge", "ms edge"},
+        "commands": ("msedge", "msedge.exe", "microsoft-edge", "microsoft-edge-stable"),
     },
     {
         "canonical": "chromium",
         "aliases": {"chromium"},
-        "commands": ("chromium",),
+        "commands": ("chromium", "chromium-browser", "chromium.exe"),
     },
     {
         "canonical": "browser",
         "aliases": {"browser", "web browser"},
-        "commands": ("firefox", "firefox-esr", "google-chrome", "google-chrome-stable", "chromium"),
+        "commands": (
+            "firefox", "firefox-esr", "google-chrome", "google-chrome-stable", "chromium",
+            "msedge", "msedge.exe", "chrome.exe", "firefox.exe",
+        ),
     },
     {
         "canonical": "firefox",
         "aliases": {"firefox", "mozilla firefox", "firefox esr"},
-        "commands": ("firefox", "firefox-esr"),
+        "commands": ("firefox", "firefox-esr", "firefox.exe"),
     },
     {
         "canonical": "files",
-        "aliases": {"files", "file manager", "nautilus", "thunar"},
-        "commands": ("nautilus", "thunar"),
+        "aliases": {"files", "file manager", "nautilus", "thunar", "file explorer", "explorer"},
+        "commands": ("nautilus", "thunar", "dolphin", "pcmanfm", "explorer.exe"),
     },
     {
         "canonical": "terminal",
-        "aliases": {"terminal", "gnome terminal", "qterminal"},
-        "commands": ("gnome-terminal", "qterminal", "x-terminal-emulator"),
+        "aliases": {"terminal", "gnome terminal", "qterminal", "command prompt", "powershell"},
+        "commands": (
+            "gnome-terminal", "qterminal", "konsole", "x-terminal-emulator", "alacritty",
+            "wt.exe", "powershell.exe", "pwsh.exe", "cmd.exe",
+        ),
+    },
+    {
+        "canonical": "notepad",
+        "aliases": {"notepad", "text editor", "editor"},
+        "commands": ("notepad.exe", "gedit", "kate", "mousepad", "xed"),
     },
     {
         "canonical": "mpv",
-        "aliases": {"mpv", "media player"},
-        "commands": ("mpv", "vlc"),
+        "aliases": {"mpv", "media player", "vlc"},
+        "commands": ("mpv", "vlc", "mpv.exe", "vlc.exe"),
     },
 )
 
@@ -185,10 +205,28 @@ def _launch_single_application(app_name):
 
     try:
         if os_name == "Windows":
+            resolved = shutil.which(command)
+            if resolved is None and not command.lower().endswith(".exe"):
+                # Try with .exe suffix — Windows PATH search via shutil.which
+                # only adds suffixes from PATHEXT, but explicit user input like
+                # "chrome" should still resolve to chrome.exe.
+                resolved = shutil.which(command + ".exe")
+            target = resolved or command
             try:
-                os.startfile(command)
-            except AttributeError:
-                subprocess.Popen(f'start "" "{command}"', shell=True)
+                # os.startfile honors file associations and start menu links.
+                os.startfile(target)
+            except (AttributeError, OSError):
+                creation_flags = 0
+                detached = getattr(subprocess, "DETACHED_PROCESS", 0)
+                new_pg = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                creation_flags = detached | new_pg
+                subprocess.Popen(
+                    [target],
+                    creationflags=creation_flags,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            logger.info("Successfully started process for %s", target)
             return f"Opening {canonical or app_name}..."
 
         if os_name == "Linux":

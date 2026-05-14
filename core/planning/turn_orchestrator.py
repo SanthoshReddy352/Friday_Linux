@@ -208,8 +208,19 @@ class TurnOrchestrator:
             return None
 
     def _build_context_bundle(self, text: str, session_id: str) -> dict:
+        # Prefer MemoryService.build_context_bundle when it is available — that
+        # surface enriches the broker output with Mem0 facts. Fall back to the
+        # bare MemoryBroker on partial app mounts (tests / minimal harnesses).
+        if not session_id:
+            return {}
+        service = getattr(self.app, "memory_service", None)
+        if service is not None and hasattr(service, "build_context_bundle"):
+            try:
+                return service.build_context_bundle(session_id, text) or {}
+            except Exception:
+                logger.debug("[turn_orch] memory_service bundle build failed", exc_info=True)
         broker = self._memory or getattr(self.app, "memory_broker", None)
-        if broker is None or not session_id:
+        if broker is None:
             return {}
         try:
             return broker.build_context_bundle(text, session_id) or {}

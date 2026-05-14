@@ -43,26 +43,47 @@ def test_build_context_bundle_returns_empty_when_broker_absent():
     assert svc.build_context_bundle("sess", "anything") == {}
 
 
-def test_record_turn_appends_user_and_assistant():
+def test_record_turn_appends_user_and_assistant_when_store_turns():
     store = MagicMock()
     svc = MemoryService(store)
-    svc.record_turn("sess", "hi", "hello back", trace_id="trace-9")
+    # Default behaviour no longer double-writes turns (emit_message already
+    # calls append_turn). Tests requesting explicit storage pass store_turns=True.
+    svc.record_turn("sess", "hi", "hello back", trace_id="trace-9", store_turns=True)
     assert store.append_turn.call_count == 2
     store.append_turn.assert_any_call("sess", "user", "hi", source="trace-9")
     store.append_turn.assert_any_call("sess", "assistant", "hello back", source="trace-9")
 
 
+def test_record_turn_default_does_not_double_write_turns():
+    store = MagicMock()
+    svc = MemoryService(store)
+    svc.record_turn("sess", "hi", "hello back", trace_id="trace-9")
+    # With the default store_turns=False, append_turn must not be invoked —
+    # `app.emit_message` is the single writer for turn rows.
+    store.append_turn.assert_not_called()
+
+
 def test_record_turn_skips_when_session_blank():
     store = MagicMock()
-    MemoryService(store).record_turn("", "x", "y")
+    MemoryService(store).record_turn("", "x", "y", store_turns=True)
     store.append_turn.assert_not_called()
 
 
 def test_record_turn_skips_blank_text_for_each_role():
     store = MagicMock()
     svc = MemoryService(store)
-    svc.record_turn("sess", "", "only-assistant")
+    svc.record_turn("sess", "", "only-assistant", store_turns=True)
     store.append_turn.assert_called_once_with("sess", "assistant", "only-assistant", source=None)
+
+
+def test_record_turn_queues_extractor_even_when_store_turns_is_false():
+    """The Mem0 queue must be fed on every turn even though ContextStore writes
+    are skipped — that fix is the whole reason record_turn exists in v2."""
+    store = MagicMock()
+    extractor = MagicMock()
+    svc = MemoryService(store, extractor=extractor)
+    svc.record_turn("sess", "what's the weather", "sunny")
+    extractor.queue_turn.assert_called_once_with("what's the weather", "sunny", user_id="default")
 
 
 def test_learn_fact_writes_to_store_and_semantic():

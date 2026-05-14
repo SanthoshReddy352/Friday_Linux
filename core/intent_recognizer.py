@@ -248,6 +248,9 @@ class IntentRecognizer:
             self._parse_vision_action,
             self._parse_email_action,
             self._parse_news_action,
+            # Memory recall/delete must come BEFORE _parse_notes so "what do you
+            # remember about me?" routes to show_memories rather than save_note.
+            self._parse_memory_query,
             self._parse_file_action,
             self._parse_launch_app,
             self._parse_manage_file,
@@ -576,13 +579,21 @@ class IntentRecognizer:
             }
 
         direction = None
+        # Require the word "volume" or "sound/audio" alongside ambiguous verbs like
+        # "raise" / "turn up" so phrases like "raise the question" or
+        # "turn up the heat" do not change the system volume.
+        has_audio_term = bool(re.search(r"\b(?:volume|sound|audio)\b", clause_lower))
         if re.search(r"\bunmute\b", clause_lower):
             direction = "unmute"
-        elif re.search(r"\bmute\b", clause_lower):
+        elif re.search(r"\bmute\b", clause_lower) and (has_audio_term or re.fullmatch(r"mute[.!?]?", clause_lower.strip())):
             direction = "mute"
-        elif re.search(r"\b(?:increase|raise|louder|volume up|turn up)\b", clause_lower):
+        elif re.search(r"\bvolume\s+up\b|\bturn\s+(?:up|the\s+)?volume\b", clause_lower):
             direction = "up"
-        elif re.search(r"\b(?:decrease|lower|quieter|volume down|turn down)\b", clause_lower):
+        elif re.search(r"\bvolume\s+down\b|\bturn\s+(?:down|the\s+)?volume\b", clause_lower):
+            direction = "down"
+        elif has_audio_term and re.search(r"\b(?:increase|raise|louder|crank|pump)\b", clause_lower):
+            direction = "up"
+        elif has_audio_term and re.search(r"\b(?:decrease|lower|quieter|soften|reduce)\b", clause_lower):
             direction = "down"
         elif "volume" in clause_lower and context.get("domain") == "volume":
             direction = context.get("args", {}).get("direction")
@@ -602,10 +613,26 @@ class IntentRecognizer:
         if re.search(r"\b(?:system info|system information|system status|system health|system details)\b", clause_lower):
             return {"tool": "get_system_status", "args": {}, "text": clause, "domain": "system"}
 
-        if re.search(r"\bbattery(?: status)?\b", clause_lower):
+        # Require an explicit battery-status framing. Bare `battery` overmatches on
+        # phrases like "the battery in my car died".
+        if re.search(
+            r"\b(?:battery\s+(?:status|level|percent(?:age)?|charge|life|remaining|health)|"
+            r"how(?:'s|\s+is|\s+much)\s+(?:my\s+|the\s+)?battery|"
+            r"what(?:'s|\s+is)\s+(?:my\s+|the\s+)?battery(?:\s+(?:status|level|at))?|"
+            r"check\s+(?:my\s+|the\s+)?battery)\b",
+            clause_lower,
+        ):
             return {"tool": "get_battery", "args": {}, "text": clause, "domain": "system"}
 
-        if re.search(r"\b(?:cpu|ram|memory|resource|usage|performance)\b", clause_lower):
+        # CPU/RAM queries must include an explicit resource-status marker.
+        # Lone words like "memory", "performance", "usage" overmatch heavily.
+        if re.search(
+            r"\b(?:cpu|ram)\s+(?:usage|load|status|free|info)\b"
+            r"|\bmemory\s+(?:usage|load|status|free|info)\b"
+            r"|\b(?:resource|performance)\s+(?:usage|status|info)\b"
+            r"|\b(?:show|check|tell\s+me|what(?:'s|\s+is))\s+(?:my\s+|the\s+)?(?:cpu|ram|memory|resource)\s+(?:usage|load|status)\b",
+            clause_lower,
+        ):
             return {"tool": "get_cpu_ram", "args": {}, "text": clause, "domain": "system"}
 
         return None
@@ -630,7 +657,12 @@ class IntentRecognizer:
         return None
 
     def _parse_screenshot(self, clause, clause_lower, context):
-        if re.search(r"\b(?:take|capture).*(?:screenshot|screen shot)\b", clause_lower) or "screenshot" in clause_lower:
+        # Require an explicit capture verb. The previous `or "screenshot" in clause_lower`
+        # fallback fired on any mention of the word, e.g. "I deleted my screenshot folder".
+        if re.search(r"\b(?:take|capture|grab|snap|get|make)\s+(?:a\s+|another\s+|the\s+)?(?:screenshot|screen\s*shot|screen\s+capture)\b", clause_lower):
+            return {"tool": "take_screenshot", "args": {}, "text": clause, "domain": "screen"}
+        # Bare imperative "screenshot" / "screenshot please" only.
+        if re.fullmatch(r"(?:please\s+)?screen\s*shot(?:\s+please)?[.!?]?", clause_lower.strip()):
             return {"tool": "take_screenshot", "args": {}, "text": clause, "domain": "screen"}
         return None
 
@@ -967,6 +999,39 @@ class IntentRecognizer:
             return {"tool": "read_notes", "args": {}, "text": clause, "domain": "notes"}
         return None
 
+    def _parse_memory_query(self, clause, clause_lower, context):
+        """Route recall/forget queries to the memory_manager plugin.
+
+        Without this, "what do you remember about me?" used to fall through to
+        the LLM router (non-deterministic) or worse, hit save_note via the
+        "remember" keyword. show_memories / delete_memory now have a
+        deterministic intent surface symmetric to save_note.
+        """
+        tools = getattr(self.router, "_tools_by_name", {})
+
+        if "show_memories" in tools and re.search(
+            r"\b(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about\s+(?:me|us))?"
+            r"|what\s+have\s+you\s+learned(?:\s+about\s+me)?"
+            r"|show\s+(?:me\s+)?(?:my\s+)?memories"
+            r"|list\s+(?:my\s+)?memories"
+            r"|what\s+are\s+my\s+preferences"
+            r"|do\s+you\s+remember\s+(?:anything\s+)?about\s+me)\b",
+            clause_lower,
+        ):
+            return {"tool": "show_memories", "args": {}, "text": clause, "domain": "memory"}
+
+        if "delete_memory" in tools and re.search(
+            r"\b(?:forget\s+(?:that|what\s+i\s+(?:said|told\s+you)|about\s+me)"
+            r"|delete\s+(?:that\s+)?memory"
+            r"|remove\s+(?:that\s+)?(?:memory|fact)"
+            r"|stop\s+remembering"
+            r"|clear\s+(?:that\s+)?memory)\b",
+            clause_lower,
+        ):
+            return {"tool": "delete_memory", "args": {}, "text": clause, "domain": "memory"}
+
+        return None
+
     def _parse_voice_toggle(self, clause, clause_lower, context):
         mode_match = re.search(
             r"\b(?:set|switch|change)\s+(?:voice|conversation|listening)\s+mode\s+(?:to\s+)?(persistent|always on|on[-\s]?demand|manual|off)\b",
@@ -992,11 +1057,17 @@ class IntentRecognizer:
         return None
 
     def _parse_help(self, clause, clause_lower, context):
-        # Only route to show_help for explicit capability requests, not "help me understand X"
+        # Only route to show_capabilities for explicit capability-listing requests.
+        # "help me [do X]" must NOT match — only bare help queries or "what can you do".
         if re.search(r"\bwhat\s+(?:else\s+)?can\s+you\s+do\b", clause_lower):
-            return {"tool": "show_help", "args": {}, "text": clause, "domain": "help"}
-        if re.fullmatch(r"(?:help|help\s+friday|help\s+me)[.!?]?", clause_lower.strip()):
-            return {"tool": "show_help", "args": {}, "text": clause, "domain": "help"}
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\bshow\s+(?:me\s+)?(?:your\s+)?(?:commands|capabilities|abilities)\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\blist\s+(?:your\s+)?(?:commands|capabilities|abilities)\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        # Bare "help" or "help friday" only — NOT "help me write X"
+        if re.fullmatch(r"(?:help|help\s+friday)[.!?]?", clause_lower.strip()):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
         return None
 
     def _parse_exit(self, clause, clause_lower, context):

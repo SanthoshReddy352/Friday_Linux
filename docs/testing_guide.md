@@ -46,6 +46,11 @@
 | 2026-05-09 | §18 | Session RAG belt-and-suspenders: `process_input` now intercepts file paths and `file://` URIs at the app level via `_resolve_rag_file_path()` before any routing — file loads in background thread, emits proper assistant response + TTS. Window-level `dragEnterEvent`/`dropEvent` added to `MainWindow` as fallback for drops outside the chat area. `handle_return_pressed` also handles `file://` URIs. |
 | 2026-05-11 | §2 | Session continuation — on "goodbye/bye", FRIDAY saves `last_session_summary` and `has_pending_session` synchronously; background thread generates a personalised "want to continue?" greeting via LLM; next startup greets with that question. Two new capabilities: `resume_session` (yes/continue → loads previous context, zero latency) and `start_fresh_session` (no/fresh start → clears flags). Both hidden from help list. |
 | 2026-05-13 | §2, core | Production fixes — (1) "goodbye" utterance no longer surfaces as the resume topic: `_strip_shutdown_tail()` trims farewell turns from summary before storing, plus a `_SHUTDOWN_PHRASES` guard in `handle_yes` and `handle_resume_session`; (2) silent exception swallowing in `app.py` (app registry, Mem0 queue) and `context_store.py` (workflow expiry, vector recall, vector init) replaced with `logger.warning`; (3) inlined `import random/threading/re/concurrent` moved to module level in `system_control/plugin.py`; (4) redundant `import datetime` inside `prune_old_turns` removed (module-level import used). 3 new automated tests. |
+| 2026-05-14 | §2, §1 | (1) Session context injection: replaced history-injection approach (caused consecutive-assistant-message merge, anchoring model to first response) with `resumed_session_context` fact stored in DB and read by `build_chat_messages` — follow-up queries like "answer it" / "continue" now have correct context without breaking message alternation; (2) Renamed `show_help` → `show_capabilities` with tightened description and routing; removed `\bhelp\b` pattern from router/route_scorer; `_parse_help` no longer matches "help me [verb]" — only bare "help", "what can you do", "show your commands/capabilities". |
+| 2026-05-14 | §15 | **Setup script refresh.** `setup.sh` and `setup.ps1` updated to (a) idempotently skip each phase when its outcome is already on disk — system packages (`dpkg -s`), venv (`.venv/bin/python3` executable), pip deps (SHA-256 of `requirements.txt` cached in `.venv/.requirements.sha256`), Playwright (`~/.cache/ms-playwright/chromium-*`), each model file, autostart unit/Startup .bat; (b) download the actual current models — `mlabonne/Qwen3-1.7B-abliterated-GGUF`, `mlabonne/Qwen3-4B-abliterated-GGUF`, `ggml-org/SmolVLM2-2.2B-Instruct-GGUF` (model + mmproj) — not the historical Gemma 2B / Qwen2.5 7B; (c) **no longer install Piper or the TTS voice** — those are now manual per `SETUP_GUIDE.md` → "Manual: Piper TTS". `SETUP_GUIDE.md` and `SETUP_GUIDE_WINDOWS.md` both rewritten with full step-by-step manual paths covering: system packages, venv, pip, Playwright, models (one wget/Invoke-WebRequest per file), Whisper STT, Piper binary + voice, wake autostart, Mem0 enable. |
+| 2026-05-14 | §22 | **GUI redesign v2 — center-stage particle reactor**. `gui/agent_hud.py` rewritten end-to-end. New `ParticleReactor` widget (4-layer orbital particle system: 70 halo + 110 outer + 90 mid + 70 inner, plus dynamic energy sparks emitted on state change) replaces the arc/tick-ring reactor. Drawn with `CompositionMode_Plus` additive blending so overlapping particles bloom into a coherent glow; per-particle radial gradient + hot-core dot; 60fps tick. 5 states (idle/armed/listening/processing/speaking/muted) drive particle speed, radial breathing, and burst emissions. Layout fully restructured: reactor now occupies the **center column**, framed above by state caption + state line and below by an inline input dock (mic / stop / input edit / @-file / send). Left column = `ChatColumn` (compact role-styled bubbles, newest at bottom); right column = `EventColumn` (per-turn `_TraceCard` stack with status dot + step list + duration footer). New `TopBar` (FRIDAY brand + voice-mode combo + theme button) and `FooterBar` (per-role model status dots for CHAT/TOOL/VLM/STT/TTS + global state line). Dark theme tokens now true `#000000` void with electric-cyan `#00e1ff` accent and magenta/violet hue-shift palette; light theme is high-contrast `#f4f5f8` paper with deep electric ink `#0042a8`. Reactor's `apply_theme()` re-renders particles in the new palette. Existing API contracts preserved: `start_hud(app_core)`, `app_core.process_input(text, source="gui")`, `app_core.cancel_current_task(announce=False)`, `app_core.tts.stop()`, `app_core.set_listening_mode(mode)`, `app_core.load_session_rag_file(path)`, and the same event-bus subscriptions (`turn_started`, `turn_completed`, `turn_failed`, `tool_started`, `tool_finished`, `llm_started`, `voice_response`, `voice_runtime_state_changed`, `gui_toggle_mic`, `listening_mode_changed`). 469/469 tests pass; smoke-launched under `QT_QPA_PLATFORM=offscreen` with theme + state cycling. |
+| 2026-05-14 | §22 | **GUI redesign v1 — Agent-Assistant HUD (`gui/agent_hud.py`)**. New three-pane Qt window: LeftRail (FRIDAY brand + animated ArcReactor "Iron-Man core" + voice-mode combo + per-role model status + theme toggle), center ChatPane (role-styled message bubbles, auto-scroll, status lines) + InputBar (mic, stop-speech, line edit, attach, send), right EventTracePane (stacked per-turn cards showing INTENT/PLAN/ROUTE/TOOL/LLM/SPEECH/DONE steps with status dots and per-turn duration footer). `ArcReactor` is a custom `QWidget.paintEvent` widget with 5 states (muted/armed/listening/processing/speaking), `QRadialGradient` core, 60-tick outer chronograph ring, rotating mid-arcs, segmented inner ring, 60fps breathing animation; clicking it toggles the mic. Theme system: token tables (`_DARK`, `_LIGHT`) → `qss(tokens)` builder; toggle button persists choice to `data/gui_state.json`. EventBus wiring uses thread-safe `pyqtSignal` bridges (`sig_message`, `sig_turn_started/event/finished`, `sig_voice_runtime`, `sig_mic_toggle`) subscribed to `turn_started`, `turn_completed`, `turn_failed`, `tool_started`, `tool_finished`, `llm_started`, `voice_response`, `voice_runtime_state_changed`, `gui_toggle_mic`, `listening_mode_changed`. `main.py` now imports `start_hud` lazily — defaults to the new HUD; `--classic-hud` flag falls back to legacy `gui/hud.py`. Smoke-launched against the real `RuntimeKernel` with `QT_QPA_PLATFORM=offscreen`; 469/469 tests pass after the change. |
+| 2026-05-14 | §1, §2, §14d, §17 | **Production-hardening pass (routing + memory + Windows)**. Routing: bare `\btime\b`, `\bdate\b`, `\bbattery\b`, `\bmemory\b` patterns removed from router and route_scorer; `_parse_screenshot` requires explicit capture verb; `_parse_volume` requires audio context; `_parse_system` requires explicit usage/status framing; embedding router blocklist expanded to all arg-requiring tools (`launch_app`, `play_youtube`, `search_google`, `open_browser_url`, `query_document`, `delete_memory`, …). Memory: `MemoryService.record_turn` (previously dead code) now invoked from `MemoryCuratorAgent.curate()` — feeds Mem0 extractor; `TurnOrchestrator._build_context_bundle` prefers `MemoryService.build_context_bundle` so Mem0 `user_facts` reach the prompt; `AssistantContext.build_chat_messages` reads `user_facts` and appends to chat prompt; `save_note` mirrors into `memory_items`; `MemoryCuratorAgent` slug-keys likes/preference facts so multiples coexist; `EXPLICIT_MEMORY_PATTERN` requires anchor (`:`, `-`, `that`); new `_parse_memory_query` parser routes "what do you remember about me?" → `show_memories`. Windows: `wake_porcupine.py` cross-platform (tasklist, creationflags, Windows venv path), `register_wake.py` rewritten to dispatch by OS (systemd / Startup .bat / LaunchAgent plist), `APP_PREFERENCES` adds Windows commands (calc.exe, explorer.exe, msedge, notepad.exe, …), `_launch_single_application` uses `os.startfile` + creationflags on Windows. Setup: `setup.sh` and `setup.ps1` rewritten with idempotency, optional packages, parameters (-SkipModels, -Force), and autostart prompts. Docs: SETUP_GUIDE.md refreshed for Linux, new SETUP_GUIDE_WINDOWS.md created. Porcupine key now read from `FRIDAY_PORCUPINE_KEY` env var. |
 
 ---
 
@@ -2445,8 +2450,66 @@ If any of these fail, the build is **not shippable**:
 - [ ] T-19.2 ("What time is it?" must still route to get_time after the keyword fix)
 - [ ] T-19.7 ("help me understand X" must NOT show help menu)
 - [ ] T-2.8 (goodbye must never appear as the resume topic — `_strip_shutdown_tail` removes farewell turns)
+- [ ] T-19.7 ("help me understand X" must NOT show capabilities menu — `show_capabilities` only matches explicit listing requests)
+- [ ] T-1.30 ("Set my time zone to UTC" must NOT route to `get_time` — bare `\btime\b` pattern removed)
+- [ ] T-1.31 ("The battery in my car died" must NOT route to `get_battery` — bare `\bbattery\b` pattern removed)
+- [ ] T-1.32 ("I deleted my screenshot folder" must NOT route to `take_screenshot` — explicit capture verb required)
+- [ ] T-1.33 ("Raise the question" / "Turn up the heat" must NOT change system volume — verb requires audio context)
+- [ ] T-1.34 ("My computer's performance has dropped" must NOT route to `get_cpu_ram` — bare `\bmemory|performance\b` removed)
+- [ ] T-14d.20 ("Remember this: I prefer dark mode" → save_note tool runs AND content mirrors into `memory_items` so `semantic_recall` finds it next turn)
+- [ ] T-14d.21 ("I prefer X" then "I prefer Y" → both rows present in `facts` (keyed by slug), neither overwrites the other)
+- [ ] T-14d.22 ("What do you remember about me?" routes deterministically to `show_memories`, not `save_note` and not the LLM fallback)
+- [ ] T-14d.23 (with `memory.enabled: true`, after one turn the Mem0 queue has been drained — `_mem0_extractor._pending` is empty AND `mem0_client.get_all` shows at least one extracted fact)
+- [ ] T-14d.24 ("Remember this is important" must NOT extract "is important" as a memory — `EXPLICIT_MEMORY_PATTERN` requires anchor)
+- [ ] T-W.1 (Windows: `python main.py --text` boots without raising on any Linux-only import — `pw-cat`, `xdotool`, `wmctrl` all gated)
+- [ ] T-W.2 (Windows: "open calculator" launches `calc.exe`; "open notepad" launches `notepad.exe`; "open explorer" launches `explorer.exe`)
+- [ ] T-W.3 (Windows: `register_wake.py` drops `.bat` into `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`)
+- [ ] T-W.4 (Linux + Windows: `wake_porcupine.py` refuses to start when `FRIDAY_PORCUPINE_KEY` is empty and logs the reason)
+- [ ] T-W.5 (`setup.ps1 -SkipModels -SkipPlaywright` completes without downloading any model)
+- [ ] T-22.1 (`python main.py` boots the new Agent HUD without Qt or import errors)
+- [ ] T-22.2 (Theme toggle persists across restarts via `data/gui_state.json`)
+- [ ] T-22.5 (`python main.py --classic-hud` still boots the legacy `gui/hud.py` window)
 
----
+### Manual test cases for the 2026-05-14 hardening pass
+
+**Routing false-trigger guards (run in CLI mode):**
+
+```
+[T-1.30] you: set my time zone to UTC
+         expected: NOT get_time; should fall to LLM or clarification
+[T-1.31] you: the battery in my car died
+         expected: NOT get_battery; should fall to LLM chat
+[T-1.32] you: I deleted my screenshot folder by mistake
+         expected: NOT take_screenshot; should fall to LLM or search_file
+[T-1.33] you: raise the question with the team
+         expected: NOT set_volume; should fall to LLM
+[T-1.34] you: my computer's performance has dropped lately
+         expected: NOT get_cpu_ram; should fall to LLM chat
+```
+
+**Positive-path regression guards (must still work):**
+
+```
+[T-1.35] you: what time is it?           → get_time
+[T-1.36] you: today's date              → get_date
+[T-1.37] you: take a screenshot         → take_screenshot
+[T-1.38] you: turn up the volume        → set_volume direction=up
+[T-1.39] you: cpu usage                 → get_cpu_ram
+[T-1.40] you: battery status            → get_battery
+```
+
+**Memory layer cross-write (requires `memory.enabled: true`):**
+
+```
+[T-14d.20] you: remember this: I prefer Earl Grey tea
+           you (next turn): what do you remember about me?
+           expected: show_memories lists "I prefer Earl Grey tea"
+[T-14d.21] you: I prefer dark mode
+           you: I prefer concise replies
+           sql: SELECT key,value FROM facts WHERE namespace='profile'
+           expected: TWO rows, keys like `preference:dark_mode` and `preference:concise_replies`
+```
+
 
 ## 18. Session RAG — file context
 
@@ -2534,7 +2597,7 @@ If any of these fail, the build is **not shippable**:
 ### [T-19.7] Help phrase tightened — "help me understand X" → chat
 **You say:** `"Can you help me understand Bernoulli's principle?"`
 **Expect:** FRIDAY explains the principle; does NOT show the help menu.
-**Pass:** `source=chat`; no `show_help` in log.
+**Pass:** `source=chat`; no `show_capabilities` in log.
 
 ### [T-19.8] LaTeX math → spoken form in TTS
 **You say (with aerospace PDF loaded):** `"What is the Tsiolkovsky rocket equation?"`
@@ -2633,6 +2696,59 @@ If any of these fail, the build is **not shippable**:
 
 ---
 
+## 22. Agent HUD (new GUI)
+
+The new desktop GUI lives in `gui/agent_hud.py`. `main.py` launches it by default; pass `--classic-hud` to fall back to the legacy `gui/hud.py`.
+
+**[T-22.1] HUD boot**
+Steps:
+1. `python main.py` (no flags) → window opens maximized.
+2. Confirm layout: TopBar (FRIDAY brand left, voice-mode combo + theme button right), three body columns (Chat left, Center Stage with reactor middle, Event Trace right), FooterBar (CHAT/TOOL/VLM/STT/TTS status dots).
+3. Confirm the **particle reactor** is centered horizontally and vertically in the middle column, with the state caption "CORE · ONLINE / READY" directly above it and the input dock below.
+
+Expected: no Qt errors in console; particles animate continuously in the idle layered-orbital pattern; pulsing core glow.
+
+**[T-22.2] Theme toggle**
+Steps:
+1. Click the theme button (sun/moon) in the LeftRail.
+2. Close and re-open the app.
+
+Expected: theme switches between dark/light; choice persists in `data/gui_state.json` (`"theme": "light"` or `"dark"`).
+
+**[T-22.3] Event trace populates per turn**
+Steps:
+1. Type "what time is it" in the input bar, press Enter.
+
+Expected: a new turn card appears in the right pane with INTENT → TOOL → DONE steps (plus SPEECH if voice is on); footer shows duration in ms.
+
+**[T-22.4] Particle reactor reflects voice runtime state**
+Steps:
+1. Toggle mic via clicking the reactor itself or the `◉ MIC` pill in the input dock.
+2. Speak to trigger listening → processing → speaking.
+
+Expected: particles visibly change behavior — idle has gentle orbits; listening pulls particles inward; processing accelerates orbital speed and emits a burst of sparks; speaking emits an outward wave + the sweep arc appears. State line under the caption changes color (cyan → violet → magenta → green).
+
+**[T-22.6] Dark theme is true black**
+Steps:
+1. With dark theme active, sample the background pixel color (e.g. screenshot + color picker).
+
+Expected: background is `#000000` (no greys, no off-blacks); particle glow is the only light source.
+
+**[T-22.7] Light theme contrast**
+Steps:
+1. Toggle to light theme.
+2. Read every label, bubble, and state line.
+
+Expected: text is `#0a0c14` on `#f4f5f8` paper; accent is deep electric `#0042a8`; all labels remain readable; reactor still visible against the light field.
+
+**[T-22.5] Classic HUD fallback**
+Steps:
+1. `python main.py --classic-hud`.
+
+Expected: legacy HUD opens; no `ImportError`.
+
+---
+
 ## 21. Reporting a failure
 
 When a test fails:
@@ -2660,7 +2776,7 @@ When a test fails:
 | Tool | Section | Notes |
 |---|---|---|
 | `greet` | T-2.1 | greeter |
-| `show_help` | T-2.2 | greeter, dynamic catalog |
+| `show_capabilities` | T-2.2 | greeter, dynamic catalog — renamed from show_help (2026-05-14) |
 | `shutdown_assistant` | T-2.3 | system_control |
 | `resume_session` | T-2.6 | greeter, zero-latency session continuation |
 | `start_fresh_session` | T-2.7 | greeter, clear pending session |

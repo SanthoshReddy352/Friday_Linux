@@ -14,7 +14,7 @@ _SHUTDOWN_PHRASES = frozenset({
 
 INTERNAL_HELP_TOOL_NAMES = {
     "greet",
-    "show_help",
+    "show_capabilities",
     "confirm_yes",
     "confirm_no",
     "select_file_candidate",
@@ -161,8 +161,13 @@ class GreeterExtension(Extension):
 
         summary = facts.get("last_session_summary", "")
         context_store.store_fact("has_pending_session", "", namespace="system")
+        context_store.store_fact("last_session_summary", "", namespace="system")
 
         if summary:
+            # Store the resumed context so subsequent follow-ups ("answer it", "continue")
+            # have immediate access to what was discussed — avoids re-injecting into history.
+            context_store.store_fact("resumed_session_context", summary, namespace="system")
+
             lines = [l.strip() for l in summary.split("\n") if l.strip()]
             last_user = ""
             for line in reversed(lines):
@@ -192,6 +197,7 @@ class GreeterExtension(Extension):
             if facts.get("has_pending_session") == "true":
                 context_store.store_fact("has_pending_session", "", namespace="system")
                 context_store.store_fact("last_session_summary", "", namespace="system")
+            context_store.store_fact("resumed_session_context", "", namespace="system")
 
         fresh_phrases = [
             "Of course, sir. Fresh start — how can I help you today?",
@@ -202,8 +208,13 @@ class GreeterExtension(Extension):
         return random.choice(fresh_phrases)
 
     @capability(
-        name="show_help",
-        description="Show a list of things FRIDAY can do. Use when the user asks for help or what you can do.",
+        name="show_capabilities",
+        description=(
+            "List everything FRIDAY can do. Use ONLY when the user explicitly asks "
+            "'what can you do', 'show your capabilities', 'list your tools', "
+            "'show commands', or says a bare 'help' with nothing else. "
+            "Do NOT use for 'help me write X', 'help me fix Y', or any task request."
+        ),
     )
     def handle_help(self):
         registry = self.ctx.registry
@@ -281,6 +292,8 @@ class GreeterExtension(Extension):
                         context_store.store_fact("has_pending_session", "", namespace="system")
                         context_store.store_fact("last_session_summary", "", namespace="system")
                         context_store.store_fact("next_startup_greeting", "", namespace="system")
+                    # Always clear any resumed context from a previous session at startup
+                    context_store.store_fact("resumed_session_context", "", namespace="system")
             except Exception as e:
                 logger.error(f"Failed to fetch next startup greeting: {e}")
 

@@ -243,3 +243,4 @@ def test_resume_and_fresh_session_not_in_help():
 
     assert "resume_session" not in response
     assert "start_fresh_session" not in response
+    assert "show_capabilities" not in response

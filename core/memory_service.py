@@ -77,17 +77,32 @@ class MemoryService:
         user_text: str,
         assistant_text: str,
         trace_id: str = "",
+        store_turns: bool = False,
     ) -> None:
+        """Notify the memory pipeline that a turn has completed.
+
+        Two responsibilities:
+          1. Queue the (user, assistant) pair for async Mem0 fact extraction.
+          2. Optionally persist the turn rows to ContextStore. Off by default
+             because `app.emit_message` already calls `append_turn` on both
+             user and assistant emissions in the live runtime; passing
+             ``store_turns=True`` is only useful when calling this method
+             outside the normal emit path (e.g. batch ingestion / tests).
+        """
         if not session_id:
             return
-        if user_text:
-            self._store.append_turn(session_id, "user", user_text, source=trace_id or None)
-        if assistant_text:
-            self._store.append_turn(session_id, "assistant", assistant_text, source=trace_id or None)
+        if store_turns:
+            if user_text:
+                self._store.append_turn(session_id, "user", user_text, source=trace_id or None)
+            if assistant_text:
+                self._store.append_turn(session_id, "assistant", assistant_text, source=trace_id or None)
 
         # Queue Mem0 extraction (fires only after active_turns == 0)
         if self._extractor and user_text and assistant_text:
-            self._extractor.queue_turn(user_text, assistant_text, user_id="default")
+            try:
+                self._extractor.queue_turn(user_text, assistant_text, user_id="default")
+            except Exception as exc:
+                logger.debug("[mem0] queue_turn failed (non-fatal): %s", exc)
 
     def learn_fact(
         self,

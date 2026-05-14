@@ -28,7 +28,7 @@ from typing import Callable
 
 _DEFAULT_ALIASES: dict[str, set[str]] = {
     "greet": {"hello", "hi", "hey", "hey friday", "good morning", "good evening"},
-    "show_help": {"help", "what can you do", "show help", "show commands"},
+    "show_capabilities": {"what can you do", "show help", "show commands", "list capabilities"},
     "launch_app": {"open", "launch", "start"},
     "set_volume": {"volume up", "volume down", "mute", "increase volume", "decrease volume"},
     "take_screenshot": {"screenshot", "screen shot", "capture screen"},
@@ -78,7 +78,7 @@ _DEFAULT_ALIASES: dict[str, set[str]] = {
 
 _DEFAULT_CONTEXT_TERMS: dict[str, set[str]] = {
     "greet": {"greet", "greeting"},
-    "show_help": {"help", "commands", "abilities"},
+    "show_capabilities": {"commands", "abilities", "capabilities"},
     "launch_app": {"application", "app", "browser", "firefox", "chrome"},
     "set_volume": {"volume", "audio", "sound", "mute"},
     "take_screenshot": {"screenshot", "screen", "capture"},
@@ -109,20 +109,29 @@ _DEFAULT_CONTEXT_TERMS: dict[str, set[str]] = {
 
 _DEFAULT_PATTERNS: dict[str, list[str]] = {
     "greet": [r"\b(hi|hello|hey|good morning|good afternoon|good evening)\b"],
-    "show_help": [r"\bhelp\b", r"what can you do", r"show (?:me )?(?:the )?commands"],
+    "show_capabilities": [r"what can you do", r"show (?:me )?(?:your\s+)?(?:commands|capabilities|abilities)", r"list (?:your\s+)?(?:commands|capabilities)"],
     "launch_app": [r"\b(?:open|launch|start|bring up)\s+(?!file\b)[a-z0-9][\w\-\s,]*"],
     "set_volume": [r"\b(?:volume|mute|unmute)\b", r"\b(?:increase|decrease|turn)\s+volume\b"],
-    "take_screenshot": [r"\b(?:take|capture).*(?:screenshot|screen shot)\b", r"\bscreenshot\b"],
+    "take_screenshot": [
+        r"\b(?:take|capture|grab|snap|get|make)\s+(?:a\s+|another\s+|the\s+)?(?:screenshot|screen\s*shot|screen\s+capture)\b",
+        r"^(?:please\s+)?screen\s*shot(?:\s+please)?[.!?]?$",
+    ],
     "search_file": [r"\b(?:find|search|locate)\s+(?:for\s+)?(?:file\s+)?\S+"],
     "open_file": [r"\bopen\s+(?:the\s+)?file\b"],
     "get_system_status": [r"\b(?:system status|system health)\b"],
-    "get_battery": [r"\bbattery\b"],
-    "get_cpu_ram": [r"\b(?:cpu|ram|memory usage)\b"],
+    "get_battery": [
+        r"\b(?:battery\s+(?:status|level|percent(?:age)?|charge|life|remaining)|"
+        r"(?:what(?:'s| is)\s+(?:my\s+|the\s+)?battery)|how('s|\s+is|\s+much)\s+(?:my\s+|the\s+)?battery)\b",
+    ],
+    "get_cpu_ram": [
+        r"\b(?:cpu\s+(?:usage|load|status)|ram\s+(?:usage|status|free)|memory\s+(?:usage|load|status|free))\b",
+        r"\bsystem\s+(?:usage|load|performance)\b",
+    ],
     "set_reminder": [r"\bremind me\b", r"\bset (?:a )?reminder\b"],
     "save_note": [r"\b(?:save note|note down|remember this|remember that)\b"],
     "read_notes": [r"\b(?:read|show|list)\s+(?:my\s+)?notes\b"],
-    "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time)\b", r"\btime\b"],
-    "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date)\b", r"\bdate\b"],
+    "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time)\b"],
+    "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date)\b"],
     "manage_file": [
         r"\b(?:create|make)\s+(?:a\s+)?file\b",
         r"\b(?:write|save|append|add)\s+(?:it|that|this|the answer|the response)\s+(?:to|into|in)\s+\S+",

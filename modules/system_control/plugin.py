@@ -369,10 +369,11 @@ class SystemControlPlugin(FridayPlugin):
                     self.app.context_store.store_fact("has_pending_session", "", namespace="system")
                     self.app.context_store.store_fact("last_session_summary", "", namespace="system")
                     if summary:
-                        # Replay the previous session turns into live history so
-                        # follow-ups like "answer it" have immediate context.
-                        _inject_session_into_context(
-                            getattr(self.app, "assistant_context", None), summary
+                        # Store the resumed context as a fact so build_chat_messages
+                        # can inject it into every subsequent query without touching
+                        # the live history (which would break message alternation).
+                        self.app.context_store.store_fact(
+                            "resumed_session_context", summary, namespace="system"
                         )
                         lines = [l.strip() for l in summary.split("\n") if l.strip()]
                         for line in reversed(lines):
@@ -396,6 +397,7 @@ class SystemControlPlugin(FridayPlugin):
                 if facts.get("has_pending_session") == "true":
                     self.app.context_store.store_fact("has_pending_session", "", namespace="system")
                     self.app.context_store.store_fact("last_session_summary", "", namespace="system")
+                    self.app.context_store.store_fact("resumed_session_context", "", namespace="system")
                     return random.choice([
                         "Of course, sir. Fresh start — how can I help you today?",
                         "Sure thing, sir. New session. What can I do for you?",

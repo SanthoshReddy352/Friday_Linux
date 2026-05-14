@@ -296,3 +296,69 @@ fixtures:
     expects:
       calls:
         - tool: llm_chat
+
+  # --- 2026-05-14 hardening: false-trigger guards ------------------------
+  - id: timezone_not_get_time
+    input: "set my time zone to UTC"
+    notes: "bare time keyword removed — must not hijack into get_time"
+    expects:
+      calls:
+        - tool: llm_chat
+
+  - id: car_battery_not_get_battery
+    input: "the battery in my car died this morning"
+    notes: "bare battery keyword removed — must not route to get_battery"
+    expects:
+      calls:
+        - tool: llm_chat
+
+  - id: deleted_screenshot_folder_not_take_screenshot
+    input: "I deleted my screenshot folder by mistake can you find it"
+    notes: "_parse_screenshot requires capture verb. The 'find it' framing
+            legitimately routes to search_file — the key invariant is that
+            take_screenshot must NOT fire."
+    expects:
+      calls:
+        - tool: search_file
+
+  - id: raise_question_not_set_volume
+    input: "I want to raise the question with the team"
+    notes: "raise verb only fires set_volume when an audio term co-occurs"
+    expects:
+      calls:
+        - tool: llm_chat
+
+  - id: performance_dropped_not_get_cpu_ram
+    input: "my computer's performance has dropped recently"
+    notes: "bare performance keyword removed from get_cpu_ram triggers"
+    expects:
+      calls:
+        - tool: llm_chat
+
+  - id: positive_battery_status
+    input: "what's my battery status"
+    notes: "explicit framing must still route to get_battery"
+    expects:
+      calls:
+        - tool: get_battery
+
+  - id: positive_cpu_usage
+    input: "show me cpu usage"
+    notes: "explicit usage framing must still route to get_cpu_ram"
+    expects:
+      calls:
+        - tool: get_cpu_ram
+
+  - id: positive_take_screenshot
+    input: "take a screenshot"
+    notes: "explicit capture verb still fires take_screenshot"
+    expects:
+      calls:
+        - tool: take_screenshot
+
+  - id: positive_what_time_is_it
+    input: "what time is it"
+    notes: "explicit time query still routes to get_time"
+    expects:
+      calls:
+        - tool: get_time

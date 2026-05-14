@@ -550,10 +550,28 @@ class TaskManagerPlugin(FridayPlugin):
             conn.commit()
             conn.close()
             logger.info(f"[TaskManager] Note saved: '{content[:50]}'")
-            return f"Note saved: \"{content}\""
         except Exception as e:
             logger.error(f"[TaskManager] Failed to save note: {e}")
             return "I couldn't save that note. Please try again."
+
+        # Cross-write to the memory layer so the note is queryable through the
+        # same recall pipeline as other facts. Without this, notes live in a
+        # separate SQLite table that semantic_recall / Mem0 never see.
+        try:
+            session_id = getattr(self.app, "session_id", None)
+            memory = getattr(self.app, "memory_service", None) or getattr(self.app, "context_store", None)
+            if session_id and memory and hasattr(memory, "store_memory_item"):
+                memory.store_memory_item(
+                    session_id=session_id,
+                    content=content,
+                    memory_type="episodic",
+                    sensitivity="explicit_user",
+                    metadata={"role": "user", "source": "save_note"},
+                )
+        except Exception as exc:
+            logger.debug("[TaskManager] note->memory mirror failed (non-fatal): %s", exc)
+
+        return f"Note saved: \"{content}\""
 
     def handle_read_notes(self, text, args):
         try:

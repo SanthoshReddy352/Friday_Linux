@@ -40,10 +40,13 @@ class AssistantContext:
         self.context_store = None
         self.session_id = None
         self.session_rag = None
+        self.memory_service = None
 
-    def bind_context_store(self, context_store, session_id):
+    def bind_context_store(self, context_store, session_id, memory_service=None):
         self.context_store = context_store
         self.session_id = session_id
+        if memory_service is not None:
+            self.memory_service = memory_service
 
     def record_message(self, role, text, source=None):
         if not text:
@@ -165,11 +168,24 @@ class AssistantContext:
         session_summary = ""
         workflow_summary = ""
         semantic_recall = []
+        user_facts = ""
         if self.context_store and self.session_id:
             workflow_summary = self.context_store.get_workflow_summary(self.session_id)
             if not is_short:
                 session_summary = self.context_store.summarize_session(self.session_id, limit=4)
                 semantic_recall = self.context_store.semantic_recall(query, self.session_id, limit=2)
+            # Surface durable user facts (Mem0 / curated profile facts) so the
+            # chat model can answer "what do you remember about me?" without
+            # routing to a tool. Best-effort — falls back silently on any error.
+            try:
+                memory_service = getattr(self, "memory_service", None)
+                if memory_service is not None:
+                    bundle = memory_service.build_context_bundle(self.session_id, query) or {}
+                    facts = bundle.get("user_facts")
+                    if facts:
+                        user_facts = str(facts).strip()
+            except Exception:
+                user_facts = ""
 
         persona = (
             "You are FRIDAY, a personal AI assistant. "
@@ -182,10 +198,12 @@ class AssistantContext:
             rag_context = self.session_rag.get_context_block(query)
 
         last_topic = ""
+        resumed_context = ""
         if self.context_store:
             try:
                 facts = self.context_store.get_facts_by_namespace("system")
                 last_topic = next((f["value"] for f in facts if f["key"] == "last_session_topic"), "")
+                resumed_context = next((f["value"] for f in facts if f["key"] == "resumed_session_context"), "")
             except Exception:
                 pass
 
@@ -202,6 +220,16 @@ class AssistantContext:
             if last_topic:
                 guidance += f"Previous session topic: {last_topic}\n"
             guidance += f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"
+            if user_facts:
+                guidance += f"\nWhat you know about the user:\n{user_facts}"
+
+        if resumed_context:
+            guidance += (
+                "\n\nThe user just resumed from a previous session. "
+                "Use the context below to answer follow-up questions like 'answer it', "
+                "'continue', 'fix it', or 'go on':\n"
+                f"{resumed_context}"
+            )
 
         if rag_context:
             guidance = f"{guidance}\n\n{rag_context}"

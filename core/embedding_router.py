@@ -50,12 +50,28 @@ DISPATCH_THRESHOLD = 0.62
 _DEFAULT_BLOCKLIST = frozenset({
     "llm_chat",                # the chat fallback owns the no-tool case
     "create_calendar_event",   # consent + timestamp parsing
+    "move_calendar_event",     # event identifier + new time
+    "cancel_calendar_event",   # event identifier
     "set_reminder",            # time parsing
     "save_note",               # raw content capture
     "manage_file",             # multi-mode (create/write/append) — needs LLM
     "write_file",
     "set_voice_mode",          # mode arg required
     "set_volume",              # value arg required
+    # The following accept structured args (app name, query, url …). When the
+    # embedding router dispatches with empty args, their handlers either fail
+    # or pick a poor default. Force them to go through the intent recognizer
+    # or the LLM router which can produce the args.
+    "launch_app",
+    "open_browser_url",
+    "play_youtube",
+    "play_youtube_music",
+    "search_google",
+    "research_topic",
+    "delete_memory",
+    "select_file_candidate",
+    "browser_media_control",
+    "query_document",
 })
 
 

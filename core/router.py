@@ -559,8 +559,15 @@ class CommandRouter:
         return None
 
     def _keyword_fallback(self, text, text_lower):
-        """Keyword + fuzzy matching fallback."""
-        best_route = self._find_best_route(text)
+        """Keyword + fuzzy matching fallback.
+
+        The router used to call _find_best_route with min_score=20, low
+        enough that a single ambiguous word like "battery" could elect a
+        tool. We keep the default low to accept multi-word aliases (40+),
+        but make sure single-word aliases now only score 15 so they can't
+        win on their own (see _score_route).
+        """
+        best_route = self._find_best_route(text, min_score=30)
         if best_route:
             self._set_routing_decision("deterministic", tool_name=best_route["spec"]["name"], args={})
             result = self._invoke_route(best_route, text, {})
@@ -919,6 +926,15 @@ class CommandRouter:
         return best_route if best_score >= min_score else None
 
     def _score_route(self, route, text_lower):
+        """Score how well a route matches *text_lower*.
+
+        Tuned so that single-word aliases (e.g. "time", "battery") only
+        contribute a small bias rather than enough to fast-path on their
+        own. False triggers like "set my time zone" or "battery in my car"
+        used to fire here because a bare word-boundary hit scored 41 —
+        above the keyword-fallback floor. Now single-word aliases yield
+        15 points; multi-word aliases ramp up linearly.
+        """
         score = 0
 
         if text_lower in route["aliases"]:
@@ -933,8 +949,18 @@ class CommandRouter:
         for alias in route["aliases"]:
             if alias == text_lower:
                 score = max(score, 120)
-            elif len(alias) > 2 and re.search(rf"\b{re.escape(alias)}\b", text_lower):
-                score = max(score, 40 + len(alias.split()))
+                continue
+            if len(alias) <= 2:
+                continue
+            if not re.search(rf"\b{re.escape(alias)}\b", text_lower):
+                continue
+            alias_words = alias.split()
+            if len(alias_words) == 1:
+                # Single-word aliases are too ambiguous to fast-path on
+                # their own. Give a small bias only.
+                score = max(score, 15)
+            else:
+                score = max(score, 40 + len(alias_words))
 
         for term in route["context_terms"]:
             if len(term) > 2 and re.search(rf"\b{re.escape(term)}\b", text_lower):
@@ -964,20 +990,22 @@ class CommandRouter:
     def _default_aliases_for(self, tool_name):
         defaults = {
             "greet": {"hello", "hi", "hey", "hey friday", "good morning", "good evening"},
-            "show_help": {"help", "what can you do", "show help", "show commands"},
+            "show_capabilities": {"what can you do", "show help", "show commands", "list capabilities"},
             "launch_app": {"open", "launch", "start"},
             "set_volume": {"volume up", "volume down", "mute", "increase volume", "decrease volume"},
-            "take_screenshot": {"screenshot", "screen shot", "capture screen"},
+            "take_screenshot": {"screen shot", "capture screen"},
             "search_file": {"find file", "search file", "locate file"},
             "open_file": {"open file"},
             "get_system_status": {"system status", "system health"},
-            "get_battery": {"battery", "battery status"},
-            "get_cpu_ram": {"cpu", "ram", "memory usage"},
+            # Aliases used to include a bare "battery" → high score on any
+            # mention. Now require a status framing in the alias too.
+            "get_battery": {"battery status", "battery level", "battery percent"},
+            "get_cpu_ram": {"cpu usage", "ram usage", "memory usage"},
             "set_reminder": {"remind me", "set reminder"},
             "save_note": {"save note", "note down", "remember this"},
             "read_notes": {"read notes", "show notes", "my notes"},
-            "get_time": {"time", "what time is it"},
-            "get_date": {"date", "today's date", "what day is it"},
+            "get_time": {"what time is it", "current time", "tell me the time"},
+            "get_date": {"today's date", "what day is it", "current date", "tell me the date"},
             "manage_file": {"create file", "make file", "new file", "write it to", "save it to", "write that to", "save that to"},
             "enable_voice": {"enable voice", "start listening", "turn on mic", "turn on microphone"},
             "disable_voice": {"disable voice", "stop listening", "turn off mic", "turn off microphone"},
@@ -990,7 +1018,7 @@ class CommandRouter:
     def _default_context_terms_for(self, tool_name):
         defaults = {
             "greet": {"greet", "greeting"},
-            "show_help": {"help", "commands", "abilities"},
+            "show_capabilities": {"commands", "abilities", "capabilities"},
             "launch_app": {"application", "app", "browser", "firefox", "chrome", "calculator"},
             "set_volume": {"volume", "audio", "sound", "mute"},
             "take_screenshot": {"screenshot", "screen", "capture"},
@@ -1015,20 +1043,42 @@ class CommandRouter:
     def _default_patterns_for(self, tool_name):
         defaults = {
             "greet": [r"\b(hi|hello|hey|good morning|good afternoon|good evening)\b"],
-            "show_help": [r"\bhelp\b", r"what can you do", r"show (?:me )?(?:the )?commands"],
-            "launch_app": [r"\b(?:open|launch|start|bring up)\s+(?!file\b)[a-z0-9][\w\-\s,]*(?:\band\b\s*[a-z0-9][\w\-\s]*)*"],
+            "show_capabilities": [r"what can you do", r"show (?:me )?(?:your\s+)?(?:commands|capabilities|abilities)", r"list (?:your\s+)?(?:commands|capabilities)"],
+            # Generic "open X" used to fast-path to launch_app even when X was not an
+            # app name (e.g. "open the discussion"). We keep the loose pattern here
+            # but score it lower; the IntentRecognizer's registry-aware extractor
+            # remains the authoritative path. Without an `app_names` resolution it
+            # should not auto-execute.
+            "launch_app": [r"\b(?:open|launch|start|bring up)\s+(?!file\b|folder\b|the\s+folder\b)[a-z0-9][\w\-\s,]*(?:\band\b\s*[a-z0-9][\w\-\s]*)*"],
             "set_volume": [r"\b(?:volume|mute|unmute)\b", r"\b(?:increase|decrease|turn)\s+volume\b"],
-            "take_screenshot": [r"\b(?:take|capture).*(?:screenshot|screen shot)\b", r"\bscreenshot\b"],
+            # Both forms require an explicit capture verb. Previously the second
+            # alternative was bare `\bscreenshot\b` which fired on "I deleted my
+            # screenshot folder" — pure mention.
+            "take_screenshot": [
+                r"\b(?:take|capture|grab|snap|get|make)\s+(?:a\s+|another\s+|the\s+)?(?:screenshot|screen\s*shot|screen\s+capture)\b",
+                r"^(?:please\s+)?screen\s*shot(?:\s+please)?[.!?]?$",
+            ],
             "search_file": [r"\b(?:find|search|locate)\s+(?:for\s+)?(?:file\s+)?\S+"],
             "open_file": [r"\bopen\s+(?:the\s+)?file\b"],
             "get_system_status": [r"\b(?:system status|system health)\b"],
-            "get_battery": [r"\bbattery\b"],
-            "get_cpu_ram": [r"\b(?:cpu|ram|memory usage)\b"],
+            # `\bbattery\b` alone overmatches ("the battery in my car"); require an
+            # explicit status verb or possessive context.
+            "get_battery": [
+                r"\b(?:battery\s+(?:status|level|percent(?:age)?|charge|life|remaining)|"
+                r"(?:what(?:'s| is)\s+(?:my\s+|the\s+)?battery)|how('s|\s+is)\s+(?:my\s+|the\s+)?battery)\b",
+            ],
+            # `memory` alone overmatches; require explicit usage/load language.
+            "get_cpu_ram": [
+                r"\b(?:cpu\s+(?:usage|load|status)|ram\s+(?:usage|status|free)|memory\s+(?:usage|load|status|free))\b",
+                r"\bsystem\s+(?:usage|load|performance)\b",
+            ],
             "set_reminder": [r"\bremind me\b", r"\bset (?:a )?reminder\b"],
             "save_note": [r"\b(?:save note|note down|remember this|remember that)\b"],
             "read_notes": [r"\b(?:read|show|list)\s+(?:my\s+)?notes\b"],
-            "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b", r"\btime\b"],
-            "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b", r"\bdate\b"],
+            # Anchored time/date patterns only — bare `\btime\b` / `\bdate\b` overmatch on
+            # phrases like "set my time zone", "I have a date tonight", "time to leave".
+            "get_time": [r"\b(?:what(?:'s| is)? the time|what time is it|current time|tell me(?: the)? time)\b"],
+            "get_date": [r"\b(?:today(?:'s)? date|what day is it|current date|tell me(?: the)? date)\b"],
             "manage_file": [
                 r"\b(?:create|make)\s+(?:a\s+)?file\b",
                 r"\b(?:write|save|append|add)\s+(?:it|that|this|the answer|the response)\s+(?:to|into|in)\s+\S+",

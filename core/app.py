@@ -53,6 +53,9 @@ class FridayApp:
         self.assistant_context = AssistantContext()
         self.context_store = ContextStore()
         self.session_id = self.context_store.start_session({"entrypoint": "FridayApp"})
+        # memory_service is created further below; bind now without it and
+        # rebind once it exists so assistant_context can surface Mem0 facts
+        # in chat prompts.
         self.assistant_context.bind_context_store(self.context_store, self.session_id)
         self.session_rag = SessionRAG()
         self.assistant_context.session_rag = self.session_rag
@@ -185,6 +188,12 @@ class FridayApp:
             mem0_client=self._mem0_client,
             extractor=self._mem0_extractor,
         )
+        # Now that memory_service exists, give assistant_context a handle so
+        # build_chat_messages can inject user_facts into the chat prompt.
+        try:
+            self.assistant_context.memory_service = self.memory_service
+        except Exception:
+            pass
 
     def _start_mem0_server(self) -> bool:
         """Boot llama.cpp extraction server if memory.enabled and auto_start are set."""

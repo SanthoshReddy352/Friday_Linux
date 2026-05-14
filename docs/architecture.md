@@ -1,7 +1,123 @@
 # FRIDAY Voice Assistant — Architectural Reference
 
-> **Version:** 0.2 · **Date:** 2026-05-02 · **Status:** Production (v1 + v2 paths live)
+> **Version:** 0.3 · **Date:** 2026-05-14 · **Status:** Production (v1 + v2 paths live, hardened)
 >
+> See [§0. Latest Refresh](#0-latest-refresh-2026-05-14) below for the production-hardening
+> pass that wired up the memory pipeline, removed routing false-triggers, and brought
+> first-class Windows support. The body of the document (§1 – §39) continues to describe
+> the v1 + v2 architecture as it was on 2026-05-02; numbered annotations there are still
+> correct for behaviour not touched by the 2026-05-14 refresh.
+>
+
+## 0. Latest Refresh (2026-05-14)
+
+### 0.1 What changed
+
+| Area | Issue addressed | Fix |
+|---|---|---|
+| Routing | Bare `\btime\b`, `\bdate\b`, `\bbattery\b`, `\bmemory\b` regexes in `core/router.py` + `core/reasoning/route_scorer.py` matched any utterance containing those words. "Set my time zone" hijacked to `get_time`; "battery in my car" hijacked to `get_battery`. | Patterns now require an explicit status framing (`battery status`, `cpu usage`, `today's date` …). The keyword-only patterns were deleted. |
+| Routing | `_parse_screenshot` triggered on ANY mention of the word "screenshot" via `or "screenshot" in clause_lower`. | Now requires an explicit capture verb (`take`, `capture`, `grab`, `snap`) or a bare imperative. |
+| Routing | `_parse_volume` matched `\b(?:increase|raise|louder|turn up)\b` standalone, so "raise the question" / "turn up the heat" changed system volume. | Verb match now requires a co-occurring `volume` / `sound` / `audio` term, except for fully-volume-anchored phrases (`volume up`, `turn down volume`). |
+| Routing | `_parse_system` lit on lone `memory`, `performance`, `usage`. "Lost my memory" triggered `get_cpu_ram`. | Requires explicit `cpu/ram/memory + status|usage|load` framing. |
+| Routing | EmbeddingRouter dispatched `launch_app`, `play_youtube`, `search_google` etc. with **empty args** when a fuzzy match landed close to threshold. | Blocklist expanded to all tools that need structured args. Embedding routing now only fires for tools that can operate argument-free. |
+| Memory | `MemoryService.record_turn()` was dead code — never invoked. The `TurnGatedMemoryExtractor` queue never received any turns; Mem0 silently extracted nothing even with `memory.enabled: true`. | `MemoryCuratorAgent.curate()` now forwards every completed turn to `MemoryService.record_turn()` which feeds the extractor. The `store_turns` flag avoids double-writing turns to `ContextStore` (which is already done by `app.emit_message`). |
+| Memory | `MemoryService.build_context_bundle()` injected Mem0 facts but was never called. `TurnOrchestrator` used the bare `MemoryBroker.build_context_bundle()`. | `TurnOrchestrator._build_context_bundle()` now prefers `MemoryService` and falls back to `MemoryBroker`. `AssistantContext.build_chat_messages()` reads `user_facts` from the bundle and appends "What you know about the user" to the system prompt. |
+| Memory | `MemoryCuratorAgent` stored "I prefer X" / "I like X" under a single fixed key with `ON CONFLICT DO UPDATE` — every new preference overwrote the previous one. | Preference/likes facts are now keyed by `<kind>:<slug-of-value>`, so multiple coexist. |
+| Memory | `save_note` wrote to a private SQLite `notes` table that no other recall path queried. "Remember this: I prefer Earl Grey" was invisible to future turns. | `handle_save_note` now also mirrors content into `memory_items` via `store_memory_item`, surfacing it through `semantic_recall` and (when enabled) Mem0. |
+| Memory | `EXPLICIT_MEMORY_PATTERN` greedily captured everything after the word "remember", so "remember this is important" extracted "is important" as a memory. | Regex now requires an explicit anchor (`:`, `-`, `that …`). Garbage extractions stopped. |
+| Memory | Memory-recall queries ("what do you remember about me?") fell through to the LLM with no deterministic route. | New `_parse_memory_query` parser in `IntentRecognizer` routes recall queries to `show_memories` and forget queries to `delete_memory`. Inserted **before** `_parse_notes` so "remember" doesn't fall through to `save_note`. |
+| Windows | `modules/voice_io/wake_porcupine.py` hardcoded `.venv/bin/python3` paths and a `ps -eo` process check. | Now selects `.venv\Scripts\python.exe` on Windows, uses `tasklist` for process discovery, applies `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` for Popen, and auto-prefers an `_en_windows_` keyword file when present. The Porcupine access key is now read from `FRIDAY_PORCUPINE_KEY`. |
+| Windows | `modules/voice_io/register_wake.py` was Linux-only (systemd). | Rewritten to dispatch by `platform.system()`: systemd unit on Linux, `.bat` shortcut in the user Startup folder on Windows, `~/Library/LaunchAgents` plist on macOS. |
+| Windows | `APP_PREFERENCES` in `modules/system_control/app_launcher.py` listed only Linux commands. "Open calculator" on Windows tried `gnome-calculator`. | Each entry now lists both Linux and Windows command candidates (e.g. `calc.exe`, `explorer.exe`, `msedge`, `notepad.exe`). The first one resolvable via `shutil.which` wins. |
+| Windows | `_launch_single_application` on Windows used `subprocess.Popen("start ...", shell=True)`. | Now uses `os.startfile` when possible, falling back to `Popen` with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and `.exe` suffix fallback for resolved binaries. |
+| Setup | `setup.sh` had inconsistent error handling, no idempotency markers, and missing optional packages. | Rewritten: friendly error printing, idempotent re-runs, optional autostart prompt, and a broader optional-package list (`wmctrl`, `xdotool`, `grim`, `spectacle`, `scrot`, `maim`). |
+| Setup | `setup.ps1` was a thin port without Piper-for-Windows, parameters, or progress UI. | Rewritten: takes `-SkipModels`, `-SkipPlaywright`, `-Force`. Downloads the Windows Piper binary, suppresses `Invoke-WebRequest` progress UI (which made large model downloads 10x slower), prompts for autostart. |
+| Setup | Single setup guide assumed Linux. | Linux guide → `SETUP_GUIDE.md` (refreshed). New `SETUP_GUIDE_WINDOWS.md` covers PowerShell policy, env var scope, build tools, long-path issues, and audio device discovery. |
+
+### 0.2 Current turn pipeline (post-refresh)
+
+```
+TurnManager.handle_turn(text)
+   │
+   ├─ memory_service.get_session_state / save_session_state
+   │
+   ├─ if config.routing.orchestrator == "v2" → TurnOrchestrator.handle()
+   │        ├─ _build_context_bundle()
+   │        │     └─ memory_service.build_context_bundle()
+   │        │            ├─ memory_broker.build_context_bundle()
+   │        │            │     ├─ persona_manager.get_active_persona()
+   │        │            │     ├─ context_store.summarize_session()
+   │        │            │     ├─ context_store.get_workflow_summary()
+   │        │            │     ├─ context_store.semantic_recall()  ← Chroma
+   │        │            │     ├─ context_store.recent_memory_items()
+   │        │            │     └─ procedural.top_capabilities()
+   │        │            └─ mem0_client.search()                   ← Mem0 (NEW: actually queried)
+   │        ├─ check_pending_confirmation()
+   │        ├─ workflow.try_resume()
+   │        ├─ intent.classify()  ← IntentRecognizer + RouteScorer
+   │        ├─ planner.plan()
+   │        ├─ executor.execute()
+   │        └─ _curate_memory()
+   │              └─ MemoryCuratorAgent.curate()
+   │                    ├─ store_fact (profile namespace)
+   │                    ├─ store_memory_item (episodic)
+   │                    └─ memory_service.record_turn()    ← NEW: feeds Mem0 extractor
+   │                            └─ extractor.queue_turn()
+   │
+   └─ else (v1) → router.process_text() — unchanged
+```
+
+### 0.3 Memory layer (post-refresh)
+
+Three storage tiers, now consistently fed by **one** writer (`MemoryCuratorAgent`):
+
+| Tier | Backing store | Written by | Read by |
+|---|---|---|---|
+| **Episodic** | `ContextStore.turns` SQLite | `app.emit_message` per user/assistant message | `summarize_session`, `recent_messages` |
+| **Semantic — Chroma** | `ContextStore._upsert_memory_item` → Chroma `friday_memory_items` | `store_fact`, `store_memory_item` (curator), `save_note` (mirror) | `semantic_recall` |
+| **Semantic — Mem0** | Mem0 client (Chroma collection `friday_mem0`) | `TurnGatedMemoryExtractor.queue_turn` ← `record_turn` (NEW) | `memory_service.build_context_bundle.user_facts` (NEW) |
+| **Procedural** | `ContextStore.capability_outcomes` | `MemoryBroker.record_capability_outcome` via `tool_execution` | `ProceduralMemory.top_capabilities` |
+| **Profile facts** | `ContextStore.facts` (now slug-keyed) | `MemoryCuratorAgent.curate` | `assistant_context.build_chat_messages` (`last_topic`, `resumed_session_context`) |
+
+The old `MemoryBroker.curate()` (regex-based, never called in v2) is unchanged
+and remains available for v1-style callers.
+
+### 0.4 Cross-platform model
+
+| Subsystem | Linux | Windows | macOS |
+|---|---|---|---|
+| Process spawning | `start_new_session=True` | `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` | `start_new_session=True` |
+| App launching | `shutil.which(cmd)` + Popen | `os.startfile`, then Popen w/ creation flags | `open -a` |
+| File open | `xdg-open` | `os.startfile` | `open` |
+| Wake autostart | systemd `--user` unit | `.bat` in user Startup folder | LaunchAgent plist |
+| TTS playback | `pw-cat` → `aplay` → sounddevice | sounddevice (WASAPI) | sounddevice |
+| Screenshot | mutter → portal → grim → spectacle → maim → scrot → pyautogui | pyautogui | pyautogui |
+| Subprocess text | `encoding="utf-8", errors="replace"` everywhere | same | same |
+| Signal handlers | SIGINT + SIGTERM | SIGINT only (SIGTERM unavailable) | SIGINT + SIGTERM |
+
+The Porcupine wake-word access key is now read from
+`FRIDAY_PORCUPINE_KEY` rather than hardcoded — required on both OSes.
+
+### 0.5 Known failure modes still open
+
+- **Embedding router cold-start latency.** First query after boot takes
+  ~700 ms because `sentence-transformers/all-MiniLM-L6-v2` lazy-loads.
+  Mitigation: pre-warm by hitting the router with a no-op query at boot,
+  or set `FRIDAY_DISABLE_EMBED_ROUTER=1` to disable it entirely.
+- **Mem0 extraction server cold-start (~3 s)** when `memory.enabled: true`
+  and `extraction_server.auto_start: true`. The first turn after boot
+  may have an empty `user_facts`.
+- **Multi-action plans on Windows.** "Open Chrome and play music" works,
+  but window positioning ("focus the Chrome window") relies on `wmctrl`
+  which has no Windows shim. Falls back to "launch only", no error.
+- **macOS untested.** The setup script does not ship a `setup.sh`
+  variant for Darwin — `register_wake.py` and `register_autostart.py`
+  detect macOS and install LaunchAgents, but the rest of the pipeline
+  has not been smoke-tested on a Mac.
+
+---
+
+
 > This document is the authoritative architectural reference for the FRIDAY voice assistant
 > project located at `/home/tricky/Friday_Linux`. Every Python file in the project is described.
 > All diagrams use Mermaid syntax and can be rendered by any Mermaid-aware renderer.
