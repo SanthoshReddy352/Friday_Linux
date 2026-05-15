@@ -1,18 +1,19 @@
+import json
+import logging
 import math
+import os
 import random
 import sys
 import time
-import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape as html_escape
 
-from PyQt6.QtCore import QDate, QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
-    QCalendarWidget,
     QComboBox,
-    QDateTimeEdit,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -33,27 +35,22 @@ from modules.voice_io.audio_devices import list_audio_input_devices
 
 logger = logging.getLogger(__name__)
 
-HUD_TEXT_MAX_CHARS = 420   # kept for legacy callers
-HUD_TEXT_MAX_LINES = 8     # kept for legacy callers
-_EVENT_STREAM_MAX_LINES = 25
+HUD_TEXT_MAX_CHARS = 420
+HUD_TEXT_MAX_LINES = 8
+_EVENT_STREAM_MAX_LINES = 60
 NELLORE_LAT = 14.4426
 NELLORE_LON = 79.9865
 NELLORE_TZ = "Asia/Kolkata"
 NELLORE_LABEL = "Nellore, AP, India"
 
-BG = "#0d0d0d"
-PANEL_BG = "rgba(28, 28, 30, 240)"
-PANEL_BORDER = "rgba(255, 255, 255, 25)"
-TEXT = "#ffffff"
-TEXT_DIM = "#8e8e93"
-CYAN = "#64d2ff"
-BLUE = "#0a84ff"
-GREEN = "#32d74b"
-AMBER = "#ffd60a"
-RED = "#ff453a"
-PURPLE = "#bf5af2"
-MAGENTA = "#ff375f"
-MUTED = "#636366"
+_THEME_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "gui_state.json"
+)
+
+
+# ---------------------------------------------------------------------------
+# Pure formatter helpers (used by tests/test_hud.py — keep stable)
+# ---------------------------------------------------------------------------
 
 
 def format_hud_message(role, text, max_chars=HUD_TEXT_MAX_CHARS, max_lines=HUD_TEXT_MAX_LINES):
@@ -173,41 +170,303 @@ def format_calendar_event_item(event):
     return f"{when}  {title}"
 
 
-def panel_style(border=PANEL_BORDER):
-    return (
-        f"background-color: {PANEL_BG};"
-        f"border: 1px solid {border};"
-        "border-radius: 12px;"
+# ---------------------------------------------------------------------------
+# Theme system
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Theme:
+    name: str
+    bg: str
+    surface: str
+    surface_alt: str
+    panel: str
+    panel_border: str
+    text: str
+    text_dim: str
+    text_muted: str
+    accent: str
+    accent_soft: str
+    user_bubble: str
+    user_bubble_text: str
+    assistant_bubble: str
+    assistant_bubble_text: str
+    system_bubble: str
+    success: str
+    warning: str
+    danger: str
+    info: str
+    purple: str
+    magenta: str
+    badge_bg: str
+    scroll_track: str
+    scroll_handle: str
+
+
+def _theme_dark() -> Theme:
+    return Theme(
+        name="dark",
+        bg="#0b0d12",
+        surface="#13161e",
+        surface_alt="#1a1e2a",
+        panel="rgba(22, 25, 33, 235)",
+        panel_border="rgba(120, 140, 200, 45)",
+        text="#eef1f7",
+        text_dim="#9aa3b8",
+        text_muted="#6b7384",
+        accent="#7aa2ff",
+        accent_soft="rgba(122, 162, 255, 55)",
+        user_bubble="rgba(122, 162, 255, 60)",
+        user_bubble_text="#dbe5ff",
+        assistant_bubble="rgba(72, 220, 176, 30)",
+        assistant_bubble_text="#cdf6e6",
+        system_bubble="rgba(255, 255, 255, 12)",
+        success="#48dcb0",
+        warning="#ffc857",
+        danger="#ff6b6b",
+        info="#7aa2ff",
+        purple="#bf86ff",
+        magenta="#ff7ab6",
+        badge_bg="rgba(255, 255, 255, 20)",
+        scroll_track="rgba(255, 255, 255, 8)",
+        scroll_handle="rgba(255, 255, 255, 55)",
     )
 
 
-def label_style(color=TEXT_DIM, size=11, weight="normal"):
+def _theme_light() -> Theme:
+    return Theme(
+        name="light",
+        bg="#f4f6fb",
+        surface="#ffffff",
+        surface_alt="#eef1f8",
+        panel="rgba(255, 255, 255, 240)",
+        panel_border="rgba(20, 35, 70, 45)",
+        text="#161a23",
+        text_dim="#576074",
+        text_muted="#8b94a8",
+        accent="#3461d8",
+        accent_soft="rgba(52, 97, 216, 35)",
+        user_bubble="rgba(52, 97, 216, 30)",
+        user_bubble_text="#1b3a8f",
+        assistant_bubble="rgba(30, 165, 120, 22)",
+        assistant_bubble_text="#0c5e44",
+        system_bubble="rgba(20, 30, 60, 10)",
+        success="#1fa278",
+        warning="#d18a00",
+        danger="#d34a4a",
+        info="#3461d8",
+        purple="#7c4dd3",
+        magenta="#c93b80",
+        badge_bg="rgba(20, 35, 70, 18)",
+        scroll_track="rgba(20, 30, 60, 10)",
+        scroll_handle="rgba(20, 30, 60, 55)",
+    )
+
+
+_THEMES = {"dark": _theme_dark(), "light": _theme_light()}
+
+
+class ThemeManager:
+    """Owns the active theme; widgets subscribe via callbacks."""
+
+    def __init__(self, name: str = "dark"):
+        self._name = name if name in _THEMES else "dark"
+        self._listeners: list = []
+
+    @property
+    def theme(self) -> Theme:
+        return _THEMES[self._name]
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def set(self, name: str) -> None:
+        if name not in _THEMES or name == self._name:
+            return
+        self._name = name
+        self._notify()
+
+    def toggle(self) -> str:
+        self.set("light" if self._name == "dark" else "dark")
+        return self._name
+
+    def subscribe(self, fn) -> None:
+        self._listeners.append(fn)
+
+    def _notify(self) -> None:
+        for fn in list(self._listeners):
+            try:
+                fn(self.theme)
+            except Exception:
+                logger.exception("Theme listener failed")
+
+
+def _load_theme_pref() -> str:
+    try:
+        with open(_THEME_STATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+            name = str(data.get("theme") or "dark").lower()
+            return name if name in _THEMES else "dark"
+    except Exception:
+        return "dark"
+
+
+def _save_theme_pref(name: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_THEME_STATE_PATH), exist_ok=True)
+        try:
+            with open(_THEME_STATE_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh) or {}
+        except Exception:
+            data = {}
+        data["theme"] = name
+        with open(_THEME_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except Exception:
+        logger.exception("Failed to save theme preference")
+
+
+# ---------------------------------------------------------------------------
+# Style helpers (theme-aware)
+# ---------------------------------------------------------------------------
+
+
+FONT_STACK = "'Segoe UI Variable', 'SF Pro Display', 'Inter', 'Helvetica Neue', sans-serif"
+MONO_STACK = "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace"
+
+
+def panel_style(theme: Theme, border: str | None = None) -> str:
     return (
-        f"color: {color};"
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', 'Helvetica Neue', sans-serif;"
+        f"background-color: {theme.panel};"
+        f"border: 1px solid {border or theme.panel_border};"
+        "border-radius: 14px;"
+    )
+
+
+def label_style(theme: Theme, color: str | None = None, size: int = 11, weight: str = "normal") -> str:
+    return (
+        f"color: {color or theme.text_dim};"
+        f"font-family: {FONT_STACK};"
         f"font-size: {size}px;"
         f"font-weight: {weight};"
         "letter-spacing: 0.2px;"
         "border: none;"
+        "background: transparent;"
     )
 
 
+def button_style(theme: Theme, *, danger: bool = False, primary: bool = False) -> str:
+    if danger:
+        bg = theme.danger
+        fg = "#ffffff"
+        hover = "rgba(0,0,0,0.18)"
+    elif primary:
+        bg = theme.accent
+        fg = "#ffffff"
+        hover = "rgba(0,0,0,0.15)"
+    else:
+        bg = theme.surface_alt
+        fg = theme.text
+        hover = theme.accent_soft
+    return (
+        "QPushButton {"
+        f"background-color: {bg};"
+        f"color: {fg};"
+        f"border: 1px solid {theme.panel_border};"
+        "border-radius: 10px;"
+        "padding: 9px 16px;"
+        f"font-family: {FONT_STACK};"
+        "font-weight: 600;"
+        "font-size: 12px;"
+        "letter-spacing: 0.4px;"
+        "}"
+        "QPushButton:hover {"
+        f"background-color: {hover};"
+        "}"
+        "QPushButton:pressed { padding-top: 10px; padding-bottom: 8px; }"
+    )
+
+
+def text_box_style(theme: Theme, font_size: int = 13) -> str:
+    return (
+        f"background-color: {theme.surface_alt};"
+        f"color: {theme.text};"
+        f"font-family: {FONT_STACK};"
+        f"font-size: {font_size}px;"
+        f"border: 1px solid {theme.panel_border};"
+        "border-radius: 10px;"
+        "padding: 10px 12px;"
+        f"selection-background-color: {theme.accent};"
+        "selection-color: white;"
+    )
+
+
+def combo_style(theme: Theme) -> str:
+    return (
+        "QComboBox {"
+        f"background-color: {theme.surface_alt};"
+        f"color: {theme.text};"
+        f"border: 1px solid {theme.panel_border};"
+        "border-radius: 10px;"
+        "padding: 8px 12px;"
+        f"font-family: {FONT_STACK};"
+        "font-size: 12px;"
+        "}"
+        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QComboBox QAbstractItemView {"
+        f"background-color: {theme.surface};"
+        f"color: {theme.text};"
+        f"selection-background-color: {theme.accent};"
+        "selection-color: white;"
+        f"border: 1px solid {theme.panel_border};"
+        "border-radius: 8px;"
+        "padding: 4px;"
+        "}"
+    )
+
+
+def scrollbar_style(theme: Theme) -> str:
+    return (
+        "QScrollBar:vertical, QScrollBar:horizontal {"
+        f"background: {theme.scroll_track};"
+        "border: none; margin: 2px; border-radius: 4px;"
+        "}"
+        "QScrollBar:vertical { width: 9px; }"
+        "QScrollBar:horizontal { height: 9px; }"
+        "QScrollBar::handle {"
+        f"background: {theme.scroll_handle};"
+        "border-radius: 4px; min-height: 24px; min-width: 24px;"
+        "}"
+        "QScrollBar::handle:hover {"
+        f"background: {theme.accent};"
+        "}"
+        "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tech-panel container
+# ---------------------------------------------------------------------------
+
+
 class TechPanel(QFrame):
-    def __init__(self, title, parent=None):
+    def __init__(self, title: str, theme_mgr: ThemeManager, parent=None, indicator: str = "ONLINE"):
         super().__init__(parent)
-        self.setStyleSheet(panel_style())
+        self._theme_mgr = theme_mgr
+        self._initial_indicator = indicator
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(14, 12, 14, 14)
+        self.layout.setContentsMargins(16, 14, 16, 16)
         self.layout.setSpacing(10)
 
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet(label_style(CYAN, 12, "bold"))
         title_row.addWidget(self.title_label)
         title_row.addStretch(1)
-        self.indicator = QLabel("ONLINE")
-        self.indicator.setStyleSheet(label_style(GREEN, 10, "bold"))
+        self.indicator = QLabel(indicator)
         title_row.addWidget(self.indicator)
         self.layout.addLayout(title_row)
 
@@ -216,12 +475,26 @@ class TechPanel(QFrame):
         self.body.setSpacing(9)
         self.layout.addLayout(self.body, stretch=1)
 
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(panel_style(theme))
+        self.title_label.setStyleSheet(label_style(theme, theme.accent, 12, "bold"))
+        self.indicator.setStyleSheet(label_style(theme, theme.success, 10, "bold"))
+
+
+# ---------------------------------------------------------------------------
+# Canvas widgets (preserved from the original HUD, lightly theme-aware)
+# ---------------------------------------------------------------------------
+
 
 class ParticleGlobeReactor(QWidget):
     clicked = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
+        self._theme_mgr = theme_mgr
         rng = random.Random(42)
         self.stars = [
             (
@@ -262,6 +535,7 @@ class ParticleGlobeReactor(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
         self.timer.start(24)
+        theme_mgr.subscribe(lambda _t: self.update())
 
     def set_state(self, state):
         self.state = str(state or "muted")
@@ -297,45 +571,44 @@ class ParticleGlobeReactor(QWidget):
             event.accept()
 
     def _state_color(self):
+        theme = self._theme_mgr.theme
         if self.state == "speaking" or self.speech_energy > 0.2:
-            return QColor(MAGENTA)
+            return QColor(theme.magenta)
         if self.state == "processing":
-            return QColor(PURPLE)
+            return QColor(theme.purple)
         if self.state == "listening":
-            return QColor(MAGENTA)
+            return QColor(theme.magenta)
         if self.state == "armed":
-            return QColor(PURPLE)
-        return QColor(134, 69, 175)
+            return QColor(theme.purple)
+        return QColor(theme.accent)
 
     def _rotate_point(self, x, y, z, yaw, pitch, roll):
-        cosy = math.cos(yaw)
-        siny = math.sin(yaw)
+        cosy = math.cos(yaw); siny = math.sin(yaw)
         x, z = x * cosy + z * siny, -x * siny + z * cosy
-
-        cosp = math.cos(pitch)
-        sinp = math.sin(pitch)
+        cosp = math.cos(pitch); sinp = math.sin(pitch)
         y, z = y * cosp - z * sinp, y * sinp + z * cosp
-
-        cosr = math.cos(roll)
-        sinr = math.sin(roll)
+        cosr = math.cos(roll); sinr = math.sin(roll)
         x, y = x * cosr - y * sinr, x * sinr + y * cosr
         return x, y, z
 
     def paintEvent(self, event):
+        theme = self._theme_mgr.theme
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
-        painter.fillRect(rect, QColor("#000000"))
+        bg = QColor(theme.bg)
+        painter.fillRect(rect, bg)
 
         cx = rect.width() / 2
         cy = rect.height() / 2
         radius = min(rect.width(), rect.height()) * 0.385
-        color = self._state_color()
+        accent = self._state_color()
 
+        star_color_base = QColor(theme.text)
         for sx, sy, size, alpha, star_phase in self.stars:
-            star = QColor(202, 172, 225)
+            star = QColor(star_color_base)
             twinkle = 0.65 + 0.35 * math.sin(self.phase * 0.9 + star_phase)
-            star.setAlpha(int(alpha * 120 * twinkle))
+            star.setAlpha(int(alpha * 80 * twinkle))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(star)
             painter.drawEllipse(QPointF(sx * rect.width(), sy * rect.height()), size, size)
@@ -345,13 +618,9 @@ class ParticleGlobeReactor(QWidget):
         pitch = 0.18 * math.sin(self.phase * 0.17)
         roll = 0.08 * math.cos(self.phase * 0.11)
         for index, particle in enumerate(self.particles):
-            base_x = particle["x"]
-            base_y = particle["y"]
-            base_z = particle["z"]
+            base_x = particle["x"]; base_y = particle["y"]; base_z = particle["z"]
             x, y, z = self._rotate_point(base_x, base_y, base_z, yaw, pitch, roll)
-
             radius_scale = particle["shell"]
-
             perspective = 0.76 + 0.28 * z
             px = cx + x * radius * radius_scale * perspective
             py = cy + y * radius * radius_scale * (0.82 + 0.08 * z)
@@ -370,135 +639,34 @@ class ParticleGlobeReactor(QWidget):
 
         points.sort(key=lambda item: item[0])
         for z, px, py, size, alpha, index in points:
-            if self.state == "muted" and self.speech_energy < 0.08:
-                dot = QColor(131, 76, 169)
-            elif index % 7 == 0:
-                dot = QColor(194, 89, 255)
-            else:
-                dot = QColor(166, 74, 226)
+            dot = QColor(accent)
+            if index % 7 == 0:
+                dot = QColor(theme.purple)
             dot.setAlpha(max(8, min(210, alpha)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(dot)
             painter.drawEllipse(QPointF(px, py), size, size)
 
         painter.setFont(QFont("JetBrains Mono", 11, QFont.Weight.Bold))
-        state_text = QColor(223, 200, 255)
-        state_text.setAlpha(205)
+        state_text = QColor(theme.text)
+        state_text.setAlpha(180)
         painter.setPen(QPen(state_text))
         painter.drawText(QRectF(0, cy + radius + 24, rect.width(), 28), Qt.AlignmentFlag.AlignCenter, self.state.upper())
 
 
-class RadarPanel(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.angle = 0
-        self.setMinimumHeight(210)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(45)
-
-    def animate(self):
-        self.angle = (self.angle + 2) % 360
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        cx, cy = w * 0.5, h * 0.53
-        r = min(w, h) * 0.38
-        painter.setPen(QPen(QColor(77, 234, 255, 70), 1))
-        for frac in (0.33, 0.66, 1.0):
-            painter.drawEllipse(QPointF(cx, cy), r * frac, r * frac)
-        painter.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
-        painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
-
-        painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(self.angle)
-        sweep = QLinearGradient(QPointF(0, 0), QPointF(r, 0))
-        sweep.setColorAt(0, QColor(93, 255, 191, 15))
-        sweep.setColorAt(1, QColor(93, 255, 191, 145))
-        painter.setPen(QPen(QColor(GREEN), 2))
-        painter.setBrush(sweep)
-        painter.drawPie(QRectF(-r, -r, r * 2, r * 2), -14 * 16, 28 * 16)
-        painter.restore()
-
-        blips = ((0.18, -0.28), (-0.36, 0.22), (0.48, 0.14), (-0.08, -0.55))
-        for i, (x, y) in enumerate(blips):
-            color = QColor(AMBER if i == 1 else GREEN)
-            color.setAlpha(190)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            painter.drawEllipse(QPointF(cx + x * r, cy + y * r), 4, 4)
-
-
-class CameraStrip(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.tick = 0
-        self.setMinimumHeight(230)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(80)
-
-    def animate(self):
-        self.tick = (self.tick + 1) % 120
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        labels = ("FRONT", "DESK", "NET", "CORE")
-        cols, rows = 2, 2
-        gap = 10
-        tile_w = (self.width() - gap) / cols
-        tile_h = (self.height() - gap) / rows
-        for row in range(rows):
-            for col in range(cols):
-                index = row * cols + col
-                rect = QRectF(col * (tile_w + gap), row * (tile_h + gap), tile_w, tile_h)
-                grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-                grad.setColorAt(0, QColor(10, 41, 55, 245))
-                grad.setColorAt(1, QColor(3, 11, 20, 245))
-                painter.setPen(QPen(QColor(77, 234, 255, 95), 1))
-                painter.setBrush(grad)
-                painter.drawRoundedRect(rect, 6, 6)
-                painter.setPen(QPen(QColor(93, 255, 191, 55), 1))
-                for line in range(5):
-                    y = rect.top() + 18 + line * 16 + ((self.tick + index * 9) % 9)
-                    painter.drawLine(QPointF(rect.left() + 8, y), QPointF(rect.right() - 8, y - 5))
-                painter.setPen(QPen(QColor(TEXT_DIM), 1))
-                painter.drawText(rect.adjusted(9, 8, -8, -8), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, labels[index])
-                live = QColor(GREEN if index != 2 else AMBER)
-                live.setAlpha(230)
-                painter.setBrush(live)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(QPointF(rect.right() - 18, rect.top() + 16), 4, 4)
+# ---------------------------------------------------------------------------
+# Clock + Weather
+# ---------------------------------------------------------------------------
 
 
 WEATHER_CODE_LABELS = {
-    0: "Clear sky",
-    1: "Mostly clear",
-    2: "Partly cloudy",
-    3: "Overcast",
-    45: "Fog",
-    48: "Rime fog",
-    51: "Light drizzle",
-    53: "Drizzle",
-    55: "Dense drizzle",
-    61: "Light rain",
-    63: "Rain",
-    65: "Heavy rain",
-    71: "Light snow",
-    73: "Snow",
-    75: "Heavy snow",
-    80: "Rain showers",
-    81: "Heavy showers",
-    82: "Violent showers",
-    95: "Thunderstorm",
-    96: "Thunderstorm with hail",
-    99: "Severe thunderstorm",
+    0: "Clear sky", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Rime fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Dense drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow",
+    80: "Rain showers", 81: "Heavy showers", 82: "Violent showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Severe thunderstorm",
 }
 
 
@@ -508,7 +676,6 @@ class WeatherFetchThread(QThread):
     def run(self):
         try:
             import requests
-
             response = requests.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
@@ -531,54 +698,49 @@ class WeatherFetchThread(QThread):
                 "condition": WEATHER_CODE_LABELS.get(code, "Current conditions"),
             })
         except Exception as exc:
-            self.weather_ready.emit({
-                "status": "error",
-                "message": str(exc) or exc.__class__.__name__,
-            })
+            self.weather_ready.emit({"status": "error", "message": str(exc) or exc.__class__.__name__})
 
 
 class ClockWeatherWidget(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
+        self._theme_mgr = theme_mgr
         self.weather_thread = None
         self.setMinimumHeight(120)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         self.clock_label = QLabel("--:--:--")
         self.clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.clock_label.setStyleSheet(label_style(TEXT, 34, "bold"))
         layout.addWidget(self.clock_label)
 
         self.date_label = QLabel("")
         self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.date_label.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
         layout.addWidget(self.date_label)
 
-        location = QLabel(NELLORE_LABEL.upper())
-        location.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        location.setStyleSheet(label_style(CYAN, 11, "bold"))
-        layout.addWidget(location)
+        self.location_label = QLabel(NELLORE_LABEL.upper())
+        self.location_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.location_label)
 
         self.temperature_label = QLabel("--.- C")
         self.temperature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.temperature_label.setStyleSheet(label_style(GREEN, 22, "bold"))
         layout.addWidget(self.temperature_label)
 
         self.condition_label = QLabel("Weather loading")
         self.condition_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.condition_label.setStyleSheet(label_style(TEXT, 12, "bold"))
         self.condition_label.setWordWrap(True)
         layout.addWidget(self.condition_label)
 
         self.weather_detail_label = QLabel("Waiting for update")
         self.weather_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.weather_detail_label.setStyleSheet(label_style(TEXT_DIM, 11))
         self.weather_detail_label.setWordWrap(True)
         layout.addWidget(self.weather_detail_label)
         layout.addStretch(1)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
 
         self.clock_timer = QTimer(self)
         self.clock_timer.timeout.connect(self.update_clock)
@@ -589,6 +751,14 @@ class ClockWeatherWidget(QWidget):
         self.weather_timer.timeout.connect(self.refresh_weather)
         self.weather_timer.start(15 * 60 * 1000)
         QTimer.singleShot(200, self.refresh_weather)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.clock_label.setStyleSheet(label_style(theme, theme.text, 34, "bold"))
+        self.date_label.setStyleSheet(label_style(theme, theme.text_dim, 12, "bold"))
+        self.location_label.setStyleSheet(label_style(theme, theme.accent, 11, "bold"))
+        self.temperature_label.setStyleSheet(label_style(theme, theme.success, 22, "bold"))
+        self.condition_label.setStyleSheet(label_style(theme, theme.text, 12, "bold"))
+        self.weather_detail_label.setStyleSheet(label_style(theme, theme.text_dim, 11))
 
     def update_clock(self):
         now = QDateTime.currentDateTime()
@@ -609,118 +779,135 @@ class ClockWeatherWidget(QWidget):
         self.weather_detail_label.setText(formatted["details"])
 
 
+# ---------------------------------------------------------------------------
+# System status + Pulse bars
+# ---------------------------------------------------------------------------
+
+
 class SystemStatusWidget(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(150)
+        self._theme_mgr = theme_mgr
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(12)
-        
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
+
         import platform
-        import sys
-        
         info = [
             ("OS PLATFORM", f"{platform.system()} {platform.release()}"),
             ("ARCHITECTURE", platform.machine()),
             ("PYTHON ENV", sys.version.split()[0]),
-            ("HUD ENGINE", "PyQt6 GPU Accelerated"),
-            ("UI SCALING", "Dynamic Responsive"),
+            ("HUD ENGINE", "PyQt6"),
+            ("UI SCALING", "Adaptive"),
         ]
-        
-        for label, val in info:
+        self._rows = []
+        for label_text, val in info:
             row = QHBoxLayout()
-            lbl = QLabel(label)
-            lbl.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
+            lbl = QLabel(label_text)
             v = QLabel(val)
-            v.setStyleSheet(label_style(TEXT, 12))
             v.setAlignment(Qt.AlignmentFlag.AlignRight)
             row.addWidget(lbl)
             row.addStretch(1)
             row.addWidget(v)
             layout.addLayout(row)
-            
+            self._rows.append((lbl, v))
         layout.addStretch(1)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        for lbl, v in self._rows:
+            lbl.setStyleSheet(label_style(theme, theme.text_dim, 11, "bold"))
+            v.setStyleSheet(label_style(theme, theme.text, 11))
 
 
 class PulseBars(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
+        self._theme_mgr = theme_mgr
         self.values = [34, 66, 48, 82, 58, 43]
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(96)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
         self.timer.start(220)
+        theme_mgr.subscribe(lambda _t: self.update())
 
     def animate(self):
         self.values = [max(12, min(96, value + random.randint(-9, 9))) for value in self.values]
         self.update()
 
     def paintEvent(self, event):
+        theme = self._theme_mgr.theme
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         names = ("CPU", "RAM", "IO", "NET", "LLM", "VAD")
         row_h = self.height() / len(names)
         for i, name in enumerate(names):
-            y = i * row_h + 6
-            painter.setPen(QPen(QColor(TEXT_DIM), 1))
+            y = i * row_h + 2
+            painter.setPen(QPen(QColor(theme.text_dim), 1))
+            painter.setFont(QFont(MONO_STACK.split(",")[0].strip("'"), 9, QFont.Weight.Bold))
             painter.drawText(QRectF(0, y, 46, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
-            track = QRectF(52, y + row_h / 2 - 4, max(30, self.width() - 58), 8)
+            track = QRectF(52, y + row_h / 2 - 4, max(30, self.width() - 58), 7)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(29, 54, 68, 190))
+            track_color = QColor(theme.surface_alt)
+            painter.setBrush(track_color)
             painter.drawRoundedRect(track, 4, 4)
             fill = QRectF(track.left(), track.top(), track.width() * self.values[i] / 100, track.height())
-            painter.setBrush(QColor(GREEN if i % 2 else CYAN))
+            painter.setBrush(QColor(theme.success if i % 2 else theme.accent))
             painter.drawRoundedRect(fill, 4, 4)
 
 
+# ---------------------------------------------------------------------------
+# Process panel (overlay)
+# ---------------------------------------------------------------------------
+
+
 class ProcessPanel(QWidget):
-    def __init__(self, parent=None, app_core=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None, app_core=None):
         super().__init__(parent)
+        self._theme_mgr = theme_mgr
         self.app_core = app_core
         self.setMinimumSize(420, 480)
-        self.setStyleSheet(panel_style("rgba(93, 255, 191, 155)"))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 16)
         layout.setSpacing(10)
 
-        title = QLabel("PROCESS GRID")
-        title.setStyleSheet(label_style(GREEN, 14, "bold"))
-        layout.addWidget(title)
+        self.title = QLabel("PROCESS GRID")
+        layout.addWidget(self.title)
 
         self.stats_area = QLabel("Loading system telemetry...")
-        self.stats_area.setStyleSheet(label_style(TEXT_DIM, 12))
         self.stats_area.setWordWrap(True)
         layout.addWidget(self.stats_area)
 
         self.plugin_area = QTextEdit()
         self.plugin_area.setReadOnly(True)
-        self.plugin_area.setStyleSheet(
-            "background-color: transparent;"
-            f"color: {TEXT};"
-            "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-            "font-size: 13px;"
-            "border: none;"
-            "padding: 4px;"
-        )
         layout.addWidget(self.plugin_area, stretch=1)
 
-        close_btn = QPushButton("CLOSE")
-        close_btn.setStyleSheet(button_style())
-        close_btn.clicked.connect(self.hide)
-        layout.addWidget(close_btn)
+        self.close_btn = QPushButton("CLOSE")
+        self.close_btn.clicked.connect(self.hide)
+        layout.addWidget(self.close_btn)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
 
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_info)
         self.update_timer.start(2000)
         self.update_info()
 
+    def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(panel_style(theme, theme.success))
+        self.title.setStyleSheet(label_style(theme, theme.success, 14, "bold"))
+        self.stats_area.setStyleSheet(label_style(theme, theme.text_dim, 12))
+        self.plugin_area.setStyleSheet(text_box_style(theme, 13))
+        self.close_btn.setStyleSheet(button_style(theme))
+
     def update_info(self):
         if not self.app_core:
             return
         try:
             from modules.system_control.sys_info import get_system_status
-
             status = get_system_status()
         except Exception as exc:
             status = f"Telemetry unavailable: {exc}"
@@ -729,8 +916,13 @@ class ProcessPanel(QWidget):
         plugins = []
         plugin_manager = getattr(self.app_core, "plugin_manager", None)
         for plugin in getattr(plugin_manager, "plugins", []) or []:
-            plugins.append(f"{plugin.name}  ACTIVE")
+            plugins.append(f"  •  {plugin.name}")
         self.plugin_area.setPlainText("LOADED MODULES\n" + "\n".join(plugins))
+
+
+# ---------------------------------------------------------------------------
+# Mic selector
+# ---------------------------------------------------------------------------
 
 
 class DeviceDiscoveryThread(QThread):
@@ -746,21 +938,22 @@ class DeviceDiscoveryThread(QThread):
 class MicSelector(QFrame):
     device_selected = pyqtSignal(object)
 
-    def __init__(self, parent=None):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(panel_style())
+        self._theme_mgr = theme_mgr
         self.setMinimumWidth(150)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(8)
 
-        label = QLabel("INPUT DEVICE")
-        label.setStyleSheet(label_style(CYAN, 11, "bold"))
-        layout.addWidget(label)
+        self.label = QLabel("INPUT DEVICE")
+        layout.addWidget(self.label)
 
         self.combo = QComboBox()
-        self.combo.setStyleSheet(combo_style())
         layout.addWidget(self.combo)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
 
         self.discovery_thread = None
         self.combo.currentIndexChanged.connect(self.on_selection_changed)
@@ -768,6 +961,11 @@ class MicSelector(QFrame):
         self.refresh_timer.timeout.connect(self.refresh_devices)
         self.refresh_timer.start(10000)
         QTimer.singleShot(250, self.refresh_devices)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(panel_style(theme))
+        self.label.setStyleSheet(label_style(theme, theme.accent, 11, "bold"))
+        self.combo.setStyleSheet(combo_style(theme))
 
     def refresh_devices(self):
         if self.discovery_thread and self.discovery_thread.isRunning():
@@ -805,67 +1003,423 @@ class MicSelector(QFrame):
         self.device_selected.emit(self.combo.itemData(index))
 
 
-def button_style(danger=False):
-    if danger:
-        bg = "rgba(255, 69, 58, 200)"
-        border = "rgba(255, 255, 255, 40)"
-    else:
-        bg = "rgba(10, 132, 255, 200)"
-        border = "rgba(255, 255, 255, 40)"
-    
-    return (
-        f"background-color: {bg}; "
-        f"color: #ffffff; "
-        f"border: 1px solid {border}; "
-        "border-radius: 8px; "
-        "padding: 10px 16px; "
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif; "
-        "font-weight: 600;"
-    )
+# ---------------------------------------------------------------------------
+# NEW: Chat view — message bubble cards
+# ---------------------------------------------------------------------------
 
 
-def input_style():
-    return (
-        "QDateTimeEdit, QLineEdit, QSpinBox {"
-        "background-color: rgba(44, 44, 46, 230);"
-        f"color: {TEXT};"
-        "border: 1px solid rgba(255, 255, 255, 25);"
-        "border-radius: 8px;"
-        "padding: 8px 12px;"
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-        "font-size: 13px;"
-        "}"
-        "QDateTimeEdit::drop-down {"
-        "border: none;"
-        "}"
-    )
+@dataclass
+class _ChatMessage:
+    role: str
+    text: str
+    model_lane: str | None = None
+    model_label: str | None = None
+    timestamp: str = field(default_factory=lambda: time.strftime("%H:%M"))
 
 
-def combo_style():
-    return (
-        "QComboBox {"
-        "background-color: rgba(44, 44, 46, 230);"
-        f"color: {TEXT};"
-        "border: 1px solid rgba(255, 255, 255, 25);"
-        "border-radius: 8px;"
-        "padding: 8px 12px;"
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-        "font-size: 13px;"
-        "}"
-        "QComboBox::drop-down {"
-        "border: none;"
-        "}"
-        "QComboBox QAbstractItemView {"
-        "background-color: #1c1c1e;"
-        f"color: {TEXT};"
-        f"selection-background-color: {BLUE};"
-        "border-radius: 8px;"
-        "}"
-    )
+class ChatBubble(QFrame):
+    """A single styled message bubble. Adapts to theme via apply_theme()."""
+
+    def __init__(self, message: _ChatMessage, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.message = message
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._row = QHBoxLayout()
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(0)
+        outer.addLayout(self._row)
+
+        self._inner = QFrame()
+        self._inner.setMaximumWidth(640)
+        inner_layout = QVBoxLayout(self._inner)
+        inner_layout.setContentsMargins(14, 10, 14, 12)
+        inner_layout.setSpacing(4)
+
+        self.meta_label = QLabel(self._meta_text(message))
+        self.text_label = QLabel(message.text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        inner_layout.addWidget(self.meta_label)
+        inner_layout.addWidget(self.text_label)
+
+        if message.role == "user":
+            self._row.addStretch(1)
+            self._row.addWidget(self._inner)
+        elif message.role == "assistant":
+            self._row.addWidget(self._inner)
+            self._row.addStretch(1)
+        else:
+            self._row.addStretch(1)
+            self._row.addWidget(self._inner)
+            self._row.addStretch(1)
+
+        self.apply_theme(theme)
+
+    def _meta_text(self, msg: _ChatMessage) -> str:
+        role_label = {"user": "YOU", "assistant": "FRIDAY", "system": "SYSTEM"}.get(msg.role, msg.role.upper())
+        parts = [role_label, msg.timestamp]
+        if msg.role == "assistant" and msg.model_label:
+            parts.append(f"· {msg.model_label}")
+        return "   ".join(parts)
+
+    def update_model(self, lane: str | None, label: str | None) -> None:
+        self.message.model_lane = lane
+        self.message.model_label = label
+        self.meta_label.setText(self._meta_text(self.message))
+
+    def apply_theme(self, theme: Theme) -> None:
+        if self.message.role == "user":
+            bg = theme.user_bubble
+            fg = theme.user_bubble_text
+            border = theme.accent_soft
+            meta_color = theme.accent
+        elif self.message.role == "assistant":
+            bg = theme.assistant_bubble
+            fg = theme.assistant_bubble_text
+            border = "rgba(72, 220, 176, 60)" if theme.name == "dark" else "rgba(30, 165, 120, 55)"
+            meta_color = theme.success
+        else:
+            bg = theme.system_bubble
+            fg = theme.text_dim
+            border = theme.panel_border
+            meta_color = theme.text_muted
+
+        self._inner.setStyleSheet(
+            f"background-color: {bg};"
+            f"border: 1px solid {border};"
+            "border-radius: 14px;"
+        )
+        self.meta_label.setStyleSheet(label_style(theme, meta_color, 10, "bold"))
+        self.text_label.setStyleSheet(
+            f"color: {fg};"
+            f"font-family: {FONT_STACK};"
+            "font-size: 13px;"
+            "background: transparent;"
+            "border: none;"
+        )
+
+
+class RouteLine(QLabel):
+    """A small inline marker between bubbles (e.g. '▸ tool_name (query)')."""
+
+    def __init__(self, text: str, theme: Theme, parent=None):
+        super().__init__(text, parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(
+            f"color: {theme.text_muted};"
+            f"font-family: {MONO_STACK};"
+            "font-size: 10px;"
+            "padding: 2px 0px;"
+            "background: transparent;"
+            "border: none;"
+        )
+
+
+class ChatView(QScrollArea):
+    """Scrollable chat panel: list of ChatBubble + RouteLine widgets."""
+
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
+        super().__init__(parent)
+        self._theme_mgr = theme_mgr
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self._inner = QWidget()
+        self._layout = QVBoxLayout(self._inner)
+        self._layout.setContentsMargins(8, 8, 8, 8)
+        self._layout.setSpacing(8)
+        self._layout.addStretch(1)
+        self.setWidget(self._inner)
+
+        self._bubbles: list = []
+        self._last_assistant_bubble: ChatBubble | None = None
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(
+            f"QScrollArea {{ background: {theme.surface}; border: 1px solid {theme.panel_border}; border-radius: 12px; }}"
+            f"QScrollArea > QWidget > QWidget {{ background: {theme.surface}; }}"
+            + scrollbar_style(theme)
+        )
+        for widget in self._bubbles:
+            if hasattr(widget, "apply_theme"):
+                widget.apply_theme(theme)
+
+    def add_message(self, role: str, text: str, model_lane: str | None = None, model_label: str | None = None) -> ChatBubble | None:
+        if not text or not str(text).strip():
+            return None
+        msg = _ChatMessage(role=role, text=str(text).strip(), model_lane=model_lane, model_label=model_label)
+        bubble = ChatBubble(msg, self._theme_mgr.theme, parent=self._inner)
+        self._layout.insertWidget(self._layout.count() - 1, bubble)
+        self._bubbles.append(bubble)
+        if role == "assistant":
+            self._last_assistant_bubble = bubble
+        QTimer.singleShot(10, self._scroll_bottom)
+        return bubble
+
+    def add_route(self, text: str) -> None:
+        line = RouteLine(text, self._theme_mgr.theme, parent=self._inner)
+        self._layout.insertWidget(self._layout.count() - 1, line)
+        self._bubbles.append(line)
+        QTimer.singleShot(10, self._scroll_bottom)
+
+    def mark_assistant_model(self, lane: str | None, label: str | None) -> None:
+        if self._last_assistant_bubble is not None:
+            self._last_assistant_bubble.update_model(lane, label)
+
+    def _scroll_bottom(self) -> None:
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+
+# ---------------------------------------------------------------------------
+# NEW: Event stream — color-coded list
+# ---------------------------------------------------------------------------
+
+
+_EVENT_COLORS = {
+    "TURN": "accent",
+    "RUN": "warning",
+    "LLM": "purple",
+    "DONE": "success",
+    "FAIL": "danger",
+    "SPEECH": "magenta",
+    "MIC": "info",
+    "INFO": "text_dim",
+    "USER": "accent",
+    "ASSISTANT": "success",
+    "SYSTEM": "text_dim",
+}
+
+
+class EventStreamView(QListWidget):
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
+        super().__init__(parent)
+        self._theme_mgr = theme_mgr
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setUniformItemSizes(False)
+        self.setSpacing(0)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(theme_mgr.theme)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(
+            "QListWidget {"
+            f"background: {theme.surface};"
+            f"border: 1px solid {theme.panel_border};"
+            "border-radius: 10px;"
+            "padding: 4px;"
+            "outline: 0;"
+            "}"
+            "QListWidget::item {"
+            f"color: {theme.text};"
+            "padding: 4px 6px;"
+            "border: none;"
+            "}"
+            + scrollbar_style(theme)
+        )
+        # Reapply per-item html with new colors.
+        for i in range(self.count()):
+            item = self.item(i)
+            payload = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, dict):
+                self._format_item(item, payload)
+
+    def append(self, tag: str, text: str) -> None:
+        payload = {
+            "tag": tag.upper(),
+            "text": str(text or ""),
+            "ts": time.strftime("%H:%M:%S"),
+        }
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, payload)
+        self._format_item(item, payload)
+        self.addItem(item)
+        while self.count() > _EVENT_STREAM_MAX_LINES:
+            self.takeItem(0)
+        self.scrollToBottom()
+
+    def _format_item(self, item: QListWidgetItem, payload: dict) -> None:
+        theme = self._theme_mgr.theme
+        tag = payload["tag"]
+        color_key = _EVENT_COLORS.get(tag, "text_dim")
+        tag_color = getattr(theme, color_key, theme.text_dim)
+        ts = html_escape(payload["ts"])
+        text = html_escape(payload["text"])
+        tag_padded = html_escape(tag.ljust(7)).replace(" ", "&nbsp;")
+        item.setText("")
+        label = QLabel()
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setText(
+            f"<span style=\"color:{theme.text_muted};font-family:{MONO_STACK};font-size:10px;\">{ts}</span>"
+            f"&nbsp;&nbsp;<span style=\"color:{tag_color};font-family:{MONO_STACK};font-size:10px;font-weight:bold;\">{tag_padded}</span>"
+            f"&nbsp;&nbsp;<span style=\"color:{theme.text};font-family:{FONT_STACK};font-size:11px;\">{text}</span>"
+        )
+        label.setStyleSheet("background: transparent; border: none; padding: 0;")
+        label.setWordWrap(False)
+        label.adjustSize()
+        item.setSizeHint(label.sizeHint())
+        self.setItemWidget(item, label)
+
+
+# ---------------------------------------------------------------------------
+# NEW: Models panel
+# ---------------------------------------------------------------------------
+
+
+class ModelsPanel(QWidget):
+    """Lists available local models + status; highlights the active lane."""
+
+    def __init__(self, theme_mgr: ThemeManager, app_core, parent=None):
+        super().__init__(parent)
+        self._theme_mgr = theme_mgr
+        self._app_core = app_core
+        self._active_lane: str | None = None
+        self._rows: dict[str, dict] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
+
+        self._rows_container = QVBoxLayout()
+        self._rows_container.setSpacing(6)
+        layout.addLayout(self._rows_container)
+        layout.addStretch(1)
+
+        theme_mgr.subscribe(self._apply_theme)
+        self._build_rows()
+        self._apply_theme(theme_mgr.theme)
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._refresh_status)
+        self._refresh_timer.start(2000)
+
+    def _build_rows(self) -> None:
+        mm = getattr(self._app_core, "router", None)
+        manager = getattr(mm, "model_manager", None) if mm else None
+        profiles = manager._profiles if manager else {}
+        for role, profile in profiles.items():
+            card = QFrame()
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(4)
+
+            header = QHBoxLayout()
+            lane_label = QLabel(role.upper())
+            status_dot = QLabel("●")
+            header.addWidget(lane_label)
+            header.addStretch(1)
+            header.addWidget(status_dot)
+            card_layout.addLayout(header)
+
+            name_label = QLabel(os.path.basename(profile.path))
+            name_label.setWordWrap(True)
+            card_layout.addWidget(name_label)
+
+            detail_label = QLabel(f"ctx {profile.n_ctx}  ·  temp {profile.temperature}")
+            card_layout.addWidget(detail_label)
+
+            self._rows_container.addWidget(card)
+            self._rows[role] = {
+                "card": card,
+                "lane_label": lane_label,
+                "status_dot": status_dot,
+                "name_label": name_label,
+                "detail_label": detail_label,
+            }
+        if not profiles:
+            empty = QLabel("No model profiles registered")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._rows_container.addWidget(empty)
+            self._rows["__empty"] = {"card": empty}
+
+    def _apply_theme(self, theme: Theme) -> None:
+        for role, row in self._rows.items():
+            if role == "__empty":
+                row["card"].setStyleSheet(label_style(theme, theme.text_dim, 11))
+                continue
+            highlight = (role == self._active_lane)
+            border = theme.accent if highlight else theme.panel_border
+            row["card"].setStyleSheet(
+                f"background-color: {theme.surface_alt};"
+                f"border: 1px solid {border};"
+                "border-radius: 10px;"
+            )
+            row["lane_label"].setStyleSheet(label_style(theme, theme.accent if highlight else theme.text, 11, "bold"))
+            row["name_label"].setStyleSheet(
+                f"color: {theme.text};"
+                f"font-family: {MONO_STACK};"
+                "font-size: 11px;"
+                "background: transparent; border: none;"
+            )
+            row["detail_label"].setStyleSheet(label_style(theme, theme.text_muted, 10))
+            row["status_dot"].setStyleSheet(label_style(theme, self._dot_color(theme, role), 14, "bold"))
+
+    def _dot_color(self, theme: Theme, role: str) -> str:
+        status = self._lane_status(role)
+        if status == "loaded":
+            return theme.success
+        if status == "missing":
+            return theme.danger
+        if status == "failed":
+            return theme.warning
+        return theme.text_muted  # exists but not loaded
+
+    def _lane_status(self, role: str) -> str:
+        manager = self._manager()
+        if not manager:
+            return "unknown"
+        try:
+            status = manager.status(role)
+        except Exception:
+            return "unknown"
+        if status.get("failed"):
+            return "failed"
+        if not status.get("exists"):
+            return "missing"
+        if status.get("loaded"):
+            return "loaded"
+        return "available"
+
+    def _manager(self):
+        router = getattr(self._app_core, "router", None)
+        return getattr(router, "model_manager", None) if router else None
+
+    def set_active_lane(self, lane: str | None) -> None:
+        if lane and lane not in self._rows:
+            lane = None
+        if lane == self._active_lane:
+            return
+        self._active_lane = lane
+        self._apply_theme(self._theme_mgr.theme)
+
+    def _refresh_status(self) -> None:
+        self._apply_theme(self._theme_mgr.theme)
+
+
+# ---------------------------------------------------------------------------
+# Background worker for input
+# ---------------------------------------------------------------------------
 
 
 class _InputWorker(QThread):
-    """Runs app_core.process_input off the GUI thread so the HUD stays responsive."""
     finished = pyqtSignal()
 
     def __init__(self, app_core, text: str, parent=None):
@@ -880,6 +1434,11 @@ class _InputWorker(QThread):
             pass
         finally:
             self.finished.emit()
+
+
+# ---------------------------------------------------------------------------
+# JarvisHUD — main window
+# ---------------------------------------------------------------------------
 
 
 class JarvisHUD(QMainWindow):
@@ -897,169 +1456,150 @@ class JarvisHUD(QMainWindow):
     def __init__(self, app_core):
         super().__init__()
         self.app_core = app_core
+        self.theme_mgr = ThemeManager(_load_theme_pref())
         self.turn_state = "idle"
         self.voice_runtime_state = {}
         self.drag_pos = None
         self._speaking_until = 0.0
-        self._chat_html_parts: list[str] = []
         self._input_worker: _InputWorker | None = None
         self._current_layout_mode = None
+        self._pending_lane: str | None = None
 
         self.setWindowTitle("FRIDAY")
-        self.resize(1000, 650)
+        self.resize(1180, 720)
 
-        central = QWidget()
-        central.setStyleSheet(f"background-color: {BG}; color: {TEXT};")
-        self.setCentralWidget(central)
-        
-        self.root = QGridLayout(central)
-        self.root.setContentsMargins(24, 24, 24, 24)
+        self.central = QWidget()
+        self.setCentralWidget(self.central)
+
+        self.root = QGridLayout(self.central)
+        self.root.setContentsMargins(22, 22, 22, 22)
         self.root.setHorizontalSpacing(16)
         self.root.setVerticalSpacing(16)
 
         self.header_widget = self._build_header()
         self.root.addWidget(self.header_widget, 0, 0, 1, 3)
 
+        # ----- LEFT column -----
         left = QVBoxLayout()
         left.setSpacing(14)
-        clock_panel = TechPanel("NELLORE CLOCK")
-        self.clock_weather = ClockWeatherWidget()
-        clock_panel.indicator.setText("IST")
-        clock_panel.body.addWidget(self.clock_weather)
-        left.addWidget(clock_panel, stretch=3)
+        self.clock_panel = TechPanel("NELLORE CLOCK", self.theme_mgr, indicator="IST")
+        self.clock_weather = ClockWeatherWidget(self.theme_mgr)
+        self.clock_panel.body.addWidget(self.clock_weather)
+        left.addWidget(self.clock_panel, stretch=3)
 
-        system_panel = TechPanel("SYSTEM SPECS")
-        system_panel.indicator.setText("HOST")
-        self.system_panel = SystemStatusWidget()
-        system_panel.body.addWidget(self.system_panel)
-        left.addWidget(system_panel, stretch=3)
+        self.system_panel_frame = TechPanel("SYSTEM SPECS", self.theme_mgr, indicator="HOST")
+        self.system_panel = SystemStatusWidget(self.theme_mgr)
+        self.system_panel_frame.body.addWidget(self.system_panel)
+        left.addWidget(self.system_panel_frame, stretch=2)
 
-        stream_panel = TechPanel("EVENT STREAM")
-        self.event_stream = QTextEdit()
-        self.event_stream.setReadOnly(True)
-        self.event_stream.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.event_stream.setStyleSheet(text_box_style(font_size=12))
-        self.event_stream.setPlainText("FRIDAY boot layer ready.\nVoice bus linked.\nTool registry standing by.")
-        stream_panel.body.addWidget(self.event_stream)
-        left.addWidget(stream_panel, stretch=2)
-        
+        self.event_panel = TechPanel("EVENT STREAM", self.theme_mgr, indicator="LIVE")
+        self.event_stream = EventStreamView(self.theme_mgr)
+        self.event_panel.body.addWidget(self.event_stream)
+        left.addWidget(self.event_panel, stretch=4)
+
         self.left_widget = QWidget()
         self.left_widget.setLayout(left)
         self.root.addWidget(self.left_widget, 1, 0)
 
+        # ----- CENTER column -----
         center = QVBoxLayout()
         center.setSpacing(14)
-        reactor_panel = TechPanel("PARTICLE REACTOR")
-        reactor_panel.setStyleSheet(
-            f"background-color: {PANEL_BG};"
-            "border: 1px solid rgba(255, 255, 255, 30);"
-            "border-radius: 12px;"
-        )
-        reactor_panel.layout.setContentsMargins(10, 10, 10, 12)
-        reactor_panel.indicator.setText("CORE")
-        self.reactor = ParticleGlobeReactor()
-        self.reactor.setMinimumSize(250, 200)
-        reactor_panel.body.addWidget(self.reactor, stretch=1)
-        center.addWidget(reactor_panel, stretch=7)
+        self.reactor_panel = TechPanel("PARTICLE REACTOR", self.theme_mgr, indicator="CORE")
+        self.reactor = ParticleGlobeReactor(self.theme_mgr)
+        self.reactor.setMinimumSize(260, 220)
+        self.reactor_panel.body.addWidget(self.reactor, stretch=1)
+        center.addWidget(self.reactor_panel, stretch=5)
 
-        transcript_panel = TechPanel("DIALOG")
-        transcript_panel.indicator.setText("LIVE")
-        self.subtitle_label = QTextEdit()
-        self.subtitle_label.setReadOnly(True)
-        self.subtitle_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.subtitle_label.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.subtitle_label.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.subtitle_label.setMinimumHeight(100)
-        self.subtitle_label.setStyleSheet(text_box_style(font_size=14))
-        transcript_panel.body.addWidget(self.subtitle_label)
+        self.transcript_panel = TechPanel("DIALOG", self.theme_mgr, indicator="LIVE")
+        self.chat_view = ChatView(self.theme_mgr)
+        self.chat_view.setMinimumHeight(220)
+        self.transcript_panel.body.addWidget(self.chat_view, stretch=1)
 
-        # Chat input and send/stop button
-        input_layout = QHBoxLayout()
-        input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(10)
-        
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(10)
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Type a command...")
-        self.input_field.setStyleSheet(text_box_style(font_size=14))
         self.input_field.returnPressed.connect(self.handle_return_pressed)
-        input_layout.addWidget(self.input_field)
-
-        self.send_button = QPushButton("ENTER")
-        self.send_button.setStyleSheet(button_style())
+        input_row.addWidget(self.input_field)
+        self.send_button = QPushButton("SEND")
         self.send_button.clicked.connect(self.handle_send_button_clicked)
-        input_layout.addWidget(self.send_button)
+        input_row.addWidget(self.send_button)
+        self.transcript_panel.body.addLayout(input_row)
 
-        transcript_panel.body.addLayout(input_layout)
-
-        center.addWidget(transcript_panel, stretch=3)
-        
+        center.addWidget(self.transcript_panel, stretch=5)
         self.center_widget = QWidget()
         self.center_widget.setLayout(center)
         self.root.addWidget(self.center_widget, 1, 1)
 
+        # ----- RIGHT column -----
         right = QVBoxLayout()
         right.setSpacing(14)
-        voice_panel = TechPanel("VOICE")
+
+        self.models_panel_frame = TechPanel("MODELS", self.theme_mgr, indicator="LOCAL")
+        self.models_panel = ModelsPanel(self.theme_mgr, self.app_core)
+        self.models_panel_frame.body.addWidget(self.models_panel)
+        right.addWidget(self.models_panel_frame, stretch=3)
+
+        self.voice_panel_frame = TechPanel("VOICE", self.theme_mgr, indicator="IO")
         self.voice_mode_combo = QComboBox()
-        self.voice_mode_combo.setStyleSheet(combo_style())
         for value in ("persistent", "wake_word", "on_demand", "manual"):
             self.voice_mode_combo.addItem(format_voice_mode_label(value), value)
         self.voice_mode_combo.currentIndexChanged.connect(self.on_voice_mode_selected)
-        voice_panel.body.addWidget(self.voice_mode_combo)
+        self.voice_panel_frame.body.addWidget(self.voice_mode_combo)
 
         self.voice_state_label = QLabel("STATE: MUTED")
         self.mic_gate_label = QLabel("MIC GATE: CLOSED")
         self.wake_strategy_label = QLabel("WAKE ENGINE: Wake model")
         self.current_device_label = QLabel("DEVICE: System default")
         self.rejected_reason_label = QLabel("LAST REJECTED: None")
-        for label in (
+        self._voice_labels = [
             self.voice_state_label,
             self.mic_gate_label,
             self.wake_strategy_label,
             self.current_device_label,
             self.rejected_reason_label,
-        ):
-            label.setStyleSheet(label_style(TEXT_DIM, 11))
+        ]
+        for label in self._voice_labels:
             label.setWordWrap(True)
-            voice_panel.body.addWidget(label)
-        right.addWidget(voice_panel, stretch=2)
-        self.refresh_voice_mode_button()
+            self.voice_panel_frame.body.addWidget(label)
+        right.addWidget(self.voice_panel_frame, stretch=2)
 
-        telemetry_panel = TechPanel("SYSTEM PULSE")
-        self.telemetry = PulseBars()
-        telemetry_panel.body.addWidget(self.telemetry)
-        right.addWidget(telemetry_panel, stretch=2)
+        self.telemetry_panel = TechPanel("SYSTEM PULSE", self.theme_mgr, indicator="LIVE")
+        self.telemetry = PulseBars(self.theme_mgr)
+        self.telemetry_panel.body.addWidget(self.telemetry)
+        right.addWidget(self.telemetry_panel, stretch=2)
 
-        self.mic_selector = MicSelector()
+        self.mic_selector = MicSelector(self.theme_mgr)
         self.mic_selector.device_selected.connect(self.on_mic_selected)
         right.addWidget(self.mic_selector, stretch=1)
 
         self.process_btn = QPushButton("PROCESS GRID")
-        self.process_btn.setStyleSheet(button_style())
         self.process_btn.clicked.connect(self.toggle_process_panel)
         right.addWidget(self.process_btn)
 
         self.stop_btn = QPushButton("STOP SPEECH")
-        self.stop_btn.setStyleSheet(button_style(danger=True))
         self.stop_btn.clicked.connect(self.stop_speaking)
         right.addWidget(self.stop_btn)
-        
+
         self.right_widget = QWidget()
         self.right_widget.setLayout(right)
         self.root.addWidget(self.right_widget, 1, 2)
 
-        self.root.setColumnStretch(0, 2)
-        self.root.setColumnStretch(1, 7)
-        self.root.setColumnStretch(2, 2)
+        self.root.setColumnStretch(0, 3)
+        self.root.setColumnStretch(1, 6)
+        self.root.setColumnStretch(2, 3)
         self.root.setRowStretch(1, 1)
-        self.root.setRowStretch(2, 0)
-        self.root.setRowStretch(3, 0)
 
-        self.process_panel = ProcessPanel(self, self.app_core)
+        self.process_panel = ProcessPanel(self.theme_mgr, self, self.app_core)
         self.process_panel.hide()
         self.process_panel.move(380, 120)
 
+        self.theme_mgr.subscribe(self._apply_theme)
+        self._apply_theme(self.theme_mgr.theme)
+
         self._connect_runtime()
+        self.refresh_voice_mode_button()
 
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.check_status)
@@ -1068,35 +1608,59 @@ class JarvisHUD(QMainWindow):
         if getattr(self.app_core, "should_auto_start_voice", lambda: True)():
             QTimer.singleShot(1000, lambda: self.app_core.event_bus.publish("gui_toggle_mic", True))
 
+    # -------- header ----------
     def _build_header(self):
         header = QFrame()
-        header.setStyleSheet("background-color: rgba(0, 0, 0, 0); border: none;")
+        header.setObjectName("hud_header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(14)
 
-        title = QLabel("FRIDAY")
-        title.setStyleSheet(
-            f"color: {TEXT};"
-            "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-            "font-size: 34px;"
+        self.title_label = QLabel("FRIDAY")
+        layout.addWidget(self.title_label)
+        self.subtitle_label = QLabel("LOCAL INTELLIGENCE SURFACE")
+        layout.addWidget(self.subtitle_label)
+        layout.addStretch(1)
+
+        self.status_label = QLabel("route: idle  ·  lane: idle  ·  voice: idle")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.status_label)
+
+        self.theme_btn = QPushButton()
+        self.theme_btn.setFixedWidth(110)
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        layout.addWidget(self.theme_btn)
+        return header
+
+    def _toggle_theme(self) -> None:
+        name = self.theme_mgr.toggle()
+        _save_theme_pref(name)
+
+    def _apply_theme(self, theme: Theme) -> None:
+        self.central.setStyleSheet(f"background-color: {theme.bg};")
+        self.title_label.setStyleSheet(
+            f"color: {theme.text};"
+            f"font-family: {FONT_STACK};"
+            "font-size: 32px;"
             "font-weight: 800;"
             "letter-spacing: -0.5px;"
             "border: none;"
+            "background: transparent;"
         )
-        layout.addWidget(title)
+        self.subtitle_label.setStyleSheet(label_style(theme, theme.text_dim, 12, "bold"))
+        self.status_label.setStyleSheet(label_style(theme, theme.text_dim, 11))
+        self.theme_btn.setStyleSheet(button_style(theme))
+        self.theme_btn.setText("◐  LIGHT" if theme.name == "dark" else "◑  DARK")
 
-        subtitle = QLabel("LOCAL INTELLIGENCE SURFACE")
-        subtitle.setStyleSheet(label_style(TEXT_DIM, 12, "bold"))
-        layout.addWidget(subtitle)
-        layout.addStretch(1)
+        self.input_field.setStyleSheet(text_box_style(theme, 14))
+        self.send_button.setStyleSheet(button_style(theme, primary=True))
+        self.process_btn.setStyleSheet(button_style(theme))
+        self.stop_btn.setStyleSheet(button_style(theme, danger=True))
+        self.voice_mode_combo.setStyleSheet(combo_style(theme))
+        for label in self._voice_labels:
+            label.setStyleSheet(label_style(theme, theme.text_dim, 11))
 
-        self.status_label = QLabel("route: idle | lane: idle | voice: idle")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.status_label.setStyleSheet(label_style(TEXT_DIM, 11))
-        layout.addWidget(self.status_label)
-        return header
-
+    # -------- runtime wiring ----------
     def _connect_runtime(self):
         self.app_core.set_gui_callback(self._on_message_from_thread)
         self.message_ready.connect(self.render_message)
@@ -1174,14 +1738,11 @@ class JarvisHUD(QMainWindow):
         self._speaking_until = time.monotonic() + 2.8
         self.reactor.pulse_speaking()
         if text:
-            self._append_event("SPEECH", str(text)[:90])
+            self.event_stream.append("SPEECH", str(text)[:120])
 
     def toggle_pause_everything(self):
         stt = getattr(self.app_core, "stt", None)
-        is_active = bool(
-            getattr(stt, "is_listening", False)
-            or getattr(stt, "wake_armed", False)
-        )
+        is_active = bool(getattr(stt, "is_listening", False) or getattr(stt, "wake_armed", False))
         if is_active:
             self.app_core.event_bus.publish("gui_toggle_mic", False)
             self.stop_speaking()
@@ -1191,7 +1752,7 @@ class JarvisHUD(QMainWindow):
             phrase = "Voice gate opening."
             self.app_core.event_bus.publish("voice_response", phrase)
             QTimer.singleShot(1200, lambda: self.app_core.event_bus.publish("voice_activation_requested", {"source": "button"}))
-        self._append_chat_bubble("system", phrase)
+        self.chat_view.add_message("system", phrase)
 
     def check_status(self):
         try:
@@ -1219,10 +1780,12 @@ class JarvisHUD(QMainWindow):
             last_tool = ""
             if routing_state:
                 last_tool = getattr(routing_state.last_decision, "tool_name", "") or ""
-            tool_part = f" → {last_tool}" if last_tool and last_tool != "idle" else ""
+            tool_part = f"  →  {last_tool}" if last_tool and last_tool != "idle" else ""
             self.status_label.setText(
-                f"route: {route_source}{tool_part} | lane: {lane} | voice: {mode} | disabled: {disabled_count}"
+                f"route: {route_source}{tool_part}  ·  lane: {lane}  ·  voice: {mode}  ·  disabled: {disabled_count}"
             )
+            if lane and lane != "idle":
+                self.models_panel.set_active_lane(lane)
         except Exception as exc:
             logger.exception("HUD status refresh failed: %s", exc)
 
@@ -1240,7 +1803,9 @@ class JarvisHUD(QMainWindow):
         self.is_processing = True
         self.update_send_button_state()
         self.reactor.set_state("processing")
-        self._append_event("TURN", str((payload or {}).get("text", ""))[:90] if isinstance(payload, dict) else "")
+        self._pending_lane = None
+        if isinstance(payload, dict):
+            self.event_stream.append("TURN", str(payload.get("text", ""))[:120])
 
     def _on_turn_processing(self, payload):
         self.turn_state = "processing"
@@ -1252,18 +1817,19 @@ class JarvisHUD(QMainWindow):
         if "tool_name" in payload:
             tool = payload["tool_name"]
             args = payload.get("args") or {}
-            # Show route line in dialog
             self._append_route_line(tool, args)
-            # Show in event stream with key arg preview
             key = next((k for k in ("query", "topic", "text", "path", "url", "app", "command") if k in args), None)
             summary = tool
             if key:
                 summary += f": {str(args[key])[:35]}"
-            self._append_event("RUN", summary[:90])
+            self.event_stream.append("RUN", summary[:120])
         elif "lane" in payload:
-            self._append_event("LLM", str(payload["lane"])[:30])
+            lane = str(payload["lane"])
+            self._pending_lane = lane
+            self.event_stream.append("LLM", lane[:60])
+            self.models_panel.set_active_lane(lane)
         elif payload.get("text"):
-            self._append_event("INFO", str(payload["text"])[:90])
+            self.event_stream.append("INFO", str(payload["text"])[:120])
 
     def _on_turn_finished(self, payload):
         self.turn_state = "idle"
@@ -1273,8 +1839,8 @@ class JarvisHUD(QMainWindow):
             metrics = payload["metrics"]
             dur = metrics.get("duration_ms", 0)
             ok = payload.get("ok", True)
-            status = "OK" if ok else "FAIL"
-            self._append_event("DONE", f"{status} {dur:.0f}ms")
+            tag = "DONE" if ok else "FAIL"
+            self.event_stream.append(tag, f"{'OK' if ok else 'FAIL'}  ·  {dur:.0f}ms")
 
     def _on_tool_finished(self, payload):
         if not isinstance(payload, dict):
@@ -1284,18 +1850,20 @@ class JarvisHUD(QMainWindow):
         dur = payload.get("duration_ms", 0)
         status = "OK" if ok else "FAIL"
         err = payload.get("error", "")
-        detail = f" — {err[:40]}" if err else ""
-        self._append_event("DONE", f"{tool} [{status}] {dur:.0f}ms{detail}")
+        detail = f"  —  {err[:40]}" if err else ""
+        tag = "DONE" if ok else "FAIL"
+        self.event_stream.append(tag, f"{tool}  [{status}]  {dur:.0f}ms{detail}")
 
     def update_send_button_state(self):
         if not hasattr(self, "send_button"):
             return
+        theme = self.theme_mgr.theme
         if getattr(self, "is_processing", False):
             self.send_button.setText("■ STOP")
-            self.send_button.setStyleSheet(button_style(danger=True))
+            self.send_button.setStyleSheet(button_style(theme, danger=True))
         else:
-            self.send_button.setText("ENTER")
-            self.send_button.setStyleSheet(button_style())
+            self.send_button.setText("SEND")
+            self.send_button.setStyleSheet(button_style(theme, primary=True))
 
     def handle_return_pressed(self):
         text = self.input_field.text().strip()
@@ -1325,14 +1893,14 @@ class JarvisHUD(QMainWindow):
             self._report_option_error("MIC", exc)
             return
         label = getattr(stt, "device_label", "selected device")
-        self._append_chat_bubble("system", f"Microphone switched to {label}")
-        self._append_event("MIC", label)
+        self.chat_view.add_message("system", f"Microphone switched to {label}")
+        self.event_stream.append("MIC", label)
 
     def _report_option_error(self, label, exc):
         message = str(exc) or exc.__class__.__name__
         logger.exception("HUD %s option failed: %s", label, exc)
-        self._append_event(label, f"FAILED: {message}"[:90])
-        self._append_chat_bubble("system", f"{label.title()} option failed: {message}")
+        self.event_stream.append("FAIL", f"{label} {message}"[:120])
+        self.chat_view.add_message("system", f"{label.title()} option failed: {message}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1341,48 +1909,32 @@ class JarvisHUD(QMainWindow):
                 self.drag_pos = offset
                 event.accept()
                 return
-        
         self.drag_pos = None
         super().mousePressEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         w = event.size().width()
-        
-        mode = "narrow" if w < 900 else "wide"
-        if getattr(self, "_current_layout_mode", None) == mode:
+        mode = "narrow" if w < 980 else "wide"
+        if self._current_layout_mode == mode:
             return
         self._current_layout_mode = mode
-        
-        # Responsive reflow
         if mode == "narrow":
-            # Mobile / Tablet (1 column)
             self.root.addWidget(self.header_widget, 0, 0, 1, 1)
             self.root.addWidget(self.center_widget, 1, 0, 1, 1)
             self.root.addWidget(self.left_widget, 2, 0, 1, 1)
             self.root.addWidget(self.right_widget, 3, 0, 1, 1)
-            
             self.root.setColumnStretch(0, 1)
             self.root.setColumnStretch(1, 0)
             self.root.setColumnStretch(2, 0)
-            
-            self.root.setRowStretch(1, 0)
-            self.root.setRowStretch(2, 0)
-            self.root.setRowStretch(3, 0)
         else:
-            # Desktop / TV (3 columns)
             self.root.addWidget(self.header_widget, 0, 0, 1, 3)
             self.root.addWidget(self.left_widget, 1, 0, 1, 1)
             self.root.addWidget(self.center_widget, 1, 1, 1, 1)
             self.root.addWidget(self.right_widget, 1, 2, 1, 1)
-            
-            self.root.setColumnStretch(0, 2)
-            self.root.setColumnStretch(1, 7)
-            self.root.setColumnStretch(2, 2)
-            
-            self.root.setRowStretch(1, 1)
-            self.root.setRowStretch(2, 0)
-            self.root.setRowStretch(3, 0)
+            self.root.setColumnStretch(0, 3)
+            self.root.setColumnStretch(1, 6)
+            self.root.setColumnStretch(2, 3)
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos is not None:
@@ -1401,145 +1953,58 @@ class JarvisHUD(QMainWindow):
                 self.showNormal()
             else:
                 self.showFullScreen()
+        elif event.key() == Qt.Key.Key_T and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._toggle_theme()
 
     def _on_message_from_thread(self, payload):
         self.message_ready.emit(payload)
 
     def render_message(self, payload):
         if not isinstance(payload, dict):
-            self._append_chat_bubble("assistant", str(payload))
+            self.chat_view.add_message("assistant", str(payload), model_lane=self._pending_lane, model_label=self._lane_label(self._pending_lane))
+            self.event_stream.append("ASSISTANT", str(payload)[:120])
             return
         text = payload.get("text", "")
         role = payload.get("role", "assistant")
         if not text:
             return
-        self._append_chat_bubble(role, text)
-        self._append_event(role.upper(), text[:90])
+        lane = self._pending_lane if role == "assistant" else None
+        self.chat_view.add_message(role, text, model_lane=lane, model_label=self._lane_label(lane))
+        self.event_stream.append(role.upper(), text[:120])
 
-    def _append_chat_bubble(self, role: str, text: str):
-        """Append a message to the DIALOG as a styled HTML chat bubble."""
-        if not text or not text.strip():
-            return
-        safe = (html_escape(text.strip())
-                .replace("\n", "<br/>"))
-        ts = time.strftime("%H:%M")
-        if role == "user":
-            html = (
-                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
-                '<tr><td width="20%">&nbsp;</td>'
-                '<td align="right" bgcolor="#0d1e38">'
-                f'<span style="color:#8ab4ff;font-size:10px;font-weight:bold;">YOU</span>'
-                f'&nbsp;<span style="color:#3a5a7a;font-size:9px;">{ts}</span><br/>'
-                f'<span style="color:#ccdeff;font-size:13px;">{safe}</span>'
-                '</td></tr></table>'
-                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
-            )
-        elif role == "assistant":
-            html = (
-                '<table width="100%" cellpadding="5" cellspacing="0" border="0">'
-                '<tr><td align="left" bgcolor="#061410">'
-                f'<span style="color:#5dffbf;font-size:10px;font-weight:bold;">FRIDAY</span>'
-                f'&nbsp;<span style="color:#2a4a3a;font-size:9px;">{ts}</span><br/>'
-                f'<span style="color:#b0f0cc;font-size:13px;">{safe}</span>'
-                '</td><td width="20%">&nbsp;</td></tr></table>'
-                '<p style="margin:0;padding:0;font-size:3px;">&nbsp;</p>'
-            )
-        else:
-            html = (
-                f'<p align="center"><span style="color:#4a5a5a;font-size:10px;">[{safe}]</span></p>'
-            )
-        self._chat_html_parts.append(html)
-        cursor = QTextCursor(self.subtitle_label.document())
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml(html)
-        sb = self.subtitle_label.verticalScrollBar()
-        sb.setValue(sb.maximum())
+    def _lane_label(self, lane: str | None) -> str | None:
+        if not lane:
+            return None
+        manager = getattr(getattr(self.app_core, "router", None), "model_manager", None)
+        if not manager:
+            return lane
+        try:
+            profile = manager.profile(lane)
+        except Exception:
+            return lane
+        return os.path.basename(profile.path).replace(".gguf", "")
 
     def _append_route_line(self, tool_name: str, args: dict | None = None):
-        """Insert a dim route indicator between messages in the DIALOG."""
         label = tool_name.replace("_", " ")
-        parts = [f"▶ {label}"]
+        parts = [f"▸ {label}"]
         if args:
             key = next((k for k in ("query", "topic", "text", "path", "url", "app", "command") if k in args), None)
             if key:
-                val = html_escape(str(args[key])[:40])
+                val = str(args[key])[:40]
                 parts.append(f"({val})")
-        safe = " ".join(parts)
-        html = f'<p align="center"><span style="color:#3a5a4a;font-size:10px;">{safe}</span></p>'
-        cursor = QTextCursor(self.subtitle_label.document())
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml(html)
-        sb = self.subtitle_label.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _set_transcript_text(self, role: str, text: str):
-        """Legacy helper — appends a system note to the chat log."""
-        self._append_chat_bubble("system", text)
-
-    def _append_event(self, label: str, text: str):
-        if not hasattr(self, "event_stream"):
-            return
-        line = f"{time.strftime('%H:%M:%S')}  {label:<7} {text}".rstrip()
-        existing = self.event_stream.toPlainText().splitlines()
-        next_lines = (existing + [line])[-_EVENT_STREAM_MAX_LINES:]
-        self.event_stream.setPlainText("\n".join(next_lines))
-        self.event_stream.verticalScrollBar().setValue(self.event_stream.verticalScrollBar().maximum())
+        self.chat_view.add_route("  ".join(parts))
 
 
-def text_box_style(font_size=13):
-    return (
-        "background-color: rgba(20, 20, 22, 180);"
-        f"color: {TEXT};"
-        "font-family: 'Segoe UI Variable', 'SF Pro Display', 'Inter', sans-serif;"
-        f"font-size: {font_size}px;"
-        "border: 1px solid rgba(255, 255, 255, 25);"
-        "border-radius: 8px;"
-        "padding: 10px;"
-    )
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def start_hud(app_core):
-    app = QApplication(sys.argv)
-    
-    # Global scrollbar style to make it look premium
-    app.setStyleSheet("""
-        QScrollBar:vertical {
-            border: none;
-            background: rgba(255, 255, 255, 10);
-            width: 8px;
-            margin: 0px;
-            border-radius: 4px;
-        }
-        QScrollBar::handle:vertical {
-            background: rgba(255, 255, 255, 40);
-            min-height: 20px;
-            border-radius: 4px;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            height: 0px;
-        }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-            background: none;
-        }
-        QScrollBar:horizontal {
-            border: none;
-            background: rgba(255, 255, 255, 10);
-            height: 8px;
-            margin: 0px;
-            border-radius: 4px;
-        }
-        QScrollBar::handle:horizontal {
-            background: rgba(255, 255, 255, 40);
-            min-width: 20px;
-            border-radius: 4px;
-        }
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            width: 0px;
-        }
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-            background: none;
-        }
-    """)
+    app = QApplication.instance() or QApplication(sys.argv)
     window = JarvisHUD(app_core)
+    # Global scrollbar styles already injected per-widget; set window-level too.
+    app.setStyleSheet(scrollbar_style(window.theme_mgr.theme))
+    window.theme_mgr.subscribe(lambda t: app.setStyleSheet(scrollbar_style(t)))
     window.showMaximized()
     sys.exit(app.exec())

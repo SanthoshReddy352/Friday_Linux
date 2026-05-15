@@ -50,6 +50,7 @@
 | 2026-05-14 | §15 | **Setup script refresh.** `setup.sh` and `setup.ps1` updated to (a) idempotently skip each phase when its outcome is already on disk — system packages (`dpkg -s`), venv (`.venv/bin/python3` executable), pip deps (SHA-256 of `requirements.txt` cached in `.venv/.requirements.sha256`), Playwright (`~/.cache/ms-playwright/chromium-*`), each model file, autostart unit/Startup .bat; (b) download the actual current models — `mlabonne/Qwen3-1.7B-abliterated-GGUF`, `mlabonne/Qwen3-4B-abliterated-GGUF`, `ggml-org/SmolVLM2-2.2B-Instruct-GGUF` (model + mmproj) — not the historical Gemma 2B / Qwen2.5 7B; (c) **no longer install Piper or the TTS voice** — those are now manual per `SETUP_GUIDE.md` → "Manual: Piper TTS". `SETUP_GUIDE.md` and `SETUP_GUIDE_WINDOWS.md` both rewritten with full step-by-step manual paths covering: system packages, venv, pip, Playwright, models (one wget/Invoke-WebRequest per file), Whisper STT, Piper binary + voice, wake autostart, Mem0 enable. |
 | 2026-05-14 | §22 | **GUI redesign v2 — center-stage particle reactor**. `gui/agent_hud.py` rewritten end-to-end. New `ParticleReactor` widget (4-layer orbital particle system: 70 halo + 110 outer + 90 mid + 70 inner, plus dynamic energy sparks emitted on state change) replaces the arc/tick-ring reactor. Drawn with `CompositionMode_Plus` additive blending so overlapping particles bloom into a coherent glow; per-particle radial gradient + hot-core dot; 60fps tick. 5 states (idle/armed/listening/processing/speaking/muted) drive particle speed, radial breathing, and burst emissions. Layout fully restructured: reactor now occupies the **center column**, framed above by state caption + state line and below by an inline input dock (mic / stop / input edit / @-file / send). Left column = `ChatColumn` (compact role-styled bubbles, newest at bottom); right column = `EventColumn` (per-turn `_TraceCard` stack with status dot + step list + duration footer). New `TopBar` (FRIDAY brand + voice-mode combo + theme button) and `FooterBar` (per-role model status dots for CHAT/TOOL/VLM/STT/TTS + global state line). Dark theme tokens now true `#000000` void with electric-cyan `#00e1ff` accent and magenta/violet hue-shift palette; light theme is high-contrast `#f4f5f8` paper with deep electric ink `#0042a8`. Reactor's `apply_theme()` re-renders particles in the new palette. Existing API contracts preserved: `start_hud(app_core)`, `app_core.process_input(text, source="gui")`, `app_core.cancel_current_task(announce=False)`, `app_core.tts.stop()`, `app_core.set_listening_mode(mode)`, `app_core.load_session_rag_file(path)`, and the same event-bus subscriptions (`turn_started`, `turn_completed`, `turn_failed`, `tool_started`, `tool_finished`, `llm_started`, `voice_response`, `voice_runtime_state_changed`, `gui_toggle_mic`, `listening_mode_changed`). 469/469 tests pass; smoke-launched under `QT_QPA_PLATFORM=offscreen` with theme + state cycling. |
 | 2026-05-14 | §22 | **GUI redesign v1 — Agent-Assistant HUD (`gui/agent_hud.py`)**. New three-pane Qt window: LeftRail (FRIDAY brand + animated ArcReactor "Iron-Man core" + voice-mode combo + per-role model status + theme toggle), center ChatPane (role-styled message bubbles, auto-scroll, status lines) + InputBar (mic, stop-speech, line edit, attach, send), right EventTracePane (stacked per-turn cards showing INTENT/PLAN/ROUTE/TOOL/LLM/SPEECH/DONE steps with status dots and per-turn duration footer). `ArcReactor` is a custom `QWidget.paintEvent` widget with 5 states (muted/armed/listening/processing/speaking), `QRadialGradient` core, 60-tick outer chronograph ring, rotating mid-arcs, segmented inner ring, 60fps breathing animation; clicking it toggles the mic. Theme system: token tables (`_DARK`, `_LIGHT`) → `qss(tokens)` builder; toggle button persists choice to `data/gui_state.json`. EventBus wiring uses thread-safe `pyqtSignal` bridges (`sig_message`, `sig_turn_started/event/finished`, `sig_voice_runtime`, `sig_mic_toggle`) subscribed to `turn_started`, `turn_completed`, `turn_failed`, `tool_started`, `tool_finished`, `llm_started`, `voice_response`, `voice_runtime_state_changed`, `gui_toggle_mic`, `listening_mode_changed`. `main.py` now imports `start_hud` lazily — defaults to the new HUD; `--classic-hud` flag falls back to legacy `gui/hud.py`. Smoke-launched against the real `RuntimeKernel` with `QT_QPA_PLATFORM=offscreen`; 469/469 tests pass after the change. |
+| 2026-05-15 | §22 | **HUD overhaul — `gui/hud.py` rewrite + `--agent-hud` flag removed**. `main.py` simplified: dropped the (broken) `--agent-hud` flag since `gui/agent_hud.py` no longer exists; the desktop HUD entry-point is now `gui.hud.start_hud` unconditionally. `gui/hud.py` rebuilt around a `ThemeManager` (subscribe/notify) with two palettes (`_theme_dark` / `_theme_light`) and ~25 semantic tokens; every panel, label, button, scrollbar, and reactor accent reads from the active theme and re-styles on switch. New `ChatView` (vertical `QScrollArea` of `ChatBubble` cards) replaces the old `QTextEdit` — bubbles are role-aligned (user right, assistant left, system center) with a meta line showing role · timestamp · model badge; `mark_assistant_model(lane, label)` tags the latest assistant bubble with the model that produced the reply (read from `llm_started` payload). New `EventStreamView` (subclass of `QListWidget`) renders each event with a tagged HTML chip via per-item `QLabel` — tag colors come from theme tokens (`success`, `warning`, `danger`, `info`, `purple`, `magenta`, `accent`) keyed by `_EVENT_COLORS`. New `ModelsPanel` reads `app_core.router.model_manager._profiles`, draws one card per role (chat/tool) with a status dot (loaded=success, missing=danger, failed=warning), filename, ctx, temp; `set_active_lane(lane)` highlights the active card; auto-refreshes every 2s. Header gains a theme-toggle button + `Ctrl+T` shortcut; preference persisted to `data/gui_state.json` (`{"theme": "dark"|"light"}`). The pure formatter helpers consumed by `tests/test_hud.py` (`format_hud_message`, `format_voice_mode_label`, `format_voice_runtime_status`, `format_weather_status`, `format_calendar_event_item`) are preserved with byte-identical behavior — all 7 hud tests still pass. Fixed an invalid f-string format spec (`{tag:&lt;7}` → pre-padded `tag.ljust(7)` then `html_escape`) that would have raised `ValueError` on the first event append. |
 | 2026-05-14 | §1, §2, §14d, §17 | **Production-hardening pass (routing + memory + Windows)**. Routing: bare `\btime\b`, `\bdate\b`, `\bbattery\b`, `\bmemory\b` patterns removed from router and route_scorer; `_parse_screenshot` requires explicit capture verb; `_parse_volume` requires audio context; `_parse_system` requires explicit usage/status framing; embedding router blocklist expanded to all arg-requiring tools (`launch_app`, `play_youtube`, `search_google`, `open_browser_url`, `query_document`, `delete_memory`, …). Memory: `MemoryService.record_turn` (previously dead code) now invoked from `MemoryCuratorAgent.curate()` — feeds Mem0 extractor; `TurnOrchestrator._build_context_bundle` prefers `MemoryService.build_context_bundle` so Mem0 `user_facts` reach the prompt; `AssistantContext.build_chat_messages` reads `user_facts` and appends to chat prompt; `save_note` mirrors into `memory_items`; `MemoryCuratorAgent` slug-keys likes/preference facts so multiples coexist; `EXPLICIT_MEMORY_PATTERN` requires anchor (`:`, `-`, `that`); new `_parse_memory_query` parser routes "what do you remember about me?" → `show_memories`. Windows: `wake_porcupine.py` cross-platform (tasklist, creationflags, Windows venv path), `register_wake.py` rewritten to dispatch by OS (systemd / Startup .bat / LaunchAgent plist), `APP_PREFERENCES` adds Windows commands (calc.exe, explorer.exe, msedge, notepad.exe, …), `_launch_single_application` uses `os.startfile` + creationflags on Windows. Setup: `setup.sh` and `setup.ps1` rewritten with idempotency, optional packages, parameters (-SkipModels, -Force), and autostart prompts. Docs: SETUP_GUIDE.md refreshed for Linux, new SETUP_GUIDE_WINDOWS.md created. Porcupine key now read from `FRIDAY_PORCUPINE_KEY` env var. |
 
 ---
@@ -2466,9 +2467,10 @@ If any of these fail, the build is **not shippable**:
 - [ ] T-W.3 (Windows: `register_wake.py` drops `.bat` into `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`)
 - [ ] T-W.4 (Linux + Windows: `wake_porcupine.py` refuses to start when `FRIDAY_PORCUPINE_KEY` is empty and logs the reason)
 - [ ] T-W.5 (`setup.ps1 -SkipModels -SkipPlaywright` completes without downloading any model)
-- [ ] T-22.1 (`python main.py` boots the new Agent HUD without Qt or import errors)
-- [ ] T-22.2 (Theme toggle persists across restarts via `data/gui_state.json`)
-- [ ] T-22.5 (`python main.py --classic-hud` still boots the legacy `gui/hud.py` window)
+- [ ] T-22.1 (`python main.py` boots `gui/hud.py` without Qt or import errors)
+- [ ] T-22.2 (Theme toggle persists across restarts via `data/gui_state.json`; both button click and `Ctrl+T` trigger it)
+- [ ] T-22.6 (event stream renders without raising — guard against the old `{tag:&lt;7}` invalid f-string format spec)
+- [ ] T-22.8 (`python -m pytest tests/test_hud.py` passes 7/7 — the pure formatter helpers must remain importable from `gui.hud`)
 
 ### Manual test cases for the 2026-05-14 hardening pass
 
@@ -2696,56 +2698,64 @@ If any of these fail, the build is **not shippable**:
 
 ---
 
-## 22. Agent HUD (new GUI)
+## 22. Desktop HUD (`gui/hud.py`)
 
-The new desktop GUI lives in `gui/agent_hud.py`. `main.py` launches it by default; pass `--classic-hud` to fall back to the legacy `gui/hud.py`.
+The desktop HUD lives in `gui/hud.py`. `main.py` launches it by default — no flags required. It is built around a `ThemeManager` with two palettes (dark / light); every widget subscribes and re-styles when the theme changes.
 
 **[T-22.1] HUD boot**
 Steps:
 1. `python main.py` (no flags) → window opens maximized.
-2. Confirm layout: TopBar (FRIDAY brand left, voice-mode combo + theme button right), three body columns (Chat left, Center Stage with reactor middle, Event Trace right), FooterBar (CHAT/TOOL/VLM/STT/TTS status dots).
-3. Confirm the **particle reactor** is centered horizontally and vertically in the middle column, with the state caption "CORE · ONLINE / READY" directly above it and the input dock below.
+2. Confirm layout: header (FRIDAY brand + subtitle + status line + theme toggle button on the right); 3-column body (left: clock/weather, system status, event stream; center: particle globe reactor + chat view; right: models panel, voice runtime, pulse bars, mic selector, action buttons).
 
-Expected: no Qt errors in console; particles animate continuously in the idle layered-orbital pattern; pulsing core glow.
+Expected: no Qt errors in console; reactor animates continuously; chat view is empty and scrollable; status line reads "READY" (or a runtime equivalent).
 
-**[T-22.2] Theme toggle**
+**[T-22.2] Theme toggle (button + `Ctrl+T`)**
 Steps:
-1. Click the theme button (sun/moon) in the LeftRail.
-2. Close and re-open the app.
+1. Click the theme button in the header (sun / moon icon).
+2. Press `Ctrl+T`.
+3. Close and re-open the app.
 
-Expected: theme switches between dark/light; choice persists in `data/gui_state.json` (`"theme": "light"` or `"dark"`).
+Expected: theme switches between dark and light on click *and* shortcut; **every** panel re-styles (header, panels, chat bubbles, event stream tags, models panel cards, scroll bars, buttons, the particle reactor accent stars). Preference persists in `data/gui_state.json` (`{"theme": "light"}` or `{"theme": "dark"}`).
 
-**[T-22.3] Event trace populates per turn**
+**[T-22.3] Chat bubble rendering**
 Steps:
-1. Type "what time is it" in the input bar, press Enter.
+1. Type "what time is it" → Enter.
+2. Wait for the assistant reply.
 
-Expected: a new turn card appears in the right pane with INTENT → TOOL → DONE steps (plus SPEECH if voice is on); footer shows duration in ms.
+Expected: a right-aligned user bubble appears first with meta line "USER · HH:MM"; the assistant reply appears as a left-aligned bubble with meta line "FRIDAY · HH:MM · <model label>" where `<model label>` reflects the lane that produced the reply (e.g. `chat / Qwen3-4B-abliterated`). System messages (route notices) render center-aligned in a slimmer surface tone.
 
-**[T-22.4] Particle reactor reflects voice runtime state**
+**[T-22.4] Model badge on assistant message**
 Steps:
-1. Toggle mic via clicking the reactor itself or the `◉ MIC` pill in the input dock.
-2. Speak to trigger listening → processing → speaking.
+1. Send a chat prompt (forces the **chat** lane).
+2. Send a tool-routed prompt like "battery level" (forces the **tool** lane).
 
-Expected: particles visibly change behavior — idle has gentle orbits; listening pulls particles inward; processing accelerates orbital speed and emits a burst of sparks; speaking emits an outward wave + the sweep arc appears. State line under the caption changes color (cyan → violet → magenta → green).
+Expected: the first assistant bubble's meta line ends with the chat model label; the second ends with the tool model label. The `ModelsPanel` on the right highlights the corresponding card while that lane is active.
 
-**[T-22.6] Dark theme is true black**
+**[T-22.5] Models panel reflects live state**
 Steps:
-1. With dark theme active, sample the background pixel color (e.g. screenshot + color picker).
+1. Inspect the right column "MODELS" panel.
 
-Expected: background is `#000000` (no greys, no off-blacks); particle glow is the only light source.
+Expected: one card per role (CHAT, TOOL). Each card shows a status dot — green when the lane is loaded, red when missing, amber when failed — plus the model filename, ctx window, and temperature. Cards auto-refresh every ~2s (kill / load a model lane to confirm).
 
-**[T-22.7] Light theme contrast**
+**[T-22.6] Event stream color coding**
 Steps:
-1. Toggle to light theme.
-2. Read every label, bubble, and state line.
+1. Send any prompt that triggers a tool (e.g. "battery").
+2. Watch the left-column "EVENTS" panel.
 
-Expected: text is `#0a0c14` on `#f4f5f8` paper; accent is deep electric `#0042a8`; all labels remain readable; reactor still visible against the light field.
+Expected: events appear with a colored tag chip — TURN/RUN in accent, LLM in purple, TOOL/INFO in info, DONE in success, FAIL in danger, SPEECH/MIC in magenta, USER/ASSISTANT/SYSTEM in their bubble colors. Tags are mono-padded so timestamps line up. No `ValueError` on the first event (regression guard for the old `{tag:&lt;7}` format spec bug).
 
-**[T-22.5] Classic HUD fallback**
+**[T-22.7] Theme propagation to all widgets**
 Steps:
-1. `python main.py --classic-hud`.
+1. Send a few messages so chat bubbles, event entries, and a model badge are all on screen.
+2. Toggle the theme.
 
-Expected: legacy HUD opens; no `ImportError`.
+Expected: bubbles re-paint (text and background), event tag chips swap palette, models panel cards re-style, scrollbars + buttons + reactor accent colors all swap together. No mixed-theme artifacts (e.g. dark bubble lingering in light mode).
+
+**[T-22.8] Preserved formatter helpers**
+Steps:
+1. `python -m pytest tests/test_hud.py -v`.
+
+Expected: all 7 tests pass (`format_hud_message`, `format_voice_mode_label`, `format_voice_runtime_status` ×2, `format_weather_status`, `format_calendar_event_item`). These pure helpers must remain importable from `gui.hud` and behave identically.
 
 ---
 

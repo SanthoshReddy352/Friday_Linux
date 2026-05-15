@@ -122,4 +122,15 @@ def unregister():
 
 
 if __name__ == "__main__":
-    register()
+    import argparse
+    parser = argparse.ArgumentParser(description="Manage Friday Clap Detector autostart.")
+    parser.add_argument("--register", action="store_true", help="Register the clap detector to start at login.")
+    parser.add_argument("--unregister", action="store_true", help="Unregister the clap detector from startup.")
+    
+    args = parser.parse_args()
+    
+    if args.unregister:
+        unregister()
+    else:
+        # Default to register if no args or --register
+        register()
