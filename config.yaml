@@ -54,7 +54,7 @@ voice:
   wake_transcript_fallback: true
   media_max_uninvoked_words: 4
   input_device:
-    id: 64
+    id: 109
     kind: pipewire
     label: Nirvana Ion
 modules:

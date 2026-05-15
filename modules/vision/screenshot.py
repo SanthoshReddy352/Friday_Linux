@@ -9,6 +9,7 @@ Capture priority on Wayland:
 """
 from __future__ import annotations
 
+import glob
 import io
 import os
 
@@ -26,13 +27,25 @@ except ImportError:
     _PIL_AVAILABLE = False
 
 
+def _ensure_xwayland_env() -> None:
+    """Set DISPLAY + XAUTHORITY for Mutter's embedded XWayland if not already set."""
+    if os.environ.get("DISPLAY"):
+        return
+    uid = os.getuid()
+    matches = glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*")
+    if matches:
+        os.environ.setdefault("DISPLAY", ":0")
+        os.environ.setdefault("XAUTHORITY", matches[0])
+
+
 def take_screenshot() -> "Image.Image":
     """Capture the primary monitor and return a PIL RGB Image."""
     if not _PIL_AVAILABLE:
         raise RuntimeError("Pillow is not installed. Run: pip install Pillow")
 
-    # 1. mss — fast, no D-Bus required (works on X11 / Xwayland)
+    # 1. mss via XWayland — instant, works on GNOME Wayland
     if _MSS_AVAILABLE:
+        _ensure_xwayland_env()
         try:
             with mss.MSS() as sct:
                 monitor = sct.monitors[1]
@@ -51,6 +64,7 @@ def take_screenshot() -> "Image.Image":
         import tempfile
         from modules.system_control.screenshot import (
             _take_screenshot_via_mutter_screencast,
+            _take_screenshot_via_gdbus_shell,
             _take_screenshot_via_portal,
             _take_screenshot_via_gnome_shell,
             _take_screenshot_via_gnome_adapter,
@@ -77,12 +91,17 @@ def take_screenshot() -> "Image.Image":
         if img is not None:
             return img
 
+        # 2b. GNOME Shell D-Bus via gdbus CLI — no gi/PyGObject required
+        img = _try_method(_take_screenshot_via_gdbus_shell)
+        if img is not None:
+            return img
+
         # 3. xdg-desktop-portal (non-interactive)
         img = _try_method(lambda p: _take_screenshot_via_portal(p, interactive=False))
         if img is not None:
             return img
 
-        # 4. GNOME Shell D-Bus
+        # 4. GNOME Shell D-Bus via PyGObject
         img = _try_method(_take_screenshot_via_gnome_shell)
         if img is not None:
             return img

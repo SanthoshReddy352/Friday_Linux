@@ -6,8 +6,10 @@ import subprocess
 import time
 import platform
 from datetime import datetime
+from dotenv import load_dotenv
 
 # Config
+load_dotenv()
 ACCESS_KEY = os.environ.get("FRIDAY_PORCUPINE_KEY", "")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 

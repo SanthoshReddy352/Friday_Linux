@@ -408,109 +408,44 @@ class SystemControlPlugin(FridayPlugin):
         return self.file_controller.confirm_no(text, args)
 
     def handle_shutdown(self, text, args):
-        """Signal the system to perform a clean shutdown."""
-        import concurrent.futures
+        """Signal the system to perform a clean shutdown — fast, no LLM call on exit."""
         import threading
         import time
 
         session_id = getattr(self.app.router, "session_id", None)
-        llm = getattr(self.app.router, "get_llm", lambda: None)()
 
         farewell_phrases = [
-            "Goodbye sir, I'll remember where we left off.",
-            "Powering down, sir. Have a great day.",
-            "Closing protocols. Talk to you later, sir.",
-            "Goodbye sir, saving our session for next time.",
-            "Bye sir, see you soon.",
+            "Goodbye sir.",
+            "Powering down, sir.",
+            "Shutting down, sir.",
+            "See you next time, sir.",
+            "Bye sir.",
         ]
         farewell = random.choice(farewell_phrases)
-        topic_context = ""
 
+        # Save session state for the next startup greeting — no LLM, just store the facts.
         if session_id and hasattr(self.app, "context_store"):
-            summary = self.app.context_store.summarize_session(session_id, limit=20)
-            # Strip trailing farewell turns so they never appear as the resume topic.
-            summary = _strip_shutdown_tail(summary or "")
-            # Count only real role-prefixed turns, not stray continuation lines
-            turn_lines = [l for l in summary.split("\n")
-                          if l.lower().startswith(("user:", "assistant:"))]
-            if len(turn_lines) >= 4 and not _is_trivial_session(summary):
-                topic_context = summary
-                # Store synchronously so it's ready at zero latency next startup
-                self.app.context_store.store_fact("last_session_summary", topic_context, namespace="system")
-                self.app.context_store.store_fact("has_pending_session", "true", namespace="system")
+            try:
+                summary = self.app.context_store.summarize_session(session_id, limit=20)
+                summary = _strip_shutdown_tail(summary or "")
+                turn_lines = [l for l in summary.split("\n")
+                              if l.lower().startswith(("user:", "assistant:"))]
+                if len(turn_lines) >= 4 and not _is_trivial_session(summary):
+                    self.app.context_store.store_fact("last_session_summary", summary, namespace="system")
+                    self.app.context_store.store_fact("has_pending_session", "true", namespace="system")
+                    self.app.context_store.store_fact(
+                        "next_startup_greeting",
+                        "{time_greeting}, sir. Want to pick up where we left off?",
+                        namespace="system",
+                    )
+            except Exception as e:
+                logger.error(f"[handle_shutdown] Session save failed: {e}")
 
-        # Pre-compute TTS budget so the LLM timeout is bounded to the same window.
-        sleep_time = max(3.5, len(farewell.split()) / 1.8 + 2.0)
-        llm_budget = max(2.0, sleep_time - 0.8)  # Leave 0.8 s for the DB write + shutdown
+        # Allow just enough time for TTS to finish saying the short farewell.
+        sleep_time = max(1.2, len(farewell.split()) / 2.5 + 0.6)
 
         def _trigger_shutdown():
-            start_time = time.time()
-
-            if topic_context and session_id and hasattr(self.app, "context_store") and llm:
-                greeting_prompt = (
-                    "You are FRIDAY. The user is returning after ending their session.\n"
-                    "Write ONLY a short continuation sentence — the time-of-day greeting is already "
-                    "prepended separately, so do NOT include any greeting words.\n\n"
-                    "Rules:\n"
-                    "- ONE sentence, under 15 words\n"
-                    "- Reference specifically what the user was doing (use their actual words/topics)\n"
-                    "- Ask casually if they want to continue — sound like a real person\n"
-                    "- No greeting words: no 'Good morning', 'Hello', 'Welcome back', 'Hi', etc.\n\n"
-                    "Examples of good output:\n"
-                    "  We left off on that Python script — want to carry on?\n"
-                    "  You were asking about the weather in Mumbai. Continue from there?\n"
-                    "  Left off mid-search — shall we pick that up?\n\n"
-                    f"Session:\n{topic_context}\n\nOutput:"
-                )
-
-                def _call_llm():
-                    if hasattr(llm, "create_chat_completion"):
-                        messages = with_no_think_user_message([
-                            {"role": "system", "content": "You are FRIDAY. Be concise and natural. Never add greetings."},
-                            {"role": "user", "content": greeting_prompt},
-                        ])
-                        resp = llm.create_chat_completion(
-                            messages=messages,
-                            max_tokens=60,
-                            temperature=0.7,
-                        )
-                        raw = resp["choices"][0]["message"]["content"].strip()
-                    else:
-                        resp = llm(greeting_prompt + "\n\n/no_think", max_tokens=60, temperature=0.7, stop=["\n"])
-                        raw = resp["choices"][0].get("text", "").strip()
-
-                    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                    if "<think>" in raw:
-                        raw = raw.split("<think>")[0].strip()
-                    raw = raw.replace('"', '').replace('\n', ' ').strip()
-                    for prefix in ("output:", "greeting:", "friday:"):
-                        if raw.lower().startswith(prefix):
-                            raw = raw[len(prefix):].strip()
-                    return raw or None
-
-                next_greeting = None
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_call_llm)
-                    try:
-                        next_greeting = future.result(timeout=llm_budget)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning("[handle_shutdown] LLM greeting timed out — using fallback")
-                    except Exception as e:
-                        logger.error(f"[handle_shutdown] LLM greeting failed: {e}")
-
-                stored = (
-                    f"{{time_greeting}}, sir. {next_greeting}"
-                    if next_greeting
-                    else "{time_greeting}, sir. Want to pick up where we left off?"
-                )
-                self.app.context_store.store_fact("next_startup_greeting", stored, namespace="system")
-                logger.info(f"[handle_shutdown] Stored next greeting: {stored[:80]}")
-
-            # Wait for TTS to finish, accounting for time already spent on LLM.
-            elapsed = time.time() - start_time
-            if elapsed < sleep_time:
-                time.sleep(sleep_time - elapsed)
-
+            time.sleep(sleep_time)
             self.app.event_bus.publish("system_shutdown", {})
 
         threading.Thread(target=_trigger_shutdown, daemon=True).start()

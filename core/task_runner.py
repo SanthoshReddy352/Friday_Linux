@@ -45,6 +45,26 @@ class TaskRunner:
             logger.info("[TaskRunner] Task cancelled by user.")
         return was_busy
 
+    def cancel_nowait(self) -> bool:
+        """Signal stop and kill TTS immediately without blocking the caller.
+        The background thread exits on its own once it notices the cancel event.
+        Safe to call from the GUI thread."""
+        with self._lock:
+            old_event = self._cancel_event
+            self._cancel_event = threading.Event()
+            thread = self._thread
+        was_busy = bool(thread and thread.is_alive())
+        if was_busy:
+            old_event.set()
+            tts = getattr(self._app, "tts", None)
+            if tts and hasattr(tts, "stop"):
+                try:
+                    tts.stop()
+                except Exception:
+                    pass
+            logger.info("[TaskRunner] cancel_nowait — signalled, not joining.")
+        return was_busy
+
     def is_busy(self) -> bool:
         with self._lock:
             t = self._thread

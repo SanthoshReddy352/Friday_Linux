@@ -349,8 +349,9 @@ class FridayApp:
 
         if source in ("voice", "gui"):
             if source == "voice":
-                # Pause mic right away; TaskRunner thread resumes it when done.
-                self.event_bus.publish("gui_toggle_mic", False)
+                # Keep mic open so the user can barge in by saying "Friday [command]"
+                # while the task is running. The reactor shows "processing" via
+                # set_processing_state; stop_listening() is intentionally not called.
                 if self.stt and hasattr(self.stt, "set_processing_state"):
                     self.stt.set_processing_state(True)
             self.task_runner.submit(text, source)
@@ -371,6 +372,7 @@ class FridayApp:
 
     def _execute_turn(self, text, source="user", cancel_event=None):
         """Synchronous turn processing — called directly (text/GUI) or via TaskRunner (voice)."""
+        self._current_cancel_event = cancel_event
         route_text = text
         if self.assistant_context and hasattr(self.assistant_context, "clean_user_text"):
             cleaned = self.assistant_context.clean_user_text(text, source=source)

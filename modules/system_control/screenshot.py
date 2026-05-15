@@ -1,4 +1,5 @@
 import glob
+import io
 import os
 import shutil
 import time
@@ -7,20 +8,40 @@ from urllib.parse import unquote, urlparse
 from core.logger import logger
 
 
+def _ensure_xwayland_env() -> bool:
+    """
+    On GNOME Wayland, Mutter runs an embedded XWayland server with a private
+    auth cookie at /run/user/<uid>/.mutter-Xwaylandauth.*.  Set DISPLAY and
+    XAUTHORITY so X11-based capture tools (mss, ImageGrab) can connect.
+    Returns True if DISPLAY is usable after the call.
+    """
+    if os.environ.get("DISPLAY"):
+        return True  # already set (X11 native or already patched)
+    uid = os.getuid()
+    pattern = f"/run/user/{uid}/.mutter-Xwaylandauth.*"
+    matches = glob.glob(pattern)
+    if matches:
+        os.environ.setdefault("DISPLAY", ":0")
+        os.environ.setdefault("XAUTHORITY", matches[0])
+        return True
+    return False
+
+
 def take_screenshot():
     """
     Takes a full-screen screenshot on Linux (Wayland or X11) or Windows.
 
-    Wayland priority:
+    Priority:
+      0. mss via XWayland   (fastest — works on GNOME Wayland via embedded XWayland)
       1. Mutter ScreenCast + PipeWire  (GNOME Wayland native, no dialog)
+      1b. GNOME Shell D-Bus via gdbus CLI (no gi dependency)
       2. xdg-desktop-portal  (interactive=False — no dialog)
-      3. GNOME Shell D-Bus   (org.gnome.Shell.Screenshot, no dialog)
-      4. gnome-screenshot adapter  (watches ~/Pictures/Screenshots/ for the new
-         file because GNOME 43+ ignores the -f flag)
+      3. GNOME Shell D-Bus via PyGObject
+      4. gnome-screenshot adapter  (watches ~/Pictures/Screenshots/)
       5. grim                (wlroots compositors: sway, Hyprland)
       6. spectacle           (KDE Plasma)
-      6. generic X11 tools   (xfce4-screenshooter, maim, scrot, import)
-      7. pyautogui           (X11/Windows fallback)
+      7. generic X11 tools   (xfce4-screenshooter, maim, scrot, import)
+      8. pyautogui           (X11/Windows fallback)
     """
     save_dir = os.path.expanduser("~/Pictures/FRIDAY_Screenshots")
     os.makedirs(save_dir, exist_ok=True)
@@ -31,6 +52,23 @@ def take_screenshot():
     errors = []
 
     if os.name != "nt":
+        # 0. mss via XWayland — instant, no D-Bus, works on GNOME Wayland
+        _ensure_xwayland_env()
+        try:
+            import mss
+            import mss.tools
+            with mss.MSS() as sct:
+                monitor = sct.monitors[1]
+                raw = sct.grab(monitor)
+                png_bytes = mss.tools.to_png(raw.rgb, raw.size)
+                with open(filepath, "wb") as f:
+                    f.write(png_bytes)
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                logger.info(f"Screenshot taken via mss/XWayland: {filepath}")
+                return f"Screenshot saved successfully at: {filepath}"
+        except Exception as e:
+            errors.append(f"mss: {e}")
+
         is_wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(
             os.environ.get("WAYLAND_DISPLAY")
         )
@@ -43,6 +81,13 @@ def take_screenshot():
                 return f"Screenshot saved successfully at: {filepath}"
             errors.append(f"mutter-screencast: {err}")
 
+            # 1b. GNOME Shell D-Bus via gdbus CLI — no gi/PyGObject dependency
+            err = _take_screenshot_via_gdbus_shell(filepath)
+            if err is None:
+                logger.info(f"Screenshot taken via gdbus GNOME Shell: {filepath}")
+                return f"Screenshot saved successfully at: {filepath}"
+            errors.append(f"gdbus-shell: {err}")
+
             # 2. xdg-desktop-portal (non-interactive full-screen)
             err = _take_screenshot_via_portal(filepath, interactive=False)
             if err is None:
@@ -50,14 +95,14 @@ def take_screenshot():
                 return f"Screenshot saved successfully at: {filepath}"
             errors.append(f"xdg-desktop-portal: {err}")
 
-            # 3. GNOME Shell D-Bus (works from a running GUI app, not from terminals)
+            # 3. GNOME Shell D-Bus via PyGObject (if gi is available)
             err = _take_screenshot_via_gnome_shell(filepath)
             if err is None:
                 logger.info(f"Screenshot taken via GNOME Shell D-Bus: {filepath}")
                 return f"Screenshot saved successfully at: {filepath}"
             errors.append(f"gnome-shell-dbus: {err}")
 
-            # 3. gnome-screenshot adapter (GNOME 43+ ignores -f; watch for new file)
+            # 4. gnome-screenshot adapter (GNOME 43+ ignores -f; watch for new file)
             if shutil.which("gnome-screenshot"):
                 err = _take_screenshot_via_gnome_adapter(filepath)
                 if err is None:
@@ -224,6 +269,40 @@ def _take_screenshot_via_mutter_screencast(filepath):
         return str(exc)
 
 
+def _take_screenshot_via_gdbus_shell(filepath):
+    """
+    Call org.gnome.Shell.Screenshot via gdbus CLI — no gi/PyGObject required.
+    Works from within a running GNOME session (same as the gi variant).
+    Returns None on success, error string on failure.
+    """
+    gdbus = shutil.which("gdbus")
+    if not gdbus:
+        return "gdbus not found"
+    try:
+        result = subprocess.run(
+            [
+                gdbus, "call", "--session",
+                "--dest", "org.gnome.Shell.Screenshot",
+                "--object-path", "/org/gnome/Shell/Screenshot",
+                "--method", "org.gnome.Shell.Screenshot.Screenshot",
+                "false", "false", filepath,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode == 0 and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            return None
+        stderr = (result.stderr or result.stdout or "").strip()
+        return stderr or "gdbus: screenshot file not created"
+    except subprocess.TimeoutExpired:
+        return "gdbus: timed out"
+    except Exception as exc:
+        return str(exc)
+
+
 def _take_screenshot_via_gnome_shell(filepath):
     """
     Call org.gnome.Shell.Screenshot D-Bus method directly.
@@ -262,7 +341,7 @@ def _take_screenshot_via_gnome_shell(filepath):
         return str(exc)
 
 
-def _take_screenshot_via_gnome_adapter(filepath, timeout=6.0):
+def _take_screenshot_via_gnome_adapter(filepath, timeout=25.0):
     """
     Workaround for GNOME 43+ where gnome-screenshot ignores the -f flag and
     always saves to ~/Pictures/Screenshots/.  We watch that directory for the
@@ -274,11 +353,18 @@ def _take_screenshot_via_gnome_adapter(filepath, timeout=6.0):
 
     existing = set(glob.glob(os.path.join(screenshots_dir, "*.png")))
 
+    # Inherit the session environment and fix locale to avoid Gtk warnings that
+    # slow down gnome-screenshot on some GNOME setups.
+    env = os.environ.copy()
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+
     try:
         proc = subprocess.Popen(
             ["gnome-screenshot"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
         )
     except Exception as exc:
         return str(exc)
@@ -292,7 +378,7 @@ def _take_screenshot_via_gnome_adapter(filepath, timeout=6.0):
             time.sleep(0.3)  # let the write finish
             new_file = max(new_files, key=os.path.getmtime)
             break
-        time.sleep(0.2)
+        time.sleep(0.3)
 
     try:
         proc.wait(timeout=1)

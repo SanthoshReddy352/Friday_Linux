@@ -10,10 +10,21 @@ from datetime import datetime
 from html import escape as html_escape
 
 from PyQt6.QtCore import QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QConicalGradient,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRadialGradient,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -202,65 +213,71 @@ class Theme:
     badge_bg: str
     scroll_track: str
     scroll_handle: str
+    glow: str
+    gold: str
 
 
 def _theme_dark() -> Theme:
     return Theme(
         name="dark",
-        bg="#0b0d12",
-        surface="#13161e",
-        surface_alt="#1a1e2a",
-        panel="rgba(22, 25, 33, 235)",
-        panel_border="rgba(120, 140, 200, 45)",
-        text="#eef1f7",
-        text_dim="#9aa3b8",
-        text_muted="#6b7384",
-        accent="#7aa2ff",
-        accent_soft="rgba(122, 162, 255, 55)",
-        user_bubble="rgba(122, 162, 255, 60)",
-        user_bubble_text="#dbe5ff",
-        assistant_bubble="rgba(72, 220, 176, 30)",
-        assistant_bubble_text="#cdf6e6",
-        system_bubble="rgba(255, 255, 255, 12)",
-        success="#48dcb0",
-        warning="#ffc857",
-        danger="#ff6b6b",
-        info="#7aa2ff",
-        purple="#bf86ff",
-        magenta="#ff7ab6",
-        badge_bg="rgba(255, 255, 255, 20)",
-        scroll_track="rgba(255, 255, 255, 8)",
-        scroll_handle="rgba(255, 255, 255, 55)",
+        bg="#050505",
+        surface="#0d0d0d",
+        surface_alt="rgba(28, 28, 28, 0.70)",
+        panel="rgba(10, 10, 10, 0.94)",
+        panel_border="#2a2a2a",
+        text="#d0d0d0",
+        text_dim="#808080",
+        text_muted="#454545",
+        accent="#888888",
+        accent_soft="rgba(150, 150, 150, 22)",
+        user_bubble="rgba(50, 50, 50, 0.70)",
+        user_bubble_text="#d0d0d0",
+        assistant_bubble="rgba(22, 22, 22, 0.85)",
+        assistant_bubble_text="#c8c8c8",
+        system_bubble="rgba(18, 18, 18, 0.65)",
+        success="#4ad66d",
+        warning="#f5a623",
+        danger="#e53935",
+        info="#6a9ab0",
+        purple="#a060d0",
+        magenta="#e040aa",
+        badge_bg="rgba(150, 150, 150, 18)",
+        scroll_track="rgba(35, 35, 35, 0.60)",
+        scroll_handle="rgba(100, 100, 100, 0.55)",
+        glow="#e0e0e0",
+        gold="#c8a040",
     )
 
 
 def _theme_light() -> Theme:
     return Theme(
         name="light",
-        bg="#f4f6fb",
+        bg="#eeeeee",
         surface="#ffffff",
-        surface_alt="#eef1f8",
-        panel="rgba(255, 255, 255, 240)",
-        panel_border="rgba(20, 35, 70, 45)",
-        text="#161a23",
-        text_dim="#576074",
-        text_muted="#8b94a8",
-        accent="#3461d8",
-        accent_soft="rgba(52, 97, 216, 35)",
-        user_bubble="rgba(52, 97, 216, 30)",
-        user_bubble_text="#1b3a8f",
-        assistant_bubble="rgba(30, 165, 120, 22)",
-        assistant_bubble_text="#0c5e44",
-        system_bubble="rgba(20, 30, 60, 10)",
-        success="#1fa278",
-        warning="#d18a00",
-        danger="#d34a4a",
-        info="#3461d8",
-        purple="#7c4dd3",
-        magenta="#c93b80",
-        badge_bg="rgba(20, 35, 70, 18)",
-        scroll_track="rgba(20, 30, 60, 10)",
-        scroll_handle="rgba(20, 30, 60, 55)",
+        surface_alt="#e0e0e0",
+        panel="rgba(250, 250, 250, 0.97)",
+        panel_border="#b8b8b8",
+        text="#111111",
+        text_dim="#505050",
+        text_muted="#909090",
+        accent="#444444",
+        accent_soft="rgba(0, 0, 0, 14)",
+        user_bubble="rgba(0, 0, 0, 0.07)",
+        user_bubble_text="#111111",
+        assistant_bubble="rgba(0, 0, 0, 0.04)",
+        assistant_bubble_text="#1a1a1a",
+        system_bubble="rgba(0, 0, 0, 0.03)",
+        success="#1a7a3c",
+        warning="#b06800",
+        danger="#c62828",
+        info="#2c6080",
+        purple="#5e3490",
+        magenta="#9e1f70",
+        badge_bg="rgba(0, 0, 0, 10)",
+        scroll_track="rgba(0, 0, 0, 0.08)",
+        scroll_handle="rgba(0, 0, 0, 0.28)",
+        glow="#222222",
+        gold="#8a6000",
     )
 
 
@@ -338,10 +355,24 @@ MONO_STACK = "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace
 
 
 def panel_style(theme: Theme, border: str | None = None) -> str:
+    b = border or theme.panel_border
     return (
         f"background-color: {theme.panel};"
-        f"border: 1px solid {border or theme.panel_border};"
-        "border-radius: 14px;"
+        f"border: 1px solid {b};"
+        "border-radius: 0px;"
+        f"border-top: 2px solid {theme.accent};"
+    )
+
+
+def panel_title_style(theme: Theme) -> str:
+    return (
+        f"color: {theme.accent};"
+        f"font-family: {MONO_STACK};"
+        "font-size: 9px;"
+        "font-weight: bold;"
+        "letter-spacing: 3px;"
+        "border: none;"
+        "background: transparent;"
     )
 
 
@@ -375,12 +406,12 @@ def button_style(theme: Theme, *, danger: bool = False, primary: bool = False) -
         f"background-color: {bg};"
         f"color: {fg};"
         f"border: 1px solid {theme.panel_border};"
-        "border-radius: 10px;"
+        "border-radius: 2px;"
         "padding: 9px 16px;"
-        f"font-family: {FONT_STACK};"
+        f"font-family: {MONO_STACK};"
         "font-weight: 600;"
         "font-size: 12px;"
-        "letter-spacing: 0.4px;"
+        "letter-spacing: 1px;"
         "}"
         "QPushButton:hover {"
         f"background-color: {hover};"
@@ -393,10 +424,10 @@ def text_box_style(theme: Theme, font_size: int = 13) -> str:
     return (
         f"background-color: {theme.surface_alt};"
         f"color: {theme.text};"
-        f"font-family: {FONT_STACK};"
+        f"font-family: {MONO_STACK};"
         f"font-size: {font_size}px;"
         f"border: 1px solid {theme.panel_border};"
-        "border-radius: 10px;"
+        "border-radius: 2px;"
         "padding: 10px 12px;"
         f"selection-background-color: {theme.accent};"
         "selection-color: white;"
@@ -409,9 +440,9 @@ def combo_style(theme: Theme) -> str:
         f"background-color: {theme.surface_alt};"
         f"color: {theme.text};"
         f"border: 1px solid {theme.panel_border};"
-        "border-radius: 10px;"
+        "border-radius: 2px;"
         "padding: 8px 12px;"
-        f"font-family: {FONT_STACK};"
+        f"font-family: {MONO_STACK};"
         "font-size: 12px;"
         "}"
         "QComboBox::drop-down { border: none; width: 20px; }"
@@ -421,13 +452,14 @@ def combo_style(theme: Theme) -> str:
         f"selection-background-color: {theme.accent};"
         "selection-color: white;"
         f"border: 1px solid {theme.panel_border};"
-        "border-radius: 8px;"
+        "border-radius: 2px;"
         "padding: 4px;"
         "}"
     )
 
 
 def scrollbar_style(theme: Theme) -> str:
+    """Global application stylesheet: scrollbars + context menus."""
     return (
         "QScrollBar:vertical, QScrollBar:horizontal {"
         f"background: {theme.scroll_track};"
@@ -444,6 +476,25 @@ def scrollbar_style(theme: Theme) -> str:
         "}"
         "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
+        # Right-click context menu (Copy, Select All, etc.)
+        "QMenu {"
+        f"background: {theme.surface};"
+        f"color: {theme.text};"
+        f"border: 1px solid {theme.panel_border};"
+        "border-radius: 2px;"
+        "padding: 4px 0px;"
+        "}"
+        "QMenu::item {"
+        "padding: 5px 22px 5px 12px;"
+        "border-radius: 0px;"
+        "}"
+        "QMenu::item:selected {"
+        f"background: {theme.accent_soft};"
+        f"color: {theme.accent};"
+        "}"
+        "QMenu::separator {"
+        f"height: 1px; background: {theme.panel_border}; margin: 3px 0px;"
+        "}"
     )
 
 
@@ -480,61 +531,113 @@ class TechPanel(QFrame):
 
     def _apply_theme(self, theme: Theme) -> None:
         self.setStyleSheet(panel_style(theme))
-        self.title_label.setStyleSheet(label_style(theme, theme.accent, 12, "bold"))
-        self.indicator.setStyleSheet(label_style(theme, theme.success, 10, "bold"))
+        self.title_label.setStyleSheet(panel_title_style(theme))
+        self.indicator.setStyleSheet(label_style(theme, theme.success, 9, "bold"))
 
 
 # ---------------------------------------------------------------------------
-# Canvas widgets (preserved from the original HUD, lightly theme-aware)
+# Arc Reactor — Iron Man JARVIS-style animated core widget
 # ---------------------------------------------------------------------------
 
 
-class ParticleGlobeReactor(QWidget):
+class _MiniReactorIcon(QWidget):
+    """Tiny 3-ring arc reactor icon used in the header."""
+
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
+        super().__init__(parent)
+        self._theme_mgr = theme_mgr
+        self._phase = 0.0
+        t = QTimer(self)
+        t.timeout.connect(self._tick)
+        t.start(50)
+        theme_mgr.subscribe(lambda _t: self.update())
+
+    def _tick(self):
+        self._phase = (self._phase + 0.04) % math.tau
+        self.update()
+
+    def paintEvent(self, event):
+        theme = self._theme_mgr.theme
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx, cy = self.width() / 2, self.height() / 2
+        r = min(cx, cy) - 2
+        p.setPen(Qt.PenStyle.NoPen)
+        # Outer dot ring — 36 dots, every 3rd is accent-colored tick
+        border_c = QColor(theme.panel_border)
+        for i in range(36):
+            ang = self._phase * 0.5 + i * math.tau / 36
+            px = cx + r * math.cos(ang)
+            py = cy + r * math.sin(ang)
+            is_tick = (i % 3 == 0)
+            dot = QColor(theme.accent if is_tick else theme.panel_border)
+            dot.setAlpha(150 if is_tick else 70)
+            p.setBrush(dot)
+            p.drawEllipse(QPointF(px, py), 1.4 if is_tick else 0.8, 1.4 if is_tick else 0.8)
+        # Mid rotating dot ring — 24 pulsing dots
+        for i in range(24):
+            ang = self._phase + i * math.tau / 24
+            px = cx + r * 0.65 * math.cos(ang)
+            py = cy + r * 0.65 * math.sin(ang)
+            wave = 0.5 + 0.5 * math.sin(ang * 2 + self._phase * 0.7)
+            dot = QColor(theme.accent)
+            dot.setAlpha(int(55 + 140 * wave))
+            p.setBrush(dot)
+            p.drawEllipse(QPointF(px, py), 0.7 + wave * 0.7, 0.7 + wave * 0.7)
+        # Core glow — radial gradient filled dot, no outline
+        grad = QRadialGradient(QPointF(cx, cy), r * 0.32)
+        grad.setColorAt(0.0, QColor(theme.glow))
+        grad.setColorAt(1.0, QColor(theme.accent))
+        p.setBrush(QBrush(grad))
+        p.drawEllipse(QPointF(cx, cy), r * 0.32, r * 0.32)
+
+
+class ArcReactorWidget(QWidget):
+    """Hybrid particle-globe + arc reactor — particle cloud orbiting arc reactor structure."""
+
     clicked = pyqtSignal()
 
     def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
         self._theme_mgr = theme_mgr
+
+        # Particle globe (original golden-spiral distribution)
         rng = random.Random(42)
         self.stars = [
-            (
-                rng.random(),
-                rng.random(),
-                rng.uniform(0.45, 1.8),
-                rng.uniform(0.18, 0.72),
-                rng.uniform(0, math.tau),
-            )
-            for _ in range(165)
+            (rng.random(), rng.random(), rng.uniform(0.45, 1.8),
+             rng.uniform(0.18, 0.72), rng.uniform(0, math.tau))
+            for _ in range(120)
         ]
-        self.particles = []
-        count = 2200
+        count = 1800
         golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        self.particles = []
         for index in range(count):
             z = 1.0 - (2.0 * (index + 0.5) / count)
             ring = math.sqrt(max(0.0, 1.0 - z * z))
             theta = index * golden_angle
             shell_bias = rng.uniform(0.82, 1.0) ** 0.38
-            self.particles.append(
-                {
-                    "x": ring * math.cos(theta),
-                    "y": z,
-                    "z": ring * math.sin(theta),
-                    "shell": shell_bias,
-                    "size": rng.uniform(0.65, 1.65),
-                    "phase": rng.uniform(0, math.tau),
-                    "twinkle": rng.uniform(0.75, 1.25),
-                }
-            )
+            self.particles.append({
+                "x": ring * math.cos(theta),
+                "y": z,
+                "z": ring * math.sin(theta),
+                "shell": shell_bias,
+                "size": rng.uniform(0.65, 1.65),
+                "phase": rng.uniform(0, math.tau),
+                "twinkle": rng.uniform(0.75, 1.25),
+            })
 
         self.state = "muted"
         self.phase = 0.0
+        self.inner_phase = 0.0
+        self.pulse_phase = 0.0
+        self.ripple_phase = 0.0
         self.wave_phase = 0.0
         self.speech_energy = 0.0
         self._speaking_until = 0.0
         self.setMinimumSize(250, 200)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(24)
+        self.timer.start(22)
         theme_mgr.subscribe(lambda _t: self.update())
 
     def set_state(self, state):
@@ -551,18 +654,20 @@ class ParticleGlobeReactor(QWidget):
         active_speech = self.state == "speaking" or time.monotonic() < self._speaking_until
         target_energy = 1.0 if active_speech else 0.0
         self.speech_energy += (target_energy - self.speech_energy) * 0.10
-        if active_speech:
-            base_speed = 0.0
-        else:
-            base_speed = 0.006
-            if self.state == "processing":
-                base_speed = 0.013
-            elif self.state == "listening":
-                base_speed = 0.01
-            elif self.state == "armed":
-                base_speed = 0.008
-        self.phase += base_speed
-        self.wave_phase += 0.20 * self.speech_energy
+
+        speeds = {
+            "speaking":   (0.028, -0.018),
+            "processing": (0.018, -0.012),
+            "listening":  (0.014, -0.009),
+            "armed":      (0.010, -0.006),
+            "muted":      (0.005, -0.003),
+        }
+        outer_speed, inner_speed = speeds.get(self.state, (0.005, -0.003))
+        self.phase = (self.phase + outer_speed) % math.tau
+        self.inner_phase = (self.inner_phase + inner_speed) % math.tau
+        self.pulse_phase = (self.pulse_phase + 0.05) % math.tau
+        self.ripple_phase = (self.ripple_phase + 0.16 * max(0.05, self.speech_energy)) % math.tau
+        self.wave_phase = (self.wave_phase + 0.18 * self.speech_energy) % math.tau
         self.update()
 
     def mousePressEvent(self, event):
@@ -570,25 +675,23 @@ class ParticleGlobeReactor(QWidget):
             self.clicked.emit()
             event.accept()
 
-    def _state_color(self):
+    def _state_color(self) -> QColor:
         theme = self._theme_mgr.theme
         if self.state == "speaking" or self.speech_energy > 0.2:
             return QColor(theme.magenta)
         if self.state == "processing":
             return QColor(theme.purple)
         if self.state == "listening":
-            return QColor(theme.magenta)
+            return QColor(theme.info)
         if self.state == "armed":
-            return QColor(theme.purple)
-        return QColor(theme.accent)
+            return QColor(theme.glow)
+        return QColor(theme.text_muted)
 
-    def _rotate_point(self, x, y, z, yaw, pitch, roll):
-        cosy = math.cos(yaw); siny = math.sin(yaw)
+    def _rotate_point(self, x, y, z, yaw, pitch):
+        cosy, siny = math.cos(yaw), math.sin(yaw)
         x, z = x * cosy + z * siny, -x * siny + z * cosy
-        cosp = math.cos(pitch); sinp = math.sin(pitch)
+        cosp, sinp = math.cos(pitch), math.sin(pitch)
         y, z = y * cosp - z * sinp, y * sinp + z * cosp
-        cosr = math.cos(roll); sinr = math.sin(roll)
-        x, y = x * cosr - y * sinr, x * sinr + y * cosr
         return x, y, z
 
     def paintEvent(self, event):
@@ -596,62 +699,177 @@ class ParticleGlobeReactor(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
-        bg = QColor(theme.bg)
-        painter.fillRect(rect, bg)
-
         cx = rect.width() / 2
         cy = rect.height() / 2
-        radius = min(rect.width(), rect.height()) * 0.385
-        accent = self._state_color()
+        min_r = min(cx, cy)
+        radius = min_r * 0.42
+        state_c = self._state_color()
 
-        star_color_base = QColor(theme.text)
-        for sx, sy, size, alpha, star_phase in self.stars:
-            star = QColor(star_color_base)
-            twinkle = 0.65 + 0.35 * math.sin(self.phase * 0.9 + star_phase)
-            star.setAlpha(int(alpha * 80 * twinkle))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(star)
-            painter.drawEllipse(QPointF(sx * rect.width(), sy * rect.height()), size, size)
+        # --- Background ---
+        painter.fillRect(rect, QColor(theme.bg))
+        painter.setPen(Qt.PenStyle.NoPen)
 
+        # --- Stars (background twinkle) ---
+        star_base = QColor(theme.text_dim)
+        for sx, sy, size, alpha, sph in self.stars:
+            sc = QColor(star_base)
+            twinkle = 0.5 + 0.5 * math.sin(self.phase * 0.7 + sph)
+            sc.setAlpha(int(alpha * 55 * twinkle))
+            painter.setBrush(sc)
+            painter.drawEllipse(QPointF(sx * rect.width(), sy * rect.height()), size * 0.7, size * 0.7)
+
+        # --- Outer particle ring (72 dots rotating; every 6th is a bright tick dot) ---
+        outer_r = min_r * 0.88
+        ring_base = QColor(theme.panel_border)
+        for i in range(72):
+            ang = self.phase + i * math.tau / 72
+            px = cx + outer_r * math.cos(ang)
+            py = cy + outer_r * math.sin(ang)
+            is_tick = (i % 6 == 0)
+            dot = QColor(state_c if is_tick else ring_base)
+            dot.setAlpha(200 if is_tick else 70)
+            painter.setBrush(dot)
+            painter.drawEllipse(QPointF(px, py), 2.4 if is_tick else 1.0, 2.4 if is_tick else 1.0)
+
+        # --- Mid particle ring (48 dots counter-rotating with pulse wave) ---
+        mid_r = min_r * 0.65
+        for i in range(48):
+            ang = self.inner_phase + i * math.tau / 48
+            px = cx + mid_r * math.cos(ang)
+            py = cy + mid_r * math.sin(ang)
+            wave = 0.5 + 0.5 * math.sin(ang * 3 + self.pulse_phase)
+            dot = QColor(state_c)
+            dot.setAlpha(int(25 + 165 * wave))
+            painter.setBrush(dot)
+            painter.drawEllipse(QPointF(px, py), 1.1 + wave * 1.7, 1.1 + wave * 1.7)
+
+        # --- Inner particle ring (36 dots, slow counter-rotate) ---
+        inner_ring_r = min_r * 0.46
+        for i in range(36):
+            ang = -self.phase * 0.55 + i * math.tau / 36
+            px = cx + inner_ring_r * math.cos(ang)
+            py = cy + inner_ring_r * math.sin(ang)
+            wave = 0.4 + 0.6 * math.sin(ang * 2 - self.pulse_phase * 0.6)
+            dot = QColor(state_c)
+            dot.setAlpha(max(0, int(12 + 70 * wave)))
+            painter.setBrush(dot)
+            painter.drawEllipse(QPointF(px, py), 0.8 + wave * 0.7, 0.8 + wave * 0.7)
+
+        # --- Particle globe cloud ---
+        yaw = self.phase * 0.30
+        pitch = 0.16 * math.sin(self.phase * 0.15)
         points = []
-        yaw = self.phase * 0.28
-        pitch = 0.18 * math.sin(self.phase * 0.17)
-        roll = 0.08 * math.cos(self.phase * 0.11)
-        for index, particle in enumerate(self.particles):
-            base_x = particle["x"]; base_y = particle["y"]; base_z = particle["z"]
-            x, y, z = self._rotate_point(base_x, base_y, base_z, yaw, pitch, roll)
-            radius_scale = particle["shell"]
-            perspective = 0.76 + 0.28 * z
-            px = cx + x * radius * radius_scale * perspective
-            py = cy + y * radius * radius_scale * (0.82 + 0.08 * z)
-            edge = min(1.0, math.sqrt(base_x * base_x + base_y * base_y) * 1.06)
+        for index, p in enumerate(self.particles):
+            x, y, z = self._rotate_point(p["x"], p["y"], p["z"], yaw, pitch)
+            rs = p["shell"]
+            perspective = 0.76 + 0.26 * z
+            px = cx + x * radius * rs * perspective
+            py = cy + y * radius * rs * (0.82 + 0.08 * z)
+            edge = min(1.0, math.sqrt(p["x"] * p["x"] + p["y"] * p["y"]) * 1.06)
             depth = (z + 1.0) * 0.5
             if self.speech_energy > 0.02:
-                row_wave = math.sin((base_y * 13.5) + self.wave_phase)
-                secondary_wave = 0.42 * math.sin((base_y * 25.0) - (self.wave_phase * 1.35) + particle["phase"])
-                local_jitter = 0.18 * math.sin((base_x * 10.0) + particle["phase"] + self.wave_phase * 0.8)
-                depth_weight = 0.58 + (0.42 * depth)
-                px += self.speech_energy * radius * 0.105 * depth_weight * (row_wave + secondary_wave + local_jitter)
-            edge_visibility = edge ** 1.9
-            alpha = int((16 + 104 * depth) * (0.16 + 0.84 * edge_visibility) * particle["twinkle"])
-            size = particle["size"] * (0.48 + 0.46 * depth)
-            points.append((z, px, py, size, max(6, min(150, alpha)), index))
+                row_wave = math.sin((p["y"] * 13.5) + self.wave_phase)
+                sec_wave = 0.40 * math.sin((p["y"] * 24.0) - self.wave_phase * 1.3 + p["phase"])
+                px += self.speech_energy * radius * 0.10 * (0.55 + 0.45 * depth) * (row_wave + sec_wave)
+            ev = edge ** 1.8
+            alpha = int((14 + 90 * depth) * (0.18 + 0.82 * ev) * p["twinkle"])
+            size = p["size"] * (0.50 + 0.44 * depth)
+            points.append((z, px, py, size, max(5, min(140, alpha)), index))
 
         points.sort(key=lambda item: item[0])
         for z, px, py, size, alpha, index in points:
-            dot = QColor(accent)
-            if index % 7 == 0:
-                dot = QColor(theme.purple)
-            dot.setAlpha(max(8, min(210, alpha)))
-            painter.setPen(Qt.PenStyle.NoPen)
+            dot = QColor(state_c)
+            if index % 9 == 0:
+                dot = QColor(theme.text_dim)
+            dot.setAlpha(max(6, min(190, alpha)))
             painter.setBrush(dot)
             painter.drawEllipse(QPointF(px, py), size, size)
 
-        painter.setFont(QFont("JetBrains Mono", 11, QFont.Weight.Bold))
-        state_text = QColor(theme.text)
-        state_text.setAlpha(180)
-        painter.setPen(QPen(state_text))
-        painter.drawText(QRectF(0, cy + radius + 24, rect.width(), 28), Qt.AlignmentFlag.AlignCenter, self.state.upper())
+        # --- Triangle constellation (vertex clusters + edge particles, no lines) ---
+        tri_r = min_r * 0.36
+        drift = self.inner_phase * 0.28
+        for vi in range(3):
+            vx = cx + tri_r * math.cos(drift + vi * math.tau / 3 - math.pi / 2)
+            vy = cy + tri_r * math.sin(drift + vi * math.tau / 3 - math.pi / 2)
+            vx2 = cx + tri_r * math.cos(drift + (vi + 1) * math.tau / 3 - math.pi / 2)
+            vy2 = cy + tri_r * math.sin(drift + (vi + 1) * math.tau / 3 - math.pi / 2)
+            # Bright vertex dot
+            bright = QColor(state_c)
+            bright.setAlpha(235)
+            painter.setBrush(bright)
+            painter.drawEllipse(QPointF(vx, vy), 2.8, 2.8)
+            # Halo cluster around vertex
+            for di in range(7):
+                sang = di * math.tau / 7 + self.pulse_phase * 0.4
+                sr = 4.0 + 1.8 * math.sin(self.pulse_phase + di)
+                halo = QColor(state_c)
+                halo.setAlpha(max(0, int(75 + 80 * math.sin(self.pulse_phase + di * 0.9))))
+                painter.setBrush(halo)
+                painter.drawEllipse(
+                    QPointF(vx + sr * math.cos(sang), vy + sr * math.sin(sang)), 1.0, 1.0
+                )
+            # Edge particles between this vertex and next
+            for step in range(1, 9):
+                t = step / 9.0
+                ex = vx + t * (vx2 - vx)
+                ey = vy + t * (vy2 - vy)
+                edge_c = QColor(state_c)
+                edge_c.setAlpha(max(0, int(40 + 55 * math.sin(self.pulse_phase * 1.2 + t * math.tau))))
+                painter.setBrush(edge_c)
+                painter.drawEllipse(QPointF(ex, ey), 0.9, 0.9)
+
+        # --- Gold center ring particles ---
+        gold_r = min_r * 0.14
+        gold_base = QColor(theme.gold)
+        for i in range(20):
+            ang = self.phase * 0.55 + i * math.tau / 20
+            px = cx + gold_r * math.cos(ang)
+            py = cy + gold_r * math.sin(ang)
+            pulse = 0.5 + 0.5 * math.sin(self.pulse_phase + i * 0.63)
+            gold_c = QColor(gold_base)
+            gold_c.setAlpha(int(90 + 140 * pulse))
+            sz = 0.9 + pulse * 1.4
+            painter.setBrush(gold_c)
+            painter.drawEllipse(QPointF(px, py), sz, sz)
+
+        # --- Radial core pulse (gradient filled dot, no outline) ---
+        core_r = min_r * 0.26 * (1.0 + 0.16 * math.sin(self.pulse_phase))
+        grad = QRadialGradient(QPointF(cx, cy), core_r)
+        ic = QColor(state_c); ic.setAlpha(210)
+        mc = QColor(state_c); mc.setAlpha(70)
+        tc = QColor(state_c); tc.setAlpha(0)
+        grad.setColorAt(0.0, QColor("#ffffff"))
+        grad.setColorAt(0.14, ic)
+        grad.setColorAt(0.55, mc)
+        grad.setColorAt(1.0, tc)
+        painter.setBrush(QBrush(grad))
+        painter.drawEllipse(QPointF(cx, cy), core_r, core_r)
+
+        # --- Ripple particle rings when speaking (dots on expanding circles, no drawn arcs) ---
+        if self.speech_energy > 0.02:
+            for i in range(3):
+                rp = (self.ripple_phase + i * math.tau / 3) % math.tau
+                rr = min_r * 0.80 * (rp / math.tau)
+                fade = 1.0 - (rp / math.tau)
+                for di in range(28):
+                    ang = di * math.tau / 28
+                    rx = cx + rr * math.cos(ang)
+                    ry = cy + rr * math.sin(ang)
+                    rip_c = QColor(state_c)
+                    rip_c.setAlpha(int(105 * fade * self.speech_energy))
+                    painter.setBrush(rip_c)
+                    painter.drawEllipse(QPointF(rx, ry), max(0.7, 1.5 * fade), max(0.7, 1.5 * fade))
+
+        # --- State label ---
+        lbl_c = QColor(state_c)
+        lbl_c.setAlpha(190)
+        painter.setPen(QPen(lbl_c))
+        painter.setFont(QFont("JetBrains Mono", 9, QFont.Weight.Bold))
+        painter.drawText(
+            QRectF(0, cy + min_r * 0.88 + 6, rect.width(), 20),
+            Qt.AlignmentFlag.AlignCenter,
+            self.state.upper(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -852,10 +1070,10 @@ class PulseBars(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             track_color = QColor(theme.surface_alt)
             painter.setBrush(track_color)
-            painter.drawRoundedRect(track, 4, 4)
+            painter.drawRoundedRect(track, 1, 1)
             fill = QRectF(track.left(), track.top(), track.width() * self.values[i] / 100, track.height())
             painter.setBrush(QColor(theme.success if i % 2 else theme.accent))
-            painter.drawRoundedRect(fill, 4, 4)
+            painter.drawRoundedRect(fill, 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,49 +1235,75 @@ class _ChatMessage:
     timestamp: str = field(default_factory=lambda: time.strftime("%H:%M"))
 
 
+class _TypewriterEffect:
+    """Reveals text character-by-character for assistant messages."""
+
+    _CHARS_PER_TICK = 5
+    _INTERVAL_MS = 16
+
+    def __init__(self, label: "QLabel", full_text: str, parent: "QWidget"):
+        self._label = label
+        self._full = full_text
+        self._pos = 0
+        self._timer = QTimer(parent)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(self._INTERVAL_MS)
+
+    def _tick(self) -> None:
+        self._pos = min(self._pos + self._CHARS_PER_TICK, len(self._full))
+        cursor = "▋" if self._pos < len(self._full) else ""
+        self._label.setText(self._full[:self._pos] + cursor)
+        if self._pos >= len(self._full):
+            self._timer.stop()
+
+    def finish(self) -> None:
+        self._timer.stop()
+        self._label.setText(self._full)
+
+
 class ChatBubble(QFrame):
-    """A single styled message bubble. Adapts to theme via apply_theme()."""
+    """Full-width message bubble. User = right-aligned text. Assistant = left-aligned text."""
 
     def __init__(self, message: _ChatMessage, theme: Theme, parent=None):
         super().__init__(parent)
         self.message = message
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._typewriter: "_TypewriterEffect | None" = None
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        self._row = QHBoxLayout()
-        self._row.setContentsMargins(0, 0, 0, 0)
-        self._row.setSpacing(0)
-        outer.addLayout(self._row)
-
-        self._inner = QFrame()
-        self._inner.setMaximumWidth(640)
-        inner_layout = QVBoxLayout(self._inner)
-        inner_layout.setContentsMargins(14, 10, 14, 12)
+        inner_layout = QVBoxLayout(self)
+        inner_layout.setContentsMargins(16, 10, 16, 12)
         inner_layout.setSpacing(4)
 
+        align_flag = Qt.AlignmentFlag.AlignRight if message.role == "user" else Qt.AlignmentFlag.AlignLeft
+
         self.meta_label = QLabel(self._meta_text(message))
+        self.meta_label.setAlignment(align_flag)
         self.text_label = QLabel(message.text)
         self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(align_flag | Qt.AlignmentFlag.AlignTop)
+        self.text_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         inner_layout.addWidget(self.meta_label)
         inner_layout.addWidget(self.text_label)
 
-        if message.role == "user":
-            self._row.addStretch(1)
-            self._row.addWidget(self._inner)
-        elif message.role == "assistant":
-            self._row.addWidget(self._inner)
-            self._row.addStretch(1)
-        else:
-            self._row.addStretch(1)
-            self._row.addWidget(self._inner)
-            self._row.addStretch(1)
-
         self.apply_theme(theme)
+
+    def start_typewriter(self, text: str) -> None:
+        """Animate assistant reply text appearing progressively."""
+        self._typewriter = _TypewriterEffect(self.text_label, text, self)
+
+    def stop_typewriter(self) -> None:
+        if self._typewriter:
+            self._typewriter.finish()
+            self._typewriter = None
+
+    def set_streaming_text(self, text: str) -> None:
+        """Update text live during chunk streaming (no typewriter effect)."""
+        if self._typewriter:
+            self._typewriter.finish()
+            self._typewriter = None
+        self.text_label.setText(text)
 
     def _meta_text(self, msg: _ChatMessage) -> str:
         role_label = {"user": "YOU", "assistant": "FRIDAY", "system": "SYSTEM"}.get(msg.role, msg.role.upper())
@@ -1077,23 +1321,24 @@ class ChatBubble(QFrame):
         if self.message.role == "user":
             bg = theme.user_bubble
             fg = theme.user_bubble_text
-            border = theme.accent_soft
-            meta_color = theme.accent
+            border_top = theme.accent
+            meta_color = theme.text_dim
         elif self.message.role == "assistant":
             bg = theme.assistant_bubble
             fg = theme.assistant_bubble_text
-            border = "rgba(72, 220, 176, 60)" if theme.name == "dark" else "rgba(30, 165, 120, 55)"
+            border_top = theme.success
             meta_color = theme.success
         else:
             bg = theme.system_bubble
             fg = theme.text_dim
-            border = theme.panel_border
+            border_top = theme.panel_border
             meta_color = theme.text_muted
 
-        self._inner.setStyleSheet(
-            f"background-color: {bg};"
-            f"border: 1px solid {border};"
-            "border-radius: 14px;"
+        self.setStyleSheet(
+            f"QFrame {{ background-color: {bg};"
+            f"border: none;"
+            f"border-left: 2px solid {border_top};"
+            "border-radius: 0px; }}"
         )
         self.meta_label.setStyleSheet(label_style(theme, meta_color, 10, "bold"))
         self.text_label.setStyleSheet(
@@ -1144,13 +1389,14 @@ class ChatView(QScrollArea):
 
         self._bubbles: list = []
         self._last_assistant_bubble: ChatBubble | None = None
+        self._streaming_bubble: ChatBubble | None = None
 
         theme_mgr.subscribe(self._apply_theme)
         self._apply_theme(theme_mgr.theme)
 
     def _apply_theme(self, theme: Theme) -> None:
         self.setStyleSheet(
-            f"QScrollArea {{ background: {theme.surface}; border: 1px solid {theme.panel_border}; border-radius: 12px; }}"
+            f"QScrollArea {{ background: {theme.surface}; border: 1px solid {theme.panel_border}; border-radius: 0px; }}"
             f"QScrollArea > QWidget > QWidget {{ background: {theme.surface}; }}"
             + scrollbar_style(theme)
         )
@@ -1161,28 +1407,57 @@ class ChatView(QScrollArea):
     def add_message(self, role: str, text: str, model_lane: str | None = None, model_label: str | None = None) -> ChatBubble | None:
         if not text or not str(text).strip():
             return None
-        msg = _ChatMessage(role=role, text=str(text).strip(), model_lane=model_lane, model_label=model_label)
-        bubble = ChatBubble(msg, self._theme_mgr.theme, parent=self._inner)
+        clean = str(text).strip()
+        msg = _ChatMessage(role=role, text=clean, model_lane=model_lane, model_label=model_label)
+        # Start assistant bubbles empty so typewriter can fill them
+        display_text = "" if role == "assistant" else clean
+        msg_display = _ChatMessage(role=role, text=display_text, model_lane=model_lane, model_label=model_label)
+        bubble = ChatBubble(msg_display, self._theme_mgr.theme, parent=self._inner)
+        bubble.message = msg  # store full message for model updates
         self._layout.insertWidget(self._layout.count() - 1, bubble)
         self._bubbles.append(bubble)
         if role == "assistant":
             self._last_assistant_bubble = bubble
-        QTimer.singleShot(10, self._scroll_bottom)
+            bubble.start_typewriter(clean)
+        QTimer.singleShot(30, self._scroll_bottom)
         return bubble
 
     def add_route(self, text: str) -> None:
         line = RouteLine(text, self._theme_mgr.theme, parent=self._inner)
         self._layout.insertWidget(self._layout.count() - 1, line)
         self._bubbles.append(line)
-        QTimer.singleShot(10, self._scroll_bottom)
+        QTimer.singleShot(30, self._scroll_bottom)
 
     def mark_assistant_model(self, lane: str | None, label: str | None) -> None:
         if self._last_assistant_bubble is not None:
             self._last_assistant_bubble.update_model(lane, label)
 
+    @property
+    def streaming_bubble(self) -> "ChatBubble | None":
+        return self._streaming_bubble
+
+    def start_streaming_bubble(self, model_lane=None, model_label=None) -> "ChatBubble":
+        """Create an empty assistant bubble and register it as the live-streaming target."""
+        msg = _ChatMessage(role="assistant", text="▋", model_lane=model_lane, model_label=model_label)
+        bubble = ChatBubble(msg, self._theme_mgr.theme, parent=self._inner)
+        self._layout.insertWidget(self._layout.count() - 1, bubble)
+        self._bubbles.append(bubble)
+        self._last_assistant_bubble = bubble
+        self._streaming_bubble = bubble
+        QTimer.singleShot(30, self._scroll_bottom)
+        return bubble
+
+    def finalize_streaming_bubble(self, model_lane=None, model_label=None) -> None:
+        """Mark streaming complete; optionally update model metadata on the bubble."""
+        if self._streaming_bubble:
+            if model_lane or model_label:
+                self._streaming_bubble.update_model(model_lane, model_label)
+            self._streaming_bubble = None
+
     def _scroll_bottom(self) -> None:
         sb = self.verticalScrollBar()
         sb.setValue(sb.maximum())
+        QTimer.singleShot(80, lambda: self.verticalScrollBar().setValue(self.verticalScrollBar().maximum()))
 
 
 # ---------------------------------------------------------------------------
@@ -1205,78 +1480,78 @@ _EVENT_COLORS = {
 }
 
 
-class EventStreamView(QListWidget):
+class EventStreamView(QTextEdit):
+    """Stable event log using QTextEdit with HTML rows — no per-item widget glitches."""
+
     def __init__(self, theme_mgr: ThemeManager, parent=None):
         super().__init__(parent)
         self._theme_mgr = theme_mgr
+        self._events: list[dict] = []
+        self.setReadOnly(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setUniformItemSizes(False)
-        self.setSpacing(0)
+        self.document().setDocumentMargin(6)
 
         theme_mgr.subscribe(self._apply_theme)
         self._apply_theme(theme_mgr.theme)
 
     def _apply_theme(self, theme: Theme) -> None:
         self.setStyleSheet(
-            "QListWidget {"
-            f"background: {theme.surface};"
-            f"border: 1px solid {theme.panel_border};"
-            "border-radius: 10px;"
-            "padding: 4px;"
-            "outline: 0;"
-            "}"
-            "QListWidget::item {"
+            "QTextEdit {"
+            f"background-color: {theme.surface};"
             f"color: {theme.text};"
-            "padding: 4px 6px;"
-            "border: none;"
+            f"border: none;"
+            "border-radius: 0px;"
+            "padding: 4px;"
             "}"
             + scrollbar_style(theme)
         )
-        # Reapply per-item html with new colors.
-        for i in range(self.count()):
-            item = self.item(i)
-            payload = item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(payload, dict):
-                self._format_item(item, payload)
+        self._rebuild()
 
     def append(self, tag: str, text: str) -> None:
-        payload = {
+        self._events.append({
             "tag": tag.upper(),
             "text": str(text or ""),
             "ts": time.strftime("%H:%M:%S"),
-        }
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, payload)
-        self._format_item(item, payload)
-        self.addItem(item)
-        while self.count() > _EVENT_STREAM_MAX_LINES:
-            self.takeItem(0)
-        self.scrollToBottom()
+        })
+        if len(self._events) > _EVENT_STREAM_MAX_LINES:
+            self._events = self._events[-_EVENT_STREAM_MAX_LINES:]
+        # Append just the new row without full rebuild — fast path
+        cursor = self.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.setTextCursor(cursor)
+        self.insertHtml(self._row_html(self._events[-1]) + "<br>")
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
-    def _format_item(self, item: QListWidgetItem, payload: dict) -> None:
+    def _rebuild(self) -> None:
+        self.clear()
+        if not self._events:
+            return
+        html = "".join(self._row_html(ev) + "<br>" for ev in self._events)
+        self.setHtml(f"<html><body style='margin:0;padding:0;'>{html}</body></html>")
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+    def _row_html(self, payload: dict) -> str:
         theme = self._theme_mgr.theme
         tag = payload["tag"]
         color_key = _EVENT_COLORS.get(tag, "text_dim")
         tag_color = getattr(theme, color_key, theme.text_dim)
         ts = html_escape(payload["ts"])
         text = html_escape(payload["text"])
-        tag_padded = html_escape(tag.ljust(7)).replace(" ", "&nbsp;")
-        item.setText("")
-        label = QLabel()
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setText(
-            f"<span style=\"color:{theme.text_muted};font-family:{MONO_STACK};font-size:10px;\">{ts}</span>"
-            f"&nbsp;&nbsp;<span style=\"color:{tag_color};font-family:{MONO_STACK};font-size:10px;font-weight:bold;\">{tag_padded}</span>"
-            f"&nbsp;&nbsp;<span style=\"color:{theme.text};font-family:{FONT_STACK};font-size:11px;\">{text}</span>"
+        tag_str = html_escape(tag[:8])
+        mono = MONO_STACK.replace("'", "")
+        sans = FONT_STACK.replace("'", "")
+        return (
+            f"<span style='color:{theme.text_dim};font-family:{mono};font-size:10px;'>{ts}</span>"
+            f"&nbsp;"
+            f"<span style='color:{tag_color};font-family:{mono};font-size:10px;font-weight:bold;"
+            f"padding:1px 4px;'>{tag_str}</span>"
+            f"&nbsp;&nbsp;"
+            f"<span style='color:{theme.text};font-family:{sans};font-size:12px;"
+            f"line-height:1.5;'>{text}</span>"
         )
-        label.setStyleSheet("background: transparent; border: none; padding: 0;")
-        label.setWordWrap(False)
-        label.adjustSize()
-        item.setSizeHint(label.sizeHint())
-        self.setItemWidget(item, label)
 
 
 # ---------------------------------------------------------------------------
@@ -1360,7 +1635,7 @@ class ModelsPanel(QWidget):
             row["card"].setStyleSheet(
                 f"background-color: {theme.surface_alt};"
                 f"border: 1px solid {border};"
-                "border-radius: 10px;"
+                "border-radius: 0px;"
             )
             row["lane_label"].setStyleSheet(label_style(theme, theme.accent if highlight else theme.text, 11, "bold"))
             row["name_label"].setStyleSheet(
@@ -1437,6 +1712,45 @@ class _InputWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Scan-line overlay — sweeping horizontal line over the left column
+# ---------------------------------------------------------------------------
+
+
+class ScanLineOverlay(QWidget):
+    """Transparent overlay that draws a faint JARVIS-style scan line sweep."""
+
+    def __init__(self, theme_mgr: ThemeManager, parent=None):
+        super().__init__(parent)
+        self._theme_mgr = theme_mgr
+        self._y = 0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        t = QTimer(self)
+        t.timeout.connect(self._tick)
+        t.start(33)
+        theme_mgr.subscribe(lambda _t: self.update())
+
+    def _tick(self):
+        h = self.height() or 600
+        self._y = (self._y + 3) % h
+        self.update()
+
+    def paintEvent(self, event):
+        theme = self._theme_mgr.theme
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = QColor(theme.accent)
+        for offset in range(20):
+            y_pos = self._y - offset
+            if y_pos < 0:
+                continue
+            c.setAlpha(max(0, 80 - offset * 4))
+            p.setPen(QPen(c, 1))
+            p.drawLine(0, y_pos, self.width(), y_pos)
+
+
+# ---------------------------------------------------------------------------
 # JarvisHUD — main window
 # ---------------------------------------------------------------------------
 
@@ -1452,6 +1766,7 @@ class JarvisHUD(QMainWindow):
     tool_finished_ready = pyqtSignal(object)
     listening_mode_ready = pyqtSignal(object)
     voice_runtime_ready = pyqtSignal(object)
+    llm_chunk_ready = pyqtSignal(object)
 
     def __init__(self, app_core):
         super().__init__()
@@ -1464,6 +1779,7 @@ class JarvisHUD(QMainWindow):
         self._input_worker: _InputWorker | None = None
         self._current_layout_mode = None
         self._pending_lane: str | None = None
+        self._turn_cancelled = False  # True only when STOP was clicked mid-turn
 
         self.setWindowTitle("FRIDAY")
         self.resize(1180, 720)
@@ -1485,27 +1801,29 @@ class JarvisHUD(QMainWindow):
         self.clock_panel = TechPanel("NELLORE CLOCK", self.theme_mgr, indicator="IST")
         self.clock_weather = ClockWeatherWidget(self.theme_mgr)
         self.clock_panel.body.addWidget(self.clock_weather)
-        left.addWidget(self.clock_panel, stretch=3)
-
-        self.system_panel_frame = TechPanel("SYSTEM SPECS", self.theme_mgr, indicator="HOST")
-        self.system_panel = SystemStatusWidget(self.theme_mgr)
-        self.system_panel_frame.body.addWidget(self.system_panel)
-        left.addWidget(self.system_panel_frame, stretch=2)
+        left.addWidget(self.clock_panel, stretch=2)
 
         self.event_panel = TechPanel("EVENT STREAM", self.theme_mgr, indicator="LIVE")
         self.event_stream = EventStreamView(self.theme_mgr)
         self.event_panel.body.addWidget(self.event_stream)
-        left.addWidget(self.event_panel, stretch=4)
+        left.addWidget(self.event_panel, stretch=5)
 
         self.left_widget = QWidget()
         self.left_widget.setLayout(left)
         self.root.addWidget(self.left_widget, 1, 0)
 
+        # Scan-line overlay over the left column
+        self.scan_overlay = ScanLineOverlay(self.theme_mgr, self.left_widget)
+        QTimer.singleShot(100, lambda: (
+            self.scan_overlay.resize(self.left_widget.size()),
+            self.scan_overlay.raise_(),
+        ))
+
         # ----- CENTER column -----
         center = QVBoxLayout()
         center.setSpacing(14)
-        self.reactor_panel = TechPanel("PARTICLE REACTOR", self.theme_mgr, indicator="CORE")
-        self.reactor = ParticleGlobeReactor(self.theme_mgr)
+        self.reactor_panel = TechPanel("ARC REACTOR", self.theme_mgr, indicator="CORE")
+        self.reactor = ArcReactorWidget(self.theme_mgr)
         self.reactor.setMinimumSize(260, 220)
         self.reactor_panel.body.addWidget(self.reactor, stretch=1)
         center.addWidget(self.reactor_panel, stretch=5)
@@ -1515,14 +1833,25 @@ class JarvisHUD(QMainWindow):
         self.chat_view.setMinimumHeight(220)
         self.transcript_panel.body.addWidget(self.chat_view, stretch=1)
 
+        self._attached_file_path: str | None = None
+        self._attached_file_label = QLabel("")
+        self._attached_file_label.setVisible(False)
+        self.transcript_panel.body.addWidget(self._attached_file_label)
+
         input_row = QHBoxLayout()
         input_row.setContentsMargins(0, 0, 0, 0)
-        input_row.setSpacing(10)
+        input_row.setSpacing(8)
+        self.file_btn = QPushButton("@")
+        self.file_btn.setFixedWidth(38)
+        self.file_btn.setToolTip("Attach file")
+        self.file_btn.clicked.connect(self._handle_file_attach)
+        input_row.addWidget(self.file_btn)
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Type a command...")
+        self.input_field.setPlaceholderText("COMMAND INPUT...")
         self.input_field.returnPressed.connect(self.handle_return_pressed)
-        input_row.addWidget(self.input_field)
+        input_row.addWidget(self.input_field, stretch=1)
         self.send_button = QPushButton("SEND")
+        self.send_button.setFixedWidth(80)
         self.send_button.clicked.connect(self.handle_send_button_clicked)
         input_row.addWidget(self.send_button)
         self.transcript_panel.body.addLayout(input_row)
@@ -1574,10 +1903,6 @@ class JarvisHUD(QMainWindow):
         self.mic_selector.device_selected.connect(self.on_mic_selected)
         right.addWidget(self.mic_selector, stretch=1)
 
-        self.process_btn = QPushButton("PROCESS GRID")
-        self.process_btn.clicked.connect(self.toggle_process_panel)
-        right.addWidget(self.process_btn)
-
         self.stop_btn = QPushButton("STOP SPEECH")
         self.stop_btn.clicked.connect(self.stop_speaking)
         right.addWidget(self.stop_btn)
@@ -1590,10 +1915,6 @@ class JarvisHUD(QMainWindow):
         self.root.setColumnStretch(1, 6)
         self.root.setColumnStretch(2, 3)
         self.root.setRowStretch(1, 1)
-
-        self.process_panel = ProcessPanel(self.theme_mgr, self, self.app_core)
-        self.process_panel.hide()
-        self.process_panel.move(380, 120)
 
         self.theme_mgr.subscribe(self._apply_theme)
         self._apply_theme(self.theme_mgr.theme)
@@ -1613,23 +1934,58 @@ class JarvisHUD(QMainWindow):
         header = QFrame()
         header.setObjectName("hud_header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(14)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
 
-        self.title_label = QLabel("FRIDAY")
-        layout.addWidget(self.title_label)
+        # Left zone — branding
+        left_zone = QVBoxLayout()
+        left_zone.setSpacing(2)
+        self.title_label = QLabel("F.R.I.D.A.Y.")
         self.subtitle_label = QLabel("LOCAL INTELLIGENCE SURFACE")
-        layout.addWidget(self.subtitle_label)
+        left_zone.addWidget(self.title_label)
+        left_zone.addWidget(self.subtitle_label)
+        layout.addLayout(left_zone, stretch=3)
+
         layout.addStretch(1)
 
+        # Center zone — mini reactor + spaced name + status
+        center_zone = QVBoxLayout()
+        center_zone.setSpacing(2)
+        center_zone.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        center_top = QHBoxLayout()
+        center_top.setSpacing(8)
+        center_top.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.mini_reactor = _MiniReactorIcon(self.theme_mgr)
+        self.mini_reactor.setFixedSize(28, 28)
+        self.center_header_label = QLabel("F · R · I · D · A · Y")
+        self.center_header_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        center_top.addWidget(self.mini_reactor)
+        center_top.addWidget(self.center_header_label)
+        center_zone.addStretch(1)
+        center_zone.addLayout(center_top)
         self.status_label = QLabel("route: idle  ·  lane: idle  ·  voice: idle")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(self.status_label)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center_zone.addWidget(self.status_label)
+        center_zone.addStretch(1)
+        layout.addLayout(center_zone, stretch=4)
 
+        layout.addStretch(1)
+
+        # Right zone — theme toggle only (time shown in left-column clock panel)
+        right_zone = QVBoxLayout()
+        right_zone.setSpacing(2)
+        right_zone.addStretch(1)
+
+        right_btns = QHBoxLayout()
+        right_btns.setSpacing(8)
+        right_btns.addStretch(1)
         self.theme_btn = QPushButton()
         self.theme_btn.setFixedWidth(110)
         self.theme_btn.clicked.connect(self._toggle_theme)
-        layout.addWidget(self.theme_btn)
+        right_btns.addWidget(self.theme_btn)
+        right_zone.addLayout(right_btns)
+        layout.addLayout(right_zone, stretch=3)
+
         return header
 
     def _toggle_theme(self) -> None:
@@ -1637,24 +1993,49 @@ class JarvisHUD(QMainWindow):
         _save_theme_pref(name)
 
     def _apply_theme(self, theme: Theme) -> None:
+        self.setStyleSheet(f"background-color: {theme.bg};")
         self.central.setStyleSheet(f"background-color: {theme.bg};")
+
+        # Header — left zone
         self.title_label.setStyleSheet(
-            f"color: {theme.text};"
-            f"font-family: {FONT_STACK};"
-            "font-size: 32px;"
+            f"color: {theme.accent};"
+            f"font-family: {MONO_STACK};"
+            "font-size: 26px;"
             "font-weight: 800;"
-            "letter-spacing: -0.5px;"
+            "letter-spacing: 4px;"
             "border: none;"
             "background: transparent;"
         )
-        self.subtitle_label.setStyleSheet(label_style(theme, theme.text_dim, 12, "bold"))
-        self.status_label.setStyleSheet(label_style(theme, theme.text_dim, 11))
+        self.subtitle_label.setStyleSheet(panel_title_style(theme))
+
+        # Header — center zone
+        self.center_header_label.setStyleSheet(
+            f"color: {theme.glow};"
+            f"font-family: {MONO_STACK};"
+            "font-size: 13px;"
+            "letter-spacing: 5px;"
+            "border: none;"
+            "background: transparent;"
+        )
+        self.status_label.setStyleSheet(label_style(theme, theme.text_dim, 10))
+
+        # Header — right zone
         self.theme_btn.setStyleSheet(button_style(theme))
         self.theme_btn.setText("◐  LIGHT" if theme.name == "dark" else "◑  DARK")
 
+        # Input area
         self.input_field.setStyleSheet(text_box_style(theme, 14))
-        self.send_button.setStyleSheet(button_style(theme, primary=True))
-        self.process_btn.setStyleSheet(button_style(theme))
+        self.update_send_button_state()
+        if hasattr(self, "file_btn"):
+            self.file_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {theme.surface_alt}; color: {theme.accent};"
+                f"border: 1px solid {theme.panel_border}; border-radius: 2px;"
+                "padding: 2px 0px; font-size: 17px; font-weight: bold; }}"
+                f"QPushButton:hover {{ background-color: {theme.accent_soft}; }}"
+            )
+        if hasattr(self, "_attached_file_label"):
+            self._attached_file_label.setStyleSheet(panel_title_style(theme))
+
         self.stop_btn.setStyleSheet(button_style(theme, danger=True))
         self.voice_mode_combo.setStyleSheet(combo_style(theme))
         for label in self._voice_labels:
@@ -1673,6 +2054,7 @@ class JarvisHUD(QMainWindow):
         self.tool_finished_ready.connect(self._on_tool_finished)
         self.listening_mode_ready.connect(self._on_listening_mode_changed)
         self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
+        self.llm_chunk_ready.connect(self._on_llm_chunk)
 
         self.reactor.clicked.connect(self.toggle_pause_everything)
         bus = self.app_core.event_bus
@@ -1686,16 +2068,10 @@ class JarvisHUD(QMainWindow):
         bus.subscribe("tool_finished", lambda payload: self.tool_finished_ready.emit(payload))
         bus.subscribe("turn_completed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
+        bus.subscribe("llm_chunk", lambda payload: self.llm_chunk_ready.emit(payload))
         bus.subscribe("listening_mode_changed", lambda payload: self.listening_mode_ready.emit(payload))
         bus.subscribe("voice_runtime_state_changed", lambda payload: self.voice_runtime_ready.emit(payload))
         bus.subscribe("system_shutdown", lambda _payload: self.shutdown_signal.emit())
-
-    def toggle_process_panel(self, _checked=False):
-        if self.process_panel.isVisible():
-            self.process_panel.hide()
-            return
-        self.process_panel.show()
-        self.process_panel.raise_()
 
     def on_voice_mode_selected(self, index):
         try:
@@ -1756,6 +2132,10 @@ class JarvisHUD(QMainWindow):
 
     def check_status(self):
         try:
+            pass
+        except Exception:
+            pass
+        try:
             if getattr(self.app_core, "is_speaking", False) or time.monotonic() < self._speaking_until:
                 self.reactor.set_state("speaking")
             else:
@@ -1798,12 +2178,34 @@ class JarvisHUD(QMainWindow):
         else:
             self.reactor.set_state("muted")
 
+    def _on_llm_chunk(self, payload):
+        # Drop chunks that arrive after the user cancelled
+        if not getattr(self, "is_processing", False):
+            return
+        if not isinstance(payload, dict):
+            return
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return
+        if self.chat_view.streaming_bubble is None:
+            lane = self._pending_lane
+            self.chat_view.start_streaming_bubble(
+                model_lane=lane, model_label=self._lane_label(lane)
+            )
+        self.chat_view.streaming_bubble.set_streaming_text(text + " ▋")
+        QTimer.singleShot(0, lambda: self.chat_view.verticalScrollBar().setValue(
+            self.chat_view.verticalScrollBar().maximum()
+        ))
+
     def _on_turn_started(self, payload):
         self.turn_state = "processing"
         self.is_processing = True
+        self._turn_cancelled = False
         self.update_send_button_state()
         self.reactor.set_state("processing")
         self._pending_lane = None
+        # Clear any stale streaming bubble from the previous turn
+        self.chat_view.finalize_streaming_bubble()
         if isinstance(payload, dict):
             self.event_stream.append("TURN", str(payload.get("text", ""))[:120])
 
@@ -1865,16 +2267,56 @@ class JarvisHUD(QMainWindow):
             self.send_button.setText("SEND")
             self.send_button.setStyleSheet(button_style(theme, primary=True))
 
+    def _handle_file_attach(self):
+        allowed = "Supported Files (*.txt *.pdf *.md *.py *.json *.csv *.docx);;All Files (*)"
+        path, _ = QFileDialog.getOpenFileName(self, "Attach File", "", allowed)
+        if not path:
+            return
+        self._attached_file_path = path
+        name = os.path.basename(path)
+        self._attached_file_label.setText(f"ATTACHED: {name}")
+        self._attached_file_label.setVisible(True)
+        self.event_stream.append("INFO", f"Loading {name}...")
+        try:
+            load_fn = getattr(self.app_core, "load_session_rag_file", None)
+            if load_fn:
+                msg = load_fn(path)
+            else:
+                msg = f"File noted: {name} (RAG loader not available)"
+        except Exception as exc:
+            msg = f"Failed to load {name}: {exc}"
+        self.chat_view.add_message("system", msg)
+        self.event_stream.append("INFO", str(msg)[:120])
+
     def handle_return_pressed(self):
         text = self.input_field.text().strip()
         if not text:
             return
         self.input_field.clear()
+        if self._attached_file_path:
+            name = os.path.basename(self._attached_file_path)
+            text = f"[Re: {name}] {text}"
+            self._attached_file_path = None
+            self._attached_file_label.setVisible(False)
         self.app_core.process_input(text, source="gui")
 
     def handle_send_button_clicked(self):
         if getattr(self, "is_processing", False):
-            self.app_core.cancel_current_task(announce=False)
+            # Reset GUI state first so any in-flight llm_chunk signals are dropped
+            self.turn_state = "idle"
+            self.is_processing = False
+            self._turn_cancelled = True  # tell render_message to ignore late responses
+            self.update_send_button_state()
+            self.chat_view.finalize_streaming_bubble()
+            # Kill TTS and signal the background task — non-blocking, no join
+            self.stop_speaking()
+            runner = getattr(self.app_core, "task_runner", None)
+            if runner and hasattr(runner, "cancel_nowait"):
+                runner.cancel_nowait()
+            else:
+                # Fallback: still non-ideal but better than nothing
+                self.app_core.cancel_current_task(announce=False)
+            self.event_stream.append("INFO", "Task cancelled")
         else:
             self.handle_return_pressed()
 
@@ -1914,6 +2356,9 @@ class JarvisHUD(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "scan_overlay") and self.left_widget:
+            self.scan_overlay.resize(self.left_widget.size())
+            self.scan_overlay.raise_()
         w = event.size().width()
         mode = "narrow" if w < 980 else "wide"
         if self._current_layout_mode == mode:
@@ -1961,15 +2406,34 @@ class JarvisHUD(QMainWindow):
 
     def render_message(self, payload):
         if not isinstance(payload, dict):
-            self.chat_view.add_message("assistant", str(payload), model_lane=self._pending_lane, model_label=self._lane_label(self._pending_lane))
-            self.event_stream.append("ASSISTANT", str(payload)[:120])
+            text = str(payload).strip()
+            lane = self._pending_lane
+            if self.chat_view.streaming_bubble is not None:
+                self.chat_view.streaming_bubble.set_streaming_text(text)
+                self.chat_view.finalize_streaming_bubble(
+                    model_lane=lane, model_label=self._lane_label(lane)
+                )
+            elif not getattr(self, "_turn_cancelled", False):
+                self.chat_view.add_message("assistant", text, model_lane=lane, model_label=self._lane_label(lane))
+            self.event_stream.append("ASSISTANT", text[:120])
             return
-        text = payload.get("text", "")
+        text = str(payload.get("text") or "").strip()
         role = payload.get("role", "assistant")
         if not text:
             return
         lane = self._pending_lane if role == "assistant" else None
-        self.chat_view.add_message(role, text, model_lane=lane, model_label=self._lane_label(lane))
+        if role == "assistant" and self.chat_view.streaming_bubble is not None:
+            # Streaming bubble already has the live text — just finalise it
+            self.chat_view.streaming_bubble.set_streaming_text(text)
+            self.chat_view.finalize_streaming_bubble(
+                model_lane=lane, model_label=self._lane_label(lane)
+            )
+        elif role == "assistant" and getattr(self, "_turn_cancelled", False):
+            # STOP was clicked: streaming bubble already finalized with partial text.
+            # Drop the late full response to avoid duplicating it in the chat.
+            pass
+        else:
+            self.chat_view.add_message(role, text, model_lane=lane, model_label=self._lane_label(lane))
         self.event_stream.append(role.upper(), text[:120])
 
     def _lane_label(self, lane: str | None) -> str | None:

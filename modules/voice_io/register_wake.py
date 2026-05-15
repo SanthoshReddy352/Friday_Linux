@@ -77,7 +77,6 @@ After=network.target
 
 [Service]
 Type=simple
-Environment=FRIDAY_PORCUPINE_KEY=
 ExecStart={venv_python} {wake_py}
 WorkingDirectory={project_root}
 Restart=always
@@ -90,7 +89,7 @@ WantedBy=default.target
         with open(service_file, "w", encoding="utf-8") as fh:
             fh.write(content)
         print(f"Created systemd service at: {service_file}")
-        print("NOTE: Edit the unit and set FRIDAY_PORCUPINE_KEY=<your-key> before enabling.")
+        print(f"Using environment variables from {os.path.join(project_root, '.env')}")
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "--user", "enable", "friday-wake.service"], check=True)
         subprocess.run(["systemctl", "--user", "start", "friday-wake.service"], check=True)

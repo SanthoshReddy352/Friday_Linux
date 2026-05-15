@@ -91,7 +91,11 @@ class LLMChatPlugin(FridayPlugin):
         visible_text = ""
         sentence_buffer = ""
         first_token_seen = False
+        turn = None
+        cancel_ev = getattr(getattr(self, "app", None), "_current_cancel_event", None)
         for chunk in stream:
+            if cancel_ev and cancel_ev.is_set():
+                break
             delta = chunk["choices"][0].get("delta", {})
             content = delta.get("content")
             if not content:
@@ -112,6 +116,11 @@ class LLMChatPlugin(FridayPlugin):
                 new_visible = cleaned
                 sentence_buffer = ""
             visible_text = cleaned
+            # Publish chunk for live GUI streaming
+            self.app.event_bus.publish("llm_chunk", {
+                "text": cleaned,
+                "turn_id": getattr(turn, "turn_id", "") if turn else "",
+            })
             sentence_buffer += new_visible
             spoken_parts = re.split(r"(?<=[.!?])\s+", sentence_buffer)
             if len(spoken_parts) > 1:

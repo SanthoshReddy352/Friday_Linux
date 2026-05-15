@@ -54,6 +54,3 @@ logs/*.log
 logs/
 #env
 .env
-
-#graphify
-graphify-out/

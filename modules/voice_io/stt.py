@@ -470,6 +470,16 @@ class STTEngine:
         self._emit_runtime_state()
         self._clear_explicit_activation()
 
+        # ── Wake-word barge-in: instantly kill any running task ──────────────
+        # If the user invoked Friday while the assistant is mid-task (LLM
+        # streaming, TTS queued or playing), kill everything non-blocking so
+        # the new command starts immediately without a 2-second join stall.
+        if wake_found:
+            runner = getattr(self.app_core, "task_runner", None)
+            if runner and runner.is_busy():
+                logger.info("[STT] Wake-word barge-in — cancelling running task for: '%s'", text_clean)
+                runner.cancel_nowait()
+
         # ── TRACK 3a: Instant media-control fast path ────────────────────────
         # When a short utterance is purely a media command (pause/resume/next/
         # previous/forward/backward/mute), bypass the LLM router and call the
