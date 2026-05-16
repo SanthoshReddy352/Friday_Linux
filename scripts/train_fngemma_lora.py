@@ -194,6 +194,26 @@ def main() -> int:
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
 
+    # Tokenizer-kwarg compat shim — see train_gemma_lora.py for the
+    # full explanation. Transformers 5.x dropped `tokenizer=` in
+    # Trainer.__init__, but Unsloth's wrapper still auto-injects it.
+    try:
+        import unsloth.models._utils as _u_utils
+        if not getattr(_u_utils, "_friday_tokenizer_compat", False):
+            _orig_trainer_init_ref = _u_utils._original_trainer_init
+
+            def _compat_trainer_init(self, *args, **kwargs):
+                tok = kwargs.pop("tokenizer", None)
+                _orig_trainer_init_ref(self, *args, **kwargs)
+                if tok is not None and not getattr(self, "processing_class", None):
+                    self.processing_class = tok
+
+            _u_utils._original_trainer_init = _compat_trainer_init
+            _u_utils._friday_tokenizer_compat = True
+            print("[train-fn] installed tokenizer-kwarg compat shim")
+    except (ImportError, AttributeError) as e:
+        print(f"[train-fn] WARNING: could not install compat shim: {e}")
+
     # bf16 needs Ampere+ (compute capability >= 8.0). T4 / GTX-era cards
     # fall back to fp16 mixed precision; CPU runs in fp32.
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()

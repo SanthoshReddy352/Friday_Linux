@@ -165,6 +165,31 @@ def main() -> int:
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
 
+    # ----- Compatibility shim -----
+    # Transformers 5.x renamed Trainer's `tokenizer=` kwarg to
+    # `processing_class=` and rejects the old name. Unsloth's wrapped
+    # SFTTrainer still auto-injects `tokenizer=` (pulled from the model)
+    # before forwarding to the base Trainer, so the call crashes no
+    # matter what WE do at the call site. Patch Unsloth's saved
+    # reference to the original Trainer.__init__ to strip the bad kwarg
+    # and re-attach the tokenizer as `processing_class` after init.
+    try:
+        import unsloth.models._utils as _u_utils
+        if not getattr(_u_utils, "_friday_tokenizer_compat", False):
+            _orig_trainer_init_ref = _u_utils._original_trainer_init
+
+            def _compat_trainer_init(self, *args, **kwargs):
+                tok = kwargs.pop("tokenizer", None)
+                _orig_trainer_init_ref(self, *args, **kwargs)
+                if tok is not None and not getattr(self, "processing_class", None):
+                    self.processing_class = tok
+
+            _u_utils._original_trainer_init = _compat_trainer_init
+            _u_utils._friday_tokenizer_compat = True
+            print("[train-gemma] installed tokenizer-kwarg compat shim")
+    except (ImportError, AttributeError) as e:
+        print(f"[train-gemma] WARNING: could not install compat shim: {e}")
+
     # Precision: bf16 needs Ampere+ (compute capability >= 8.0). T4 is
     # Turing (7.5) — fall back to fp16 mixed-precision there. On CPU
     # both are unavailable, so leave both off (fp32 training).
