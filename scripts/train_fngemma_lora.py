@@ -268,11 +268,22 @@ def main() -> int:
     ckpt_dir = args.out / "_ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Transformers 5.x renamed `tokenizer=` to `processing_class=`.
+    # SFTTrainer kwarg name varies across versions — see train_gemma_lora.py
+    # for the full story. Detect what's accepted, fall back to attr-set.
+    import inspect
+    _sft_params = set(inspect.signature(SFTTrainer.__init__).parameters)
+    _sft_kwargs = dict(model=model, train_dataset=ds)
+    if "processing_class" in _sft_params:
+        _sft_kwargs["processing_class"] = tokenizer
+        print("[train-fn] using SFTTrainer(processing_class=…)")
+    elif "tokenizer" in _sft_params:
+        _sft_kwargs["tokenizer"] = tokenizer
+        print("[train-fn] using SFTTrainer(tokenizer=…)")
+    else:
+        print("[train-fn] SFTTrainer accepts neither kwarg — will set after init")
+
     trainer = SFTTrainer(
-        model=model,
-        processing_class=tokenizer,
-        train_dataset=ds,
+        **_sft_kwargs,
         args=SFTConfig(
             output_dir=str(ckpt_dir),
             per_device_train_batch_size=args.batch,
@@ -295,6 +306,14 @@ def main() -> int:
             report_to="none",
         ),
     )
+
+    # Belt-and-suspenders attr-set for the tokenizer (see gemma script).
+    for _attr in ("processing_class", "tokenizer"):
+        if not getattr(trainer, _attr, None):
+            try:
+                setattr(trainer, _attr, tokenizer)
+            except Exception:
+                pass
 
     # Mask loss to the model turn only. instruction_part is the LAST user
     # turn; everything before <start_of_turn>model\n is masked out.

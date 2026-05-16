@@ -240,13 +240,25 @@ def main() -> int:
     ckpt_dir = args.out / "_ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Transformers 5.x renamed `tokenizer=` to `processing_class=`.
-    # Pass it under the new name; older TRL versions silently accepted
-    # `tokenizer` so this is the forward-compatible spelling.
+    # SFTTrainer's tokenizer kwarg name keeps changing across versions:
+    # TRL <0.12 → `tokenizer`, TRL >=0.12 (with transformers 5.x) →
+    # `processing_class`, and Unsloth's compiled wrapper sometimes
+    # accepts neither. Detect what's accepted and fall back to setting
+    # the attribute after construction.
+    import inspect
+    _sft_params = set(inspect.signature(SFTTrainer.__init__).parameters)
+    _sft_kwargs = dict(model=model, train_dataset=ds)
+    if "processing_class" in _sft_params:
+        _sft_kwargs["processing_class"] = tokenizer
+        print("[train-gemma] using SFTTrainer(processing_class=…)")
+    elif "tokenizer" in _sft_params:
+        _sft_kwargs["tokenizer"] = tokenizer
+        print("[train-gemma] using SFTTrainer(tokenizer=…)")
+    else:
+        print("[train-gemma] SFTTrainer accepts neither kwarg — will set after init")
+
     trainer = SFTTrainer(
-        model=model,
-        processing_class=tokenizer,
-        train_dataset=ds,
+        **_sft_kwargs,
         args=SFTConfig(
             output_dir=str(ckpt_dir),
             per_device_train_batch_size=args.batch,
@@ -270,6 +282,16 @@ def main() -> int:
             report_to="none",
         ),
     )
+
+    # Belt-and-suspenders — ensure both old (`tokenizer`) and new
+    # (`processing_class`) attrs point at our tokenizer regardless of
+    # which one the wrapper actually set internally.
+    for _attr in ("processing_class", "tokenizer"):
+        if not getattr(trainer, _attr, None):
+            try:
+                setattr(trainer, _attr, tokenizer)
+            except Exception:
+                pass
 
     # CRITICAL: mask loss to model-turn tokens only. Without this the
     # model fits the (huge, repetitive) tool-list prompt and stops being
