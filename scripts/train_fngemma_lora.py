@@ -268,9 +268,10 @@ def main() -> int:
     ckpt_dir = args.out / "_ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+    # Transformers 5.x renamed `tokenizer=` to `processing_class=`.
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=ds,
         args=SFTConfig(
             output_dir=str(ckpt_dir),
@@ -312,7 +313,7 @@ def main() -> int:
 
     print(f"[train-fn] merging LoRA → {args.out}")
     model.save_pretrained_merged(
-        str(args.out), tokenizer, save_method="merged_16bit",
+        str(args.out), tokenizer=tokenizer, save_method="merged_16bit",
     )
 
     if args.skip_gguf:
@@ -321,7 +322,7 @@ def main() -> int:
 
     print(f"[train-fn] exporting GGUF ({args.quantization}) → {args.out}")
     model.save_pretrained_gguf(
-        str(args.out), tokenizer, quantization_method=args.quantization,
+        str(args.out), tokenizer=tokenizer, quantization_method=args.quantization,
     )
 
     candidates = sorted(args.out.glob("*.gguf"))
