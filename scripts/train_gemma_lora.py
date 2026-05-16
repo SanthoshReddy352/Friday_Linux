@@ -242,6 +242,7 @@ def main() -> int:
             weight_decay=DEFAULTS["weight_decay"],
             max_seq_length=args.max_seq_length,
             dataset_text_field="text",
+            dataset_num_proc=1,   # avoid dill PicklingError on safe_open
             seed=args.seed,
             report_to="none",
         ),
