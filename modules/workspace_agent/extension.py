@@ -159,6 +159,46 @@ class WorkspaceAgentExtension(Extension):
             metadata=_WRITE_META,
         )
 
+        # Batch 5 / Issue 12: full CRUD on Google Calendar events. The
+        # update and cancel surfaces use the same event resolver
+        # (`_resolve_event`) so users can say "cancel the dentist
+        # appointment", "delete the next event", or "move my 3pm to 4pm"
+        # without remembering Google's opaque event ids.
+        ctx.register_capability(
+            {
+                "name": "update_calendar_event",
+                "description": (
+                    "Modify an existing Google Calendar event — rename it, "
+                    "reschedule it, or update its description. Identifies "
+                    "the event by title, time, or 'the next one'."
+                ),
+                "parameters": {
+                    "target": "string – partial title, clock time, or 'next'",
+                    "new_summary": "string – optional new title",
+                    "new_start": "string – optional new start datetime",
+                    "new_end": "string – optional new end datetime",
+                    "new_description": "string – optional new description",
+                },
+            },
+            self._handle_update_event,
+            metadata=_WRITE_META,
+        )
+
+        ctx.register_capability(
+            {
+                "name": "cancel_calendar_event",
+                "description": (
+                    "Cancel or delete a Google Calendar event by title, "
+                    "time, or 'the next one'."
+                ),
+                "parameters": {
+                    "target": "string – partial title, clock time, or 'next'",
+                },
+            },
+            self._handle_cancel_event,
+            metadata=_WRITE_META,
+        )
+
         ctx.register_capability(
             {
                 "name": "search_drive",
@@ -335,6 +375,152 @@ class WorkspaceAgentExtension(Extension):
         when = start_dt.strftime("%a %d %b at ") + start_dt.strftime("%I:%M %p").lstrip("0")
         suffix = f" (id: {event_id})" if event_id else ""
         return f"Done, sir. I've added '{summary}' to your calendar for {when}.{suffix}"
+
+    # ------------------------------------------------------------------
+    # Calendar update / cancel (Batch 5 / Issue 12)
+    # ------------------------------------------------------------------
+
+    def _handle_update_event(self, raw_text: str, args: dict) -> str:
+        args = dict(args or {})
+        target = (args.get("target") or "").strip() or self._extract_update_target(raw_text or "")
+        if not target:
+            return "Which event should I update, sir? Try 'update the dentist appointment'."
+        event = self._resolve_event(target)
+        if isinstance(event, str):
+            return event  # error message
+        event_id = event.get("id") or event.get("event_id") or ""
+        if not event_id:
+            return "I found the event but Google didn't return its id, so I can't update it."
+
+        new_summary = (args.get("new_summary") or args.get("summary") or "").strip() or None
+        new_description = args.get("new_description") or args.get("description")
+        # Reschedule support — accept ISO via args or fall back to the
+        # natural-language parser already used by `create_calendar_event`.
+        new_start_dt, new_end_dt = self._resolve_event_times(
+            raw_text or "",
+            {"start": args.get("new_start"), "end": args.get("new_end")},
+        )
+        kwargs: dict = {}
+        if new_summary:
+            kwargs["summary"] = new_summary
+        if new_description is not None:
+            kwargs["description"] = str(new_description)
+        if new_start_dt is not None:
+            kwargs["start_datetime"] = _to_iso_local(new_start_dt)
+        if new_end_dt is not None:
+            kwargs["end_datetime"] = _to_iso_local(new_end_dt)
+        if not kwargs:
+            return (
+                f"What should I change about '{event.get('summary', target)}'? "
+                "I can rename it, reschedule it, or update its description."
+            )
+        try:
+            gws.calendar_update_event(event_id, **kwargs)
+        except GWSError as exc:
+            return self._auth_aware_error("update the event", exc)
+        verb = "Renamed" if new_summary else "Rescheduled" if new_start_dt else "Updated"
+        new_label = new_summary or event.get("summary", target)
+        return f"{verb} '{new_label}', sir."
+
+    def _handle_cancel_event(self, raw_text: str, args: dict) -> str:
+        args = dict(args or {})
+        target = (args.get("target") or "").strip() or self._extract_cancel_target(raw_text or "")
+        if not target:
+            return "Which event should I cancel, sir? Try 'cancel the next event'."
+        event = self._resolve_event(target)
+        if isinstance(event, str):
+            return event
+        event_id = event.get("id") or event.get("event_id") or ""
+        if not event_id:
+            return "I found the event but Google didn't return its id, so I can't cancel it."
+        try:
+            gws.calendar_delete_event(event_id)
+        except GWSError as exc:
+            return self._auth_aware_error("cancel the event", exc)
+        return f"Cancelled '{event.get('summary', target)}', sir."
+
+    def _resolve_event(self, target: str) -> dict | str:
+        """Return the calendar event matching ``target`` (title / 'next' /
+        clock time), or a user-facing error string if no match.
+
+        Uses ``rapidfuzz.fuzz.partial_ratio`` for fuzzy title matching when
+        available so "dentist appointment" matches "Dentist - Cleaning".
+        """
+        try:
+            events = gws.calendar_agenda(days=14)
+        except GWSError as exc:
+            return self._auth_aware_error("look up your events", exc)
+        if not events:
+            return "You have no upcoming events to act on."
+
+        normalized = (target or "").strip().lower()
+        if normalized in {"next", "the next one", "next one", "upcoming", "the next event"}:
+            return events[0]
+
+        # Clock-time match: "3pm", "3:30 pm", "the 3 PM event"
+        clock_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", normalized)
+        if clock_match:
+            hour = int(clock_match.group(1))
+            minute = int(clock_match.group(2) or 0)
+            meridian = (clock_match.group(3) or "").lower()
+            if meridian == "pm" and hour != 12:
+                hour += 12
+            if meridian == "am" and hour == 12:
+                hour = 0
+            for event in events:
+                start = self._parse_iso(event.get("start") or "")
+                if start is not None and start.hour == hour and start.minute == minute:
+                    return event
+
+        # Title fuzzy-match
+        try:
+            from rapidfuzz import fuzz  # noqa: PLC0415
+        except ImportError:
+            # Fallback: substring match
+            for event in events:
+                if normalized in (event.get("summary") or "").lower():
+                    return event
+            return f"I couldn't find an event matching '{target}'."
+
+        best, best_score = None, -1
+        for event in events:
+            summary = (event.get("summary") or "").lower()
+            if not summary:
+                continue
+            score = fuzz.partial_ratio(normalized, summary)
+            if score > best_score:
+                best, best_score = event, score
+        if best is not None and best_score >= 70:
+            return best
+        return f"I couldn't find an event matching '{target}'."
+
+    def _extract_update_target(self, text: str) -> str:
+        match = re.search(
+            r"\b(?:update|reschedule|move|rename|edit|change)\s+(?:the\s+|my\s+)?(.+?)"
+            r"(?:\s+(?:to|by|until)\b|$)",
+            text,
+            re.IGNORECASE,
+        )
+        return match.group(1).strip(" .!?") if match else ""
+
+    def _extract_cancel_target(self, text: str) -> str:
+        match = re.search(
+            r"\b(?:cancel|delete|remove|drop)\s+(?:the\s+|my\s+)?(.+?)"
+            r"(?:\s+(?:event|reminder|appointment|meeting))?$",
+            text,
+            re.IGNORECASE,
+        )
+        return match.group(1).strip(" .!?") if match else ""
+
+    def _auth_aware_error(self, action: str, exc: GWSError) -> str:
+        """Re-render gws auth failures as actionable hints (Issue 12)."""
+        text = str(exc).lower()
+        if "failed to get token" in text or "not authenticated" in text:
+            return (
+                f"I couldn't {action} — Google Workspace isn't authenticated. "
+                "Run `gws auth` once in your terminal, then try again."
+            )
+        return f"I couldn't {action}: {exc}"
 
     def _memory(self):
         app = self._get_app()

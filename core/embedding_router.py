@@ -58,6 +58,13 @@ _DEFAULT_BLOCKLIST = frozenset({
     "write_file",
     "set_voice_mode",          # mode arg required
     "set_volume",              # value arg required
+    # Issue 6: dictation control verbs share semantic space with "save note"
+    # ("save memo" vs. "save note") and used to cross-route via embedding
+    # similarity, surfacing the bogus "I'm not in a dictation session right
+    # now." reply. Force exact deterministic matching for these.
+    "start_dictation",
+    "end_dictation",
+    "cancel_dictation",
     # The following accept structured args (app name, query, url …). When the
     # embedding router dispatches with empty args, their handlers either fail
     # or pick a poor default. Force them to go through the intent recognizer

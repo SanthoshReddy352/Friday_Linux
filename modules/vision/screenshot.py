@@ -27,6 +27,17 @@ except ImportError:
     _PIL_AVAILABLE = False
 
 
+def _is_mostly_black_image(img: "Image.Image") -> bool:
+    """Return True if PIL Image is essentially solid black (mean brightness < 10/255)."""
+    if os.name == "nt":
+        return False
+    try:
+        from PIL import ImageStat
+        return ImageStat.Stat(img.convert("L")).mean[0] < 10.0
+    except Exception:
+        return False
+
+
 def _ensure_xwayland_env() -> None:
     """Set DISPLAY + XAUTHORITY for Mutter's embedded XWayland if not already set."""
     if os.environ.get("DISPLAY"):
@@ -43,22 +54,24 @@ def take_screenshot() -> "Image.Image":
     if not _PIL_AVAILABLE:
         raise RuntimeError("Pillow is not installed. Run: pip install Pillow")
 
-    # 1. mss via XWayland — instant, works on GNOME Wayland
-    if _MSS_AVAILABLE:
+    is_wayland = (
+        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        or bool(os.environ.get("WAYLAND_DISPLAY"))
+    )
+
+    # 1. mss via XWayland — instant, only on X11 (black framebuffer on Wayland)
+    if _MSS_AVAILABLE and not is_wayland:
         _ensure_xwayland_env()
         try:
             with mss.MSS() as sct:
                 monitor = sct.monitors[1]
                 raw = sct.grab(monitor)
                 png_bytes = mss.tools.to_png(raw.rgb, raw.size)
-                return Image.open(io.BytesIO(png_bytes)).convert("RGB")
+                img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+                if not _is_mostly_black_image(img):
+                    return img
         except Exception:
             pass
-
-    is_wayland = (
-        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-        or bool(os.environ.get("WAYLAND_DISPLAY"))
-    )
 
     if is_wayland:
         import tempfile

@@ -20,6 +20,21 @@ from .wake_detector import WakeWordDetector
 BARGE_IN_WORDS = {"stop", "wait", "enough", "quiet", "silence", "pause"}
 # Words that cancel the running TaskRunner turn (separate from TTS barge-in)
 TASK_CANCEL_WORDS = {"cancel", "abort", "terminate", "stop", "nevermind"}
+
+
+def _signal_interrupt_bus(reason: str, scope: str = "all") -> None:
+    """Fire ``core.interrupt_bus`` on user-initiated cancellation.
+
+    Wrapped in a function so the import is local and the call site stays
+    a one-liner. The bus is a soft coordination layer — if importing
+    fails for any reason, STT keeps working; the dependent subsystems
+    just don't get the cross-cutting notification.
+    """
+    try:
+        from core.interrupt_bus import get_interrupt_bus  # noqa: PLC0415
+        get_interrupt_bus().signal(reason, scope=scope)  # type: ignore[arg-type]
+    except Exception as exc:
+        logger.debug("[STT] interrupt-bus signal skipped: %s", exc)
 FILLER_ONLY_WORDS = {"please", "yeah", "yes", "okay", "ok", "go", "uh", "um", "hmm", "hm"}
 LOW_SIGNAL_TRANSCRIPTS = {"you", "yo", "uh", "um", "hmm", "hm", "mm", "mmm", "ah", "oh"}
 MEDIA_NOISE_PHRASES = {
@@ -368,6 +383,9 @@ class STTEngine:
                     tts.stop()
                 self._clear_audio_queue()
                 self.app_core.cancel_current_task(announce=True)
+                # Batch 3 / Issue 3: notify the rest of the system (DialogState
+                # pending-* fields, future subscribers) that the user cancelled.
+                _signal_interrupt_bus("user_cancel", scope="all")
                 return
             # No task running → treat as normal barge-in / command
 
@@ -425,12 +443,24 @@ class STTEngine:
                 return
 
             barge_words = set(text_clean.split())
-            if bool(barge_words & (BARGE_IN_WORDS | TASK_CANCEL_WORDS)) or is_friday or self._looks_like_fresh_command(text_clean):
+            stop_word_matched = bool(barge_words & (BARGE_IN_WORDS | TASK_CANCEL_WORDS))
+            if stop_word_matched or is_friday or self._looks_like_fresh_command(text_clean):
                 logger.info("[STT] Barge-in detected during speech: '%s'", text_clean)
                 if self.app_core.tts:
                     self.app_core.tts.stop()
                 self._clear_audio_queue()
                 self._drop_audio_until = time.monotonic() + 0.15
+
+                # Batch 3 / Issue 3: a barge-in stop word ("enough", "wait",
+                # "stop") used to pause TTS only — the underlying LLM kept
+                # generating and the response appeared after the silence. Now
+                # if the task is still running we cancel it too, and fire the
+                # interrupt bus so DialogState's pending-* fields reset.
+                if stop_word_matched:
+                    task_runner = getattr(self.app_core, "task_runner", None)
+                    if task_runner and task_runner.is_busy():
+                        task_runner.cancel_nowait()
+                    _signal_interrupt_bus("user_barge_in", scope="all")
 
                 # Strip barge-in words; if nothing remains it was a pure TTS-stop
                 for word in BARGE_IN_WORDS | TASK_CANCEL_WORDS | {"friday", "hey"}:
@@ -479,6 +509,10 @@ class STTEngine:
             if runner and runner.is_busy():
                 logger.info("[STT] Wake-word barge-in — cancelling running task for: '%s'", text_clean)
                 runner.cancel_nowait()
+                # Batch 3 / Issue 3: same bus signal used by stop-word barge-in
+                # so DialogState pending-* and any future subscribers reset
+                # consistently regardless of which path triggered the kill.
+                _signal_interrupt_bus("wake_barge_in", scope="all")
 
         # ── TRACK 3a: Instant media-control fast path ────────────────────────
         # When a short utterance is purely a media command (pause/resume/next/

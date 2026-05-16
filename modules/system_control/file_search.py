@@ -215,7 +215,9 @@ def open_path(target_path, label="item"):
             subprocess.Popen(["open", target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         logger.info(f"Opened {label}: {target_path}")
-        return f"SUCCESS: Opening {os.path.basename(target_path)}..."
+        basename = os.path.basename(target_path)
+        display = "the screenshot" if re.match(r"screenshot_\d{8}_\d{6}\.png$", basename) else basename
+        return f"SUCCESS: Opening {display}..."
     except Exception as exc:
         logger.error(f"Failed to open {label} '{target_path}': {exc}")
         return f"FAILURE: Failed to open the {label}: {exc}"

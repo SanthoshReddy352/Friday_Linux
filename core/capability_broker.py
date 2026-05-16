@@ -241,9 +241,22 @@ class CapabilityBroker:
     # Pending-online state management
     # ------------------------------------------------------------------
 
+    # Batch 5 / Issue 8 confirmation-bleed: pending_online entries auto-
+    # expire after this many seconds. If the user takes longer than this
+    # before answering, a "yes" must NOT resolve a stale online proposal
+    # — typical breakage was "yes" being applied to the wrong workflow
+    # because the file workflow had advanced in the meantime.
+    _PENDING_ONLINE_TTL_S = 60.0
+
     def _plan_pending_online(self, cleaned_text: str, turn_id: str, style_hint: str):
         session_state = self._memory().get_session_state(self.app.session_id) or {}
         pending = dict(session_state.get("pending_online") or {})
+        # Drop expired entries before evaluating yes/no — protects against
+        # confirmation cross-talk where "yes" to an unrelated later
+        # prompt would resurrect a long-stale online tool.
+        if pending and self._is_pending_expired(pending):
+            self._memory().clear_pending_online(self.app.session_id)
+            pending = {}
         if self.app.consent_service.is_negative_confirmation(cleaned_text) and pending:
             self._memory().log_online_permission(self.app.session_id, pending.get("tool_name", ""), "declined", reason="user_confirmation")
             self._memory().clear_pending_online(self.app.session_id)
@@ -330,10 +343,41 @@ class CapabilityBroker:
         """Public wrapper — used by v2 TurnOrchestrator to handle pending consent before routing."""
         return self._plan_pending_online(text, turn_id, style_hint)
 
+    def _is_pending_expired(self, pending: dict) -> bool:
+        """Return True iff the pending_online entry has crossed its TTL.
+
+        Missing ``proposed_at`` is treated as fresh — legacy entries
+        written before the TTL was introduced still resolve once, after
+        which any further user input will populate the new timestamp.
+        """
+        proposed_at = pending.get("proposed_at")
+        if not proposed_at:
+            return False
+        try:
+            from datetime import datetime  # noqa: PLC0415
+            ts = datetime.fromisoformat(proposed_at)
+            age_s = (datetime.now() - ts).total_seconds()
+        except Exception:
+            return False
+        return age_s > self._PENDING_ONLINE_TTL_S
+
     def _build_online_proposal(self, step: ToolStep, text: str, turn_id: str, style_hint: str) -> ToolPlan:
+        from datetime import datetime  # noqa: PLC0415
+        slot_signature = f"{step.capability_name}|{sorted((step.args or {}).items())!r}"
         self._memory().set_pending_online(
             self.app.session_id,
-            {"tool_name": step.capability_name, "args": dict(step.args or {}), "text": step.raw_text or text, "ack": step.capability_name.replace("_", " ")},
+            {
+                "tool_name": step.capability_name,
+                "args": dict(step.args or {}),
+                "text": step.raw_text or text,
+                "ack": step.capability_name.replace("_", " "),
+                # Batch 5 / Issue 8 confirmation-bleed: timestamp + slot
+                # signature lets _plan_pending_online drop entries the
+                # user wandered away from before answering yes/no.
+                "proposed_at": datetime.now().isoformat(),
+                "slot_signature": slot_signature,
+                "turn_id": turn_id,
+            },
         )
         reply = self._short_consent_question(step.capability_name, dict(step.args or {}))
         return ToolPlan(

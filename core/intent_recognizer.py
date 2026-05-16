@@ -48,6 +48,11 @@ class IntentRecognizer:
         self.router = router
 
     def plan(self, text, context=None):
+        # STT typo correction (Issue 8). Idempotent — safe to run again
+        # when the router already normalized, but covers the path where
+        # plan() is called directly (tests, capability broker shortcuts).
+        from core.text_normalize import normalize_for_routing  # noqa: PLC0415
+        text = normalize_for_routing(text)
         cleaned = self._clean_text(text)
         if not cleaned:
             return []
@@ -243,19 +248,24 @@ class IntentRecognizer:
             self._parse_browser_media,
             self._parse_volume,
             self._parse_system,
+            self._parse_friday_status,
             self._parse_time_date,
             self._parse_screenshot,
             self._parse_vision_action,
+            self._parse_query_document,
             self._parse_email_action,
             self._parse_news_action,
             # Memory recall/delete must come BEFORE _parse_notes so "what do you
             # remember about me?" routes to show_memories rather than save_note.
             self._parse_memory_query,
+            # Calendar/reminder must come BEFORE _parse_manage_file:
+            # "add a calendar event" matches manage_file's broad "add" keyword
+            # and would intercept the intent before _parse_reminder ever runs.
+            self._parse_reminder,
+            self._parse_notes,
             self._parse_file_action,
             self._parse_launch_app,
             self._parse_manage_file,
-            self._parse_reminder,
-            self._parse_notes,
             self._parse_voice_toggle,
             self._parse_exit,
             self._parse_help,
@@ -531,7 +541,45 @@ class IntentRecognizer:
 
     def _parse_pending_selection(self, clause, clause_lower, context):
         dialog_state = getattr(self.router, "dialog_state", None)
-        pending = getattr(dialog_state, "pending_file_request", None) if dialog_state else None
+        if not dialog_state:
+            return None
+
+        # ── Pending file-NAME request ─────────────────────────────────────────
+        # FRIDAY asked "Which file would you like me to X?" — no candidates yet.
+        # User's next input IS the file name; intercept before domain parsers
+        # (e.g. "screenshot" → take_screenshot) can steal it.
+        pending_fname = getattr(dialog_state, "pending_file_name_request", None)
+        if pending_fname:
+            if re.search(r"\b(?:cancel|never\s*mind|forget\s+it|skip)\b", clause_lower):
+                dialog_state.pending_file_name_request = None
+                return None  # let _parse_confirmation handle the cancel
+            dialog_state.pending_file_name_request = None
+            action_to_tool = {
+                "open": "open_file",
+                "read": "read_file",
+                "summarize": "summarize_file",
+                "find": "search_file",
+            }
+            tool = action_to_tool.get(pending_fname, "open_file")
+            # Strip leading articles so "the screenshot" → filename "screenshot"
+            filename = re.sub(
+                r"^\s*(?:the|a|an|my|that|this|it)\s+", "", clause, flags=re.IGNORECASE
+            ).strip()
+            return {"tool": tool, "args": {"filename": filename or clause.strip()}, "text": clause, "domain": "files"}
+
+        # ── Pending folder request ────────────────────────────────────────────
+        # FRIDAY asked "Which folder should I X?" — user is providing a folder name.
+        pending_folder = getattr(dialog_state, "pending_folder_request", None)
+        if pending_folder:
+            if re.search(r"\b(?:cancel|never\s*mind|forget\s+it|skip)\b", clause_lower):
+                dialog_state.pending_folder_request = None
+                return None
+            dialog_state.pending_folder_request = None
+            tool = "open_folder" if pending_folder == "open" else "list_folder_contents"
+            return {"tool": tool, "args": {}, "text": clause, "domain": "files"}
+
+        # ── Pending candidate list ────────────────────────────────────────────
+        pending = getattr(dialog_state, "pending_file_request", None)
         if not pending or not pending.candidates:
             return None
 
@@ -547,8 +595,18 @@ class IntentRecognizer:
 
         candidate_names = {os.path.basename(path).lower() for path in pending.candidates}
         candidate_stems = {os.path.splitext(name)[0] for name in candidate_names}
+
+        # Exact match (normalized)
         if normalized in candidate_names or normalized in candidate_stems:
             return {"tool": "select_file_candidate", "args": {}, "text": clause, "domain": "files"}
+
+        # Prefix match: "screenshot" matches "screenshot_20260515_123456.png"
+        # Requires ≥3 chars to avoid over-matching short words.
+        if len(normalized) >= 3:
+            for stem in candidate_stems:
+                norm_stem = re.sub(r"[^a-z0-9 ]+", " ", stem).strip()
+                if norm_stem.startswith(normalized.replace("_", " ").replace("-", " ")):
+                    return {"tool": "select_file_candidate", "args": {}, "text": clause, "domain": "files"}
 
         return None
 
@@ -637,6 +695,23 @@ class IntentRecognizer:
 
         return None
 
+    def _parse_friday_status(self, clause, clause_lower, context):
+        if "get_friday_status" not in getattr(self.router, "_tools_by_name", {}):
+            return None
+        if re.search(
+            r"\b(?:"
+            r"friday\s+status|"
+            r"friday,?\s+(?:are\s+you\s+(?:ready|okay|ok|up|there|running|working|functional|online)|how\s+are\s+you(?:\s+doing)?)|"
+            r"(?:how\s+are\s+you(?:\s+doing)?|are\s+you\s+(?:ready|okay|ok|up|there|running|working|functional|online))\s*,?\s*friday|"
+            r"(?:assistant|runtime|model)\s+status|"
+            r"check\s+(?:friday|the\s+assistant|runtime)|"
+            r"(?:your|assistant'?s?)\s+status"
+            r")\b",
+            clause_lower,
+        ):
+            return {"tool": "get_friday_status", "args": {}, "text": clause, "domain": "system"}
+        return None
+
     def _parse_time_date(self, clause, clause_lower, context):
         if re.search(
             # "what time is it" / "current time" / "tell me the time" — always time queries.
@@ -688,6 +763,25 @@ class IntentRecognizer:
             clause_lower,
         ):
             return {"tool": "summarize_screen", "args": {}, "text": clause, "domain": "screen"}
+        return None
+
+    def _parse_query_document(self, clause, clause_lower, context):
+        """Route document questions to query_document when an active document is in context.
+
+        _resolve_references injects "[active_document=<path>]" when the session has an open
+        document. This guard makes the parser fire ONLY in that case, so generic questions
+        like "what is X?" that arrive without a loaded document still reach the LLM.
+        """
+        if "query_document" not in getattr(self.router, "_tools_by_name", {}):
+            return None
+        if not re.search(r"\[active_document=", clause):
+            return None
+        if re.search(
+            r"\b(?:what|how|who|when|where|why|find|explain|summarize|summarise|"
+            r"tell\s+me|search|locate|query|list|show|describe|define)\b",
+            clause_lower,
+        ):
+            return {"tool": "query_document", "args": {}, "text": clause, "domain": "document"}
         return None
 
     def _parse_email_action(self, clause, clause_lower, context):
@@ -852,13 +946,22 @@ class IntentRecognizer:
             return {"tool": "list_folder_contents", "args": {}, "text": clause, "domain": "files"}
 
         if re.search(r"\b(?:summarize|summary of|sum up)\b", clause_lower):
-            if not re.search(r"\b(?:screen|display|desktop|monitor|email|emails|inbox|mail|messages?)\b", clause_lower):
+            if not re.search(
+                r"\b(?:screen|display|desktop|monitor|email|emails|inbox|mail|messages?|"
+                r"calendar|event|meeting|appointment|news|briefing|reminder|schedule|today)\b",
+                clause_lower,
+            ):
                 return {"tool": "summarize_file", "args": {}, "text": clause, "domain": "files"}
 
         if re.search(r"\b(?:read|show contents of|preview)\b", clause_lower) and (
             "file" in clause_lower or "folder" in clause_lower or "it" in clause_lower or context.get("domain") == "files"
         ):
-            return {"tool": "read_file", "args": {}, "text": clause, "domain": "files"}
+            # Don't intercept calendar/reminder/news reads
+            if not re.search(
+                r"\b(?:calendar|event|meeting|appointment|reminder|schedule|news|briefing)\b",
+                clause_lower,
+            ):
+                return {"tool": "read_file", "args": {}, "text": clause, "domain": "files"}
 
         if re.search(r"\bopen\s+(?:the\s+)?folder\b", clause_lower):
             return {"tool": "open_folder", "args": {}, "text": clause, "domain": "files"}
@@ -883,7 +986,12 @@ class IntentRecognizer:
         ):
             return {"tool": "open_file", "args": {}, "text": clause, "domain": "files"}
 
-        if re.search(r"\b(?:find|search|locate)\s+(?:for\s+)?(?:file\s+)?\S+", clause_lower):
+        # Require explicit "file" keyword to avoid intercepting "find a solution",
+        # "search for news", "locate my friend", etc.
+        if re.search(r"\b(?:find|search|locate)\b", clause_lower) and (
+            "file" in clause_lower
+            or re.search(r"\.[a-z]{2,4}\b", clause_lower)  # has file extension
+        ):
             return {"tool": "search_file", "args": {}, "text": clause, "domain": "files"}
         file_phrase = re.fullmatch(r"file\s+(.+)", clause_lower)
         if file_phrase:
@@ -904,6 +1012,14 @@ class IntentRecognizer:
 
     def _parse_manage_file(self, clause, clause_lower, context):
         if "manage_file" not in getattr(self.router, "_tools_by_name", {}):
+            return None
+        # Hard guard: calendar/reminder/note phrases must never be intercepted here.
+        # These have their own dedicated parsers that run earlier; this guard
+        # is a safety net so the ordering can never silently revert this fix.
+        if re.search(
+            r"\b(?:calendar\s+event|event|meeting|appointment|reminder|reminders?)\b",
+            clause_lower,
+        ):
             return None
         if not re.search(r"\b(?:create|make|write|save|append|add)\b", clause_lower):
             return None
@@ -931,10 +1047,19 @@ class IntentRecognizer:
                 break
 
         if not filename:
+            # Only use the active-file reference when the user explicitly
+            # refers back to it ("add this to it", "append to the file").
+            # A bare "add <something>" without any file pronoun or the word
+            # "file" must NOT silently grab the last selected file — that
+            # causes "add a calendar event" to update a screenshot.
+            has_file_ref = bool(re.search(
+                r"\b(?:it|that|this\s+file|the\s+file|same\s+file|the\s+same|to\s+it)\b",
+                clause_lower,
+            ) or "file" in clause_lower or "document" in clause_lower)
             active_file = self._active_file_reference()
-            if active_file and action in {"write", "append"}:
+            if active_file and action in {"write", "append"} and has_file_ref:
                 filename = active_file["filename"]
-            elif context.get("domain") == "files" and action in {"write", "append"}:
+            elif context.get("domain") == "files" and action in {"write", "append"} and has_file_ref:
                 return {
                     "tool": "manage_file",
                     "args": {"action": action},
@@ -993,7 +1118,12 @@ class IntentRecognizer:
         return None
 
     def _parse_notes(self, clause, clause_lower, context):
-        if re.search(r"\b(?:save note|note down|remember this|remember that)\b", clause_lower):
+        if re.search(
+            r"\b(?:save\s+(?:a\s+)?note|note\s+(?:down|this|that)|remember\s+(?:this|that)|"
+            r"jot\s+(?:this\s+|that\s+|it\s+)?down|make\s+a\s+(?:quick\s+)?note|"
+            r"add\s+to\s+(?:my\s+)?notes?|keep\s+(?:this|that)\s+in\s+(?:your|my)\s+notes?)\b",
+            clause_lower,
+        ):
             return {"tool": "save_note", "args": {}, "text": clause, "domain": "notes"}
         if re.search(r"\b(?:read|show|list)\s+(?:my\s+)?notes\b", clause_lower):
             return {"tool": "read_notes", "args": {}, "text": clause, "domain": "notes"}
@@ -1033,8 +1163,11 @@ class IntentRecognizer:
         return None
 
     def _parse_voice_toggle(self, clause, clause_lower, context):
+        # The word "mode" is optional — humans say "set voice to manual"
+        # almost as often as "set voice mode to manual" (Issue 2). Same
+        # for the connector "to": "set voice manual" works too.
         mode_match = re.search(
-            r"\b(?:set|switch|change)\s+(?:voice|conversation|listening)\s+mode\s+(?:to\s+)?(persistent|always on|on[-\s]?demand|manual|off)\b",
+            r"\b(?:set|switch|change)\s+(?:voice|conversation|listening)(?:\s+mode)?\s+(?:to\s+)?(persistent|always on|on[-\s]?demand|manual|off)\b",
             clause_lower,
         )
         if mode_match:
@@ -1063,7 +1196,15 @@ class IntentRecognizer:
             return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
         if re.search(r"\bshow\s+(?:me\s+)?(?:your\s+)?(?:commands|capabilities|abilities)\b", clause_lower):
             return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
-        if re.search(r"\blist\s+(?:your\s+)?(?:commands|capabilities|abilities)\b", clause_lower):
+        if re.search(r"\blist\s+(?:your\s+|all\s+)?(?:your\s+)?(?:commands|capabilities|abilities|tools?)\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\bwhat\s+(?:tools?|features?|commands?)\s+do\s+you\s+(?:have|support)\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\bwhat\s+can\s+(?:i|we)\s+ask\s+(?:you|friday)\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\btell\s+me\s+what\s+you\s+can\s+do\b", clause_lower):
+            return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
+        if re.search(r"\bwhat\s+(?:do\s+you\s+)?(?:support|handle)\b", clause_lower) and re.search(r"\b(?:friday|you)\b", clause_lower):
             return {"tool": "show_capabilities", "args": {}, "text": clause, "domain": "help"}
         # Bare "help" or "help friday" only — NOT "help me write X"
         if re.fullmatch(r"(?:help|help\s+friday)[.!?]?", clause_lower.strip()):

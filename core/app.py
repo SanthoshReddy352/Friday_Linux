@@ -50,6 +50,16 @@ class FridayApp:
         self.config = ConfigManager()
         self.event_bus = EventBus()
         self.dialog_state = DialogState()
+        # Batch 3 / Issue 3: any user-initiated cancel ("stop", "enough",
+        # "Friday cancel", wake-word barge-in) fires through the global
+        # InterruptBus. DialogState clears every pending-* field on signal
+        # so the next turn starts clean.
+        from core.interrupt_bus import get_interrupt_bus  # noqa: PLC0415
+        self._interrupt_bus = get_interrupt_bus()
+        self._interrupt_bus.subscribe(
+            "all",
+            lambda sig: self.dialog_state.reset_pending(sig.reason),
+        )
         self.assistant_context = AssistantContext()
         self.context_store = ContextStore()
         self.session_id = self.context_store.start_session({"entrypoint": "FridayApp"})
@@ -349,6 +359,10 @@ class FridayApp:
 
         if source in ("voice", "gui"):
             if source == "voice":
+                # Mute the mic button immediately so the GUI shows "idle/processing"
+                # while the turn runs. The post-turn finally block will re-emit the
+                # correct state (True for persistent/wake_word, False for on_demand).
+                self.event_bus.publish("gui_toggle_mic", False)
                 # Keep mic open so the user can barge in by saying "Friday [command]"
                 # while the task is running. The reactor shows "processing" via
                 # set_processing_state; stop_listening() is intentionally not called.

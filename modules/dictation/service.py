@@ -72,13 +72,21 @@ class DictationService:
     def current_label(self) -> str:
         return self._session.label if self._session else ""
 
-    def start(self, label: str = "") -> tuple[bool, str]:
+    def start(self, label: str = "", target_path: str = "") -> tuple[bool, str]:
+        """Begin a dictation session.
+
+        When ``target_path`` is non-empty the captured content is written to
+        that exact file on ``stop()`` instead of an auto-built memo path —
+        used by the file-creation workflow's "dictate the content" branch
+        (Issue 4). Otherwise we fall back to a timestamped memo in
+        ``~/Documents/friday-memos``.
+        """
         with self._lock:
             if self._session is not None:
                 return False, f"Dictation is already active — saying things like '{self._session.label}' lands in that memo."
             label = self._sanitize_label(label) or "memo"
             now = datetime.now()
-            file_path = self._build_path(label, now)
+            file_path = target_path.strip() or self._build_path(label, now)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             session = DictationSession(label=label, started_at=now, file_path=file_path, chunks=[])
             self._session = session
@@ -103,6 +111,12 @@ class DictationService:
             return False, f"Couldn't save the memo: {exc}"
         word_count = len(text.split())
         logger.info("[dictation] Saved %d-word memo to %s", word_count, session.file_path)
+        # Issue 7: register the just-saved memo as the working artifact so the
+        # next "read it" / "open it" / "summarize it" pronoun resolves to this
+        # file and not the previously-active artifact (e.g. ideas.md). Best-
+        # effort — if the session/memory services aren't available (tests),
+        # the dictation still succeeds.
+        self._publish_artifact(session, text)
         return True, (
             f"Saved your {word_count}-word memo to {os.path.basename(session.file_path)} "
             f"in the friday-memos folder."
@@ -153,6 +167,40 @@ class DictationService:
             normalized = re.sub(rf"\bfriday\s+{re.escape(phrase)}\b", " ", normalized, flags=re.IGNORECASE)
             normalized = re.sub(rf"\b{re.escape(phrase)}\b", " ", normalized, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", normalized).strip(" .,!?'\"")
+
+    def _publish_artifact(self, session: DictationSession, text: str) -> None:
+        """Make the saved memo the active WorkingArtifact (Issue 7).
+
+        Marks scope=explicit so subsequent "read it" pronoun resolution lands
+        on the memo even if some other tool sets an auto-scope artifact in
+        the same session afterwards.
+        """
+        session_id = getattr(self.app, "session_id", None)
+        memory = getattr(self.app, "memory_service", None) or getattr(self.app, "context_store", None)
+        if not session_id or memory is None or not hasattr(memory, "save_artifact"):
+            return
+        try:
+            from core.context_store import WorkingArtifact  # noqa: PLC0415
+            preview = (text or "").strip()[:500]
+            artifact = WorkingArtifact(
+                content=preview,
+                output_type="text",
+                capability_name="dictation",
+                artifact_type="memo",
+                source_path=session.file_path,
+                scope="explicit",
+            )
+            memory.save_artifact(session_id, artifact)
+        except Exception as exc:
+            logger.debug("[dictation] save_artifact skipped: %s", exc)
+        # Update DialogState.selected_file too so the WorkspaceFileController's
+        # "use_selected_file" path lights up for "open it" / "read it".
+        dialog_state = getattr(self.app, "dialog_state", None)
+        if dialog_state is not None and hasattr(dialog_state, "remember_file"):
+            try:
+                dialog_state.remember_file(session.file_path)
+            except Exception as exc:
+                logger.debug("[dictation] remember_file skipped: %s", exc)
 
     # ------------------------------------------------------------------
     # Internal

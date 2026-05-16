@@ -49,6 +49,21 @@ class TextToSpeech:
         self.speaking_started_at = 0.0
         self.speaking_stopped_at = 0.0
 
+        # Batch 3 / Issue 3: subscribe to the global InterruptBus so any
+        # subsystem (workflow cancel, an external scripted stop, etc.) can
+        # halt speech without needing a direct handle on this object. The
+        # callback simply calls stop(), which is idempotent — duplicate
+        # invocations from STT's inline tts.stop() + the bus signal are
+        # harmless.
+        try:
+            from core.interrupt_bus import get_interrupt_bus  # noqa: PLC0415
+            self._interrupt_unsubscribe = get_interrupt_bus().subscribe(
+                "tts", lambda sig: self.stop()
+            )
+        except Exception as exc:
+            logger.debug("[TTS] interrupt-bus subscription skipped: %s", exc)
+            self._interrupt_unsubscribe = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------

@@ -66,12 +66,28 @@ class WorkingArtifact:
 
     Stored in the session state JSON blob so it survives across the turn boundary.
     Enables pronoun resolution: "save that", "use this", "read it back".
+
+    ``scope`` (Issue 10) governs how aggressively the artifact bleeds across
+    turns:
+
+    * ``"auto"`` — set implicitly by side-effect (file load, capability output).
+      Older auto-scope artifacts get superseded by any newer artifact and
+      callers may treat them as stale once a few turns have elapsed.
+    * ``"explicit"`` — the user just named the target ("save that to
+      reverse.py", "remember this file"). Persists until another explicit
+      artifact replaces it or the session ends.
+    * ``"session"`` — long-lived pin (rare, reserved for future use).
+
+    ``created_at`` is an ISO timestamp captured at save time so callers can
+    compute age without needing a turn counter.
     """
     content: str
     output_type: str = "text"
     capability_name: str = ""
     artifact_type: str = "text"
     source_path: str = ""
+    scope: str = "auto"
+    created_at: str = ""
 
 
 class HashEmbeddingFunction:
@@ -79,12 +95,25 @@ class HashEmbeddingFunction:
     Small deterministic embedding function for local semantic recall.
 
     This keeps Chroma usable without downloading a heavy embedding model.
+
+    Implements the ChromaDB 1.x ``EmbeddingFunction`` protocol —
+    ``name()`` / ``get_config()`` / ``build_from_config()`` — so the
+    collection can be persisted and re-opened across runs. ChromaDB
+    raised "'HashEmbeddingFunction' object has no attribute 'name'" on
+    boot before this; the methods below are the minimum it now expects.
     """
+
+    _NAME = "friday-hash-v1"
 
     def __init__(self, dimensions=64):
         self.dimensions = max(16, int(dimensions))
 
     def __call__(self, input):
+        # Accept either ``list[str]`` (the documented Chroma path) or a
+        # bare string (some Chroma code paths pass single queries that
+        # way). Always returns a list-of-vectors of matching length.
+        if isinstance(input, str):
+            input = [input]
         embeddings = []
         for text in input:
             vector = [0.0] * self.dimensions
@@ -96,6 +125,43 @@ class HashEmbeddingFunction:
             norm = math.sqrt(sum(value * value for value in vector)) or 1.0
             embeddings.append([value / norm for value in vector])
         return embeddings
+
+    def embed_query(self, input):
+        """ChromaDB ≥ 1.5 expects this method on every embedder so it can
+        ask for query-time embeddings separately from document-time
+        ones. For our hash embedder the two are identical — just delegate.
+        """
+        return self.__call__(input)
+
+    def embed_documents(self, input):
+        """Counterpart to ``embed_query`` for indexing-time embeddings."""
+        return self.__call__(input)
+
+    # ChromaDB 1.x protocol -----------------------------------------------
+
+    @staticmethod
+    def name() -> str:
+        """Stable identifier ChromaDB uses to map persisted collections
+        back to this embedder. Must not change across releases or
+        Chroma will refuse to re-open an existing collection."""
+        return HashEmbeddingFunction._NAME
+
+    def get_config(self) -> dict:
+        return {"dimensions": int(self.dimensions)}
+
+    @staticmethod
+    def build_from_config(config: dict) -> "HashEmbeddingFunction":
+        return HashEmbeddingFunction(dimensions=int((config or {}).get("dimensions", 64)))
+
+    def default_space(self) -> str:
+        return "cosine"
+
+    @staticmethod
+    def supported_spaces():
+        return ["cosine", "l2", "ip"]
+
+    def is_legacy(self) -> bool:
+        return False
 
 
 class ContextStore:
@@ -447,14 +513,29 @@ class ContextStore:
     # ------------------------------------------------------------------
 
     def save_artifact(self, session_id: str, artifact: "WorkingArtifact") -> None:
-        """Persist the working artifact into the session state JSON blob."""
+        """Persist the working artifact into the session state JSON blob.
+
+        Issue 10 rule: an ``explicit``-scope artifact is NOT replaced by an
+        auto-scope save. The user just told us "this is the target" — a
+        side-effect (e.g. an unrelated file load) must not steal that slot.
+        Callers that want to overwrite an explicit artifact must save another
+        explicit one or call ``clear_artifact()``.
+        """
         state = self.get_session_state(session_id) or {}
+        existing = state.get("working_artifact") or {}
+        new_scope = artifact.scope or "auto"
+        if existing.get("scope") == "explicit" and new_scope == "auto":
+            # Quiet skip — explicit artifacts hold their position.
+            return
+        created_at = artifact.created_at or datetime.now().isoformat()
         state["working_artifact"] = {
             "content": artifact.content,
             "output_type": artifact.output_type,
             "capability_name": artifact.capability_name,
             "artifact_type": artifact.artifact_type,
             "source_path": artifact.source_path,
+            "scope": new_scope,
+            "created_at": created_at,
         }
         self.save_session_state(session_id, state)
 
@@ -470,7 +551,17 @@ class ContextStore:
             capability_name=data.get("capability_name", ""),
             artifact_type=data.get("artifact_type", "text"),
             source_path=data.get("source_path", ""),
+            scope=data.get("scope", "auto"),
+            created_at=data.get("created_at", ""),
         )
+
+    def clear_artifact(self, session_id: str) -> None:
+        """Remove the working artifact slot entirely (used by explicit
+        overwrites and by the InterruptBus reset path in the future)."""
+        state = self.get_session_state(session_id) or {}
+        if "working_artifact" in state:
+            del state["working_artifact"]
+            self.save_session_state(session_id, state)
 
     # ------------------------------------------------------------------
     # Reference registry — cross-turn entity and ordinal bindings

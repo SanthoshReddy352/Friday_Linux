@@ -14,6 +14,19 @@ from core.model_manager import LocalModelManager
 from core.routing_state import RoutingDecision, RoutingState
 
 
+# Tools whose planned action is "confirmation-shaped" — short, context-free
+# answers that an active workflow may legitimately want to claim. For these
+# the router gives the workflow first chance before executing the plan.
+# Imperative tools that re-enter the workflow themselves (play_youtube,
+# manage_file, …) are deliberately excluded so the action's args are not
+# lost by pre-emption. (Batch 4 / Issue 4 wiring.)
+_WORKFLOW_PRE_EMPT_TOOLS = frozenset({
+    "confirm_yes",
+    "confirm_no",
+    "select_file_candidate",
+})
+
+
 class CommandRouter:
     def __init__(self, event_bus):
         self.event_bus = event_bus
@@ -210,6 +223,10 @@ class CommandRouter:
         self.current_route_source = "idle"
         self.current_model_lane = "idle"
         self.last_routing_decision = RoutingDecision(source="idle", args={})
+        # STT typo correction (Issue 8): cheap, conservative, must happen
+        # before any downstream parser sees the input.
+        from core.text_normalize import normalize_for_routing  # noqa: PLC0415
+        text = normalize_for_routing(text)
         logger.info(f"Router received: {text}")
         text_lower = self._normalize_text(text)
         if not text_lower or not re.search(r"[a-z0-9]", text_lower):
@@ -250,6 +267,21 @@ class CommandRouter:
             return self._execute_plan(action_plan)
 
         if len(action_plan) == 1:
+            # Batch 4 / Issue 4: an active workflow waiting on a short
+            # conversational answer (write_confirmation, content_source,
+            # …) must win against IntentRecognizer's planned tool. We
+            # pre-empt when either (a) the planned tool is itself a
+            # confirmation-shaped surface — confirm_yes / confirm_no /
+            # select_file_candidate — or (b) the workflow has explicitly
+            # told us it expects this kind of answer. Imperative tool
+            # calls like play_youtube package their args via the action
+            # plan and re-enter the workflow through the tool handler,
+            # so we must not pre-empt them.
+            planned_name = action_plan[0]["route"]["spec"]["name"]
+            if planned_name in _WORKFLOW_PRE_EMPT_TOOLS or self._active_workflow_expects_short_answer():
+                workflow_result = self._continue_active_workflow(text)
+                if workflow_result is not None:
+                    return workflow_result
             planned_route = action_plan[0]["route"]
             logger.info(f"[router] Fast-path (planned) routing: {planned_route['spec']['name']}")
             self._set_routing_decision("deterministic", tool_name=planned_route["spec"]["name"], args=action_plan[0]["args"])
@@ -641,6 +673,30 @@ class CommandRouter:
 
         self._set_routing_decision("workflow", tool_name=result.workflow_name, args=result.state)
         return self._finalize_response(result.response)
+
+    # Pending slots that mean "I'm waiting for a short conversational
+    # answer (yes/no/dictate/generate/topic)" — anything else the user
+    # types in that state should defer to the workflow first, even if
+    # the IntentRecognizer found a confident-looking tool match.
+    _SHORT_ANSWER_SLOTS = frozenset({
+        "write_confirmation",
+        "content_source",
+        "content_topic",
+    })
+
+    def _active_workflow_expects_short_answer(self) -> bool:
+        memory = getattr(self, "context_store", None) or getattr(self, "memory_service", None)
+        session_id = getattr(self, "session_id", None)
+        if memory is None or not session_id or not hasattr(memory, "get_active_workflow"):
+            return False
+        try:
+            active = memory.get_active_workflow(session_id)
+        except Exception:
+            return False
+        if not active:
+            return False
+        pending = set(active.get("pending_slots") or [])
+        return bool(pending & self._SHORT_ANSWER_SLOTS)
 
     def _normalize_text(self, text):
         return " ".join(text.lower().strip().split())

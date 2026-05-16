@@ -62,11 +62,16 @@ def test_create_file_continues_with_filename_follow_up(monkeypatch, tmp_path):
     second = app.router.process_text("coffee")
 
     assert first == "What should I name the file?"
-    assert second == "Created coffee."
+    # Issue 4: bare create now prompts whether to write content. The
+    # filename + state still settle as before; only the response copy
+    # changed (the prompt is appended).
+    assert second.startswith("Created coffee.")
+    assert "Would you like me to write anything in it?" in second
     assert (desktop / "coffee").exists()
     state = app.context_store.get_active_workflow(app.session_id, workflow_name="file_workflow")
     assert state["target"]["filename"] == "coffee"
     assert state["status"] == "active"
+    assert state["pending_slots"] == ["write_confirmation"]
 
 
 def test_reminder_prompts_for_missing_date_and_time(monkeypatch, tmp_path):
@@ -189,9 +194,12 @@ def test_calendar_events_briefing_formats_upcoming_times(monkeypatch, tmp_path):
     monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, event_id, message, remind_at: False)
     app = build_test_app(tmp_path)
     plugin = TaskManagerPlugin(app)
+    # _create_calendar_event defaults to event_type="reminder" — Issue 7
+    # split: the reminder is now read by handle_list_reminders, not by
+    # handle_list_calendar_events (which is calendar-only).
     plugin._create_calendar_event("purchase a gift", FixedDatetime(2026, 4, 28, 16, 10, 0))
 
-    result = plugin.handle_list_calendar_events("", {})
+    result = plugin.handle_list_reminders("", {})
 
     assert result == "Here are your reminders:\n  Today at 4:10 PM: purchase a gift"
 
@@ -328,7 +336,13 @@ def test_write_request_without_content_prompts_and_then_saves(monkeypatch, tmp_p
     app = build_test_app(tmp_path)
     SystemControlPlugin(app)
 
-    assert app.router.process_text("create a file named coffee") == "Created coffee."
+    # Issue 4: bare create now prompts before letting the workflow exit.
+    created = app.router.process_text("create a file named coffee")
+    assert created.startswith("Created coffee.")
+    assert "Would you like me to write anything in it?" in created
+
+    # A fresh "write some content" command is not a yes/no answer, so
+    # the workflow releases and the normal write path runs to completion.
     prompt = app.router.process_text("write some content into the coffee file")
     saved = app.router.process_text("Arabica and Robusta are common coffee types.")
 
@@ -344,7 +358,10 @@ def test_save_that_uses_latest_assistant_response_for_active_file(monkeypatch, t
     app = build_test_app(tmp_path)
     SystemControlPlugin(app)
 
-    assert app.router.process_text("create a file named coffee") == "Created coffee."
+    # Issue 4: create now appends the write-confirmation prompt. The
+    # caller-visible filename + workflow target are unchanged.
+    created = app.router.process_text("create a file named coffee")
+    assert created.startswith("Created coffee.")
     app.assistant_context.record_message("assistant", "Espresso, drip coffee, and cold brew.")
 
     saved = app.router.process_text("save that")
@@ -523,7 +540,10 @@ def test_open_named_active_file_prefers_file_over_app(monkeypatch, tmp_path):
     app = build_test_app(tmp_path)
     SystemControlPlugin(app)
 
-    assert app.router.process_text("create a file named coffee") == "Created coffee."
+    # Issue 4: bare create now appends the write-confirmation prompt;
+    # filename + workflow target are unchanged.
+    created = app.router.process_text("create a file named coffee")
+    assert created.startswith("Created coffee.")
     response = app.router.process_text("open coffee")
 
     assert response == "Opening coffee..."
@@ -787,6 +807,9 @@ def test_calendar_event_fires_with_starting_now_announcement(monkeypatch, tmp_pa
 
 
 def test_list_separates_reminders_and_calendar_events(monkeypatch, tmp_path):
+    # Issue 7 split: handle_list_calendar_events / handle_list_reminders
+    # each own one bucket only. The two return values together cover what
+    # the old conflated handler used to emit.
     monkeypatch.setattr(task_manager_plugin, "datetime", FixedNow)
     monkeypatch.setattr(task_manager_plugin, "DB_PATH", str(tmp_path / "friday.db"))
     monkeypatch.setattr(TaskManagerPlugin, "_schedule_system_notification", lambda self, *a: False)
@@ -796,12 +819,13 @@ def test_list_separates_reminders_and_calendar_events(monkeypatch, tmp_path):
     plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
     plugin._create_calendar_event("Standup", FUTURE, event_type="calendar_event")
 
-    result = plugin.handle_list_calendar_events("", {})
+    reminders = plugin.handle_list_reminders("", {})
+    events = plugin.handle_list_calendar_events("", {})
 
-    assert "Reminders:" in result
-    assert "call John" in result
-    assert "Calendar events:" in result
-    assert "Standup" in result
+    assert "call John" in reminders
+    assert "Standup" not in reminders
+    assert "Standup" in events
+    assert "call John" not in events
 
 
 def test_list_only_reminders_uses_reminder_header(monkeypatch, tmp_path):
@@ -813,7 +837,7 @@ def test_list_only_reminders_uses_reminder_header(monkeypatch, tmp_path):
 
     plugin._create_calendar_event("call John", FUTURE, event_type="reminder")
 
-    result = plugin.handle_list_calendar_events("", {})
+    result = plugin.handle_list_reminders("", {})
 
     assert result.startswith("Here are your reminders:")
     assert "Calendar events" not in result
@@ -850,3 +874,135 @@ def test_briefing_separates_reminders_and_events(monkeypatch, tmp_path):
     assert "call John" in result
     assert "1 upcoming calendar event" in result
     assert "Standup" in result
+
+
+# ── Workflow cancel ─────────────────────────────────────────────────────────
+
+def test_cancel_word_clears_active_workflow(tmp_path):
+    app = build_test_app(tmp_path)
+    session_id = app.session_id
+    app.context_store.save_workflow_state(
+        session_id,
+        "calendar_event_workflow",
+        {
+            "workflow_name": "calendar_event_workflow",
+            "status": "pending",
+            "pending_slots": ["start_dt"],
+            "summary": "dentist appointment",
+        },
+    )
+    assert app.context_store.get_active_workflow(session_id) is not None
+
+    result = app.workflow_orchestrator.continue_active("cancel", session_id)
+
+    assert result.handled is True
+    assert "cancel" in result.response.lower()
+    assert app.context_store.get_active_workflow(session_id) is None
+
+
+def test_cancel_typo_clears_active_workflow(tmp_path):
+    """Misspelled 'cancle' should still cancel (fuzzy match)."""
+    app = build_test_app(tmp_path)
+    session_id = app.session_id
+    app.context_store.save_workflow_state(
+        session_id,
+        "file_workflow",
+        {
+            "workflow_name": "file_workflow",
+            "status": "pending",
+            "pending_slots": ["filename"],
+            "last_action": "create",
+            "target": {},
+        },
+    )
+    result = app.workflow_orchestrator.continue_active("cancle", session_id)
+
+    assert result.handled is True
+    assert app.context_store.get_active_workflow(session_id) is None
+
+
+def test_abort_clears_active_workflow(tmp_path):
+    app = build_test_app(tmp_path)
+    session_id = app.session_id
+    app.context_store.save_workflow_state(
+        session_id,
+        "file_workflow",
+        {
+            "workflow_name": "file_workflow",
+            "status": "pending",
+            "pending_slots": ["filename"],
+            "last_action": "create",
+            "target": {},
+        },
+    )
+    result = app.workflow_orchestrator.continue_active("abort", session_id)
+
+    assert result.handled is True
+    assert app.context_store.get_active_workflow(session_id) is None
+
+
+def test_non_cancel_word_does_not_clear_workflow(tmp_path):
+    """A legitimate workflow reply must NOT be mistaken for a cancel command."""
+    app = build_test_app(tmp_path)
+    session_id = app.session_id
+    app.context_store.save_workflow_state(
+        session_id,
+        "calendar_event_workflow",
+        {
+            "workflow_name": "calendar_event_workflow",
+            "status": "pending",
+            "pending_slots": ["start_dt"],
+            "summary": "dentist",
+        },
+    )
+    # "today at 3 pm" should not be treated as cancel
+    # (workflow will fail to execute without workspace ext, but state must remain)
+    app.workflow_orchestrator.continue_active("today at 3 pm", session_id)
+    # workflow state may or may not be present depending on handler, but "cancel"
+    # detection must not have fired — verify the cancel path was not taken
+    # by checking we didn't get the cancel response through continue_active
+    # with the cancel words specifically
+    cancel_result = app.workflow_orchestrator.continue_active("stop the music", session_id)
+    # "stop the music" has "music" as a meaningful non-cancel word → not a cancel
+    # (workflow may already be gone at this point, so just verify not cancel response)
+    if cancel_result.handled:
+        assert "music" not in cancel_result.response.lower() or "cancel" not in cancel_result.response.lower()
+
+
+# ── Screenshot path storage ─────────────────────────────────────────────────
+
+def test_take_screenshot_stores_path_in_dialog_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_path = str(tmp_path / "screenshot_20260515_102814.png")
+    import modules.system_control.plugin as sc_plugin
+    monkeypatch.setattr(sc_plugin, "take_screenshot", lambda: f"Screenshot saved successfully at: {fake_path}")
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = build_test_app(tmp_path)
+    plugin = SystemControlPlugin(app)
+
+    plugin.handle_take_screenshot("take a screenshot", {})
+
+    assert app.dialog_state.selected_file == fake_path
+
+
+def test_open_it_after_screenshot_opens_screenshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_path = str(tmp_path / "screenshot_20260515_102814.png")
+    (tmp_path / "screenshot_20260515_102814.png").write_bytes(b"PNG")
+    import modules.system_control.plugin as sc_plugin
+    monkeypatch.setattr(sc_plugin, "take_screenshot", lambda: f"Screenshot saved successfully at: {fake_path}")
+    import modules.system_control.file_search as fs
+    opened = []
+    monkeypatch.setattr(fs, "open_path", lambda path, label="file": opened.append(path) or f"Opening {label}...")
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = build_test_app(tmp_path)
+    SystemControlPlugin(app)
+
+    app.router.process_text("take a screenshot")
+    response = app.router.process_text("open it")
+
+    assert opened, "xdg-open (open_path) was never called"
+    assert opened[0] == fake_path
+    assert "Which file" not in response

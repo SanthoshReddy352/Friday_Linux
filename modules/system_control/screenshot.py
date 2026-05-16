@@ -8,6 +8,18 @@ from urllib.parse import unquote, urlparse
 from core.logger import logger
 
 
+def _is_mostly_black(filepath: str) -> bool:
+    """Return True if the saved PNG is essentially solid black (e.g. XWayland empty framebuffer)."""
+    if os.name == "nt":
+        return False
+    try:
+        from PIL import Image, ImageStat
+        with Image.open(filepath) as img:
+            return ImageStat.Stat(img.convert("L")).mean[0] < 10.0
+    except Exception:
+        return False
+
+
 def _ensure_xwayland_env() -> bool:
     """
     On GNOME Wayland, Mutter runs an embedded XWayland server with a private
@@ -52,26 +64,28 @@ def take_screenshot():
     errors = []
 
     if os.name != "nt":
-        # 0. mss via XWayland — instant, no D-Bus, works on GNOME Wayland
-        _ensure_xwayland_env()
-        try:
-            import mss
-            import mss.tools
-            with mss.MSS() as sct:
-                monitor = sct.monitors[1]
-                raw = sct.grab(monitor)
-                png_bytes = mss.tools.to_png(raw.rgb, raw.size)
-                with open(filepath, "wb") as f:
-                    f.write(png_bytes)
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                logger.info(f"Screenshot taken via mss/XWayland: {filepath}")
-                return f"Screenshot saved successfully at: {filepath}"
-        except Exception as e:
-            errors.append(f"mss: {e}")
-
         is_wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(
             os.environ.get("WAYLAND_DISPLAY")
         )
+
+        # 0. mss via XWayland — instant, X11 only (Wayland framebuffer is black)
+        if not is_wayland:
+            _ensure_xwayland_env()
+            try:
+                import mss
+                import mss.tools
+                with mss.MSS() as sct:
+                    monitor = sct.monitors[1]
+                    raw = sct.grab(monitor)
+                    png_bytes = mss.tools.to_png(raw.rgb, raw.size)
+                    with open(filepath, "wb") as f:
+                        f.write(png_bytes)
+                if (os.path.exists(filepath) and os.path.getsize(filepath) > 0
+                        and not _is_mostly_black(filepath)):
+                    logger.info(f"Screenshot taken via mss/XWayland: {filepath}")
+                    return f"Screenshot saved successfully at: {filepath}"
+            except Exception as e:
+                errors.append(f"mss: {e}")
 
         if is_wayland:
             # 1. Mutter ScreenCast + PipeWire — confirmed working on GNOME Wayland, no dialog

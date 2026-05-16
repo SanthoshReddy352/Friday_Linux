@@ -1,0 +1,388 @@
+# =====================================================================
+# Intent-routing benchmark dataset (full tool coverage).
+#
+# One YAML record per natural-language utterance, paired with the tool
+# we expect the router to dispatch to. ``category`` groups rows for the
+# per-section breakdown in the report; ``notes`` is freeform context.
+#
+# Coverage goal: every tool registered by the bench's plugin set gets
+# at least ~8 phrasings — formal, casual, terse, polite, with-args,
+# without-args, typo'd, indirect — plus a "none" bucket for utterances
+# that must fall back to llm_chat. The hand-graded label is the ground
+# truth used by ``scripts/bench_intent_routing.py`` to compute accuracy,
+# precision, recall, F1, and the per-tool confusion matrix.
+#
+# When adding rows: keep each one a single sentence, keep the
+# ``expected_tool`` lowercase, prefer phrasings observed in real user
+# logs, and add ``notes`` when the row is a regression guard for a
+# specific issue.
+# =====================================================================
+
+cases:
+  # -------------------------------------------------------------------
+  # get_time
+  # -------------------------------------------------------------------
+  - {utterance: "what time is it",                    expected_tool: get_time,          category: time}
+  - {utterance: "tell me the time",                   expected_tool: get_time,          category: time}
+  - {utterance: "what's the time",                    expected_tool: get_time,          category: time}
+  - {utterance: "current time please",                expected_tool: get_time,          category: time}
+  - {utterance: "do you know what time it is",        expected_tool: get_time,          category: time}
+  - {utterance: "got the time",                       expected_tool: get_time,          category: time}
+  - {utterance: "give me the time",                   expected_tool: get_time,          category: time}
+  - {utterance: "Friday what time is it",             expected_tool: get_time,          category: time}
+  - {utterance: "set my time zone to UTC",            expected_tool: llm_chat,          category: time, notes: "Negative — bare 'time'"}
+  - {utterance: "time to leave for dinner",           expected_tool: llm_chat,          category: time, notes: "Negative — figurative"}
+
+  # -------------------------------------------------------------------
+  # get_date
+  # -------------------------------------------------------------------
+  - {utterance: "what's today's date",                expected_tool: get_date,          category: date}
+  - {utterance: "today's date please",                expected_tool: get_date,          category: date}
+  - {utterance: "what is the date today",             expected_tool: get_date,          category: date}
+  - {utterance: "tell me today's date",               expected_tool: get_date,          category: date}
+  - {utterance: "what day is it",                     expected_tool: get_date,          category: date}
+  - {utterance: "current date",                       expected_tool: get_date,          category: date}
+  - {utterance: "what day of the week is it",         expected_tool: get_date,          category: date}
+  - {utterance: "I have a date tonight",              expected_tool: llm_chat,          category: date, notes: "Negative — homonym"}
+  - {utterance: "the deadline is the 15th",           expected_tool: llm_chat,          category: date, notes: "Negative — date as noun"}
+
+  # -------------------------------------------------------------------
+  # get_battery
+  # -------------------------------------------------------------------
+  - {utterance: "battery status",                     expected_tool: get_battery,       category: battery}
+  - {utterance: "how's my battery",                   expected_tool: get_battery,       category: battery}
+  - {utterance: "what's my battery percentage",       expected_tool: get_battery,       category: battery}
+  - {utterance: "is my laptop charging",              expected_tool: get_battery,       category: battery}
+  - {utterance: "how much battery do I have left",    expected_tool: get_battery,       category: battery}
+  - {utterance: "battery level please",               expected_tool: get_battery,       category: battery}
+  - {utterance: "show me the battery",                expected_tool: get_battery,       category: battery}
+  - {utterance: "the battery in my car died",         expected_tool: llm_chat,          category: battery, notes: "Negative — figurative"}
+  - {utterance: "I bought a new battery yesterday",   expected_tool: llm_chat,          category: battery, notes: "Negative — narrative"}
+
+  # -------------------------------------------------------------------
+  # get_cpu_ram
+  # -------------------------------------------------------------------
+  - {utterance: "cpu usage",                          expected_tool: get_cpu_ram,       category: system}
+  - {utterance: "show me ram usage",                  expected_tool: get_cpu_ram,       category: system}
+  - {utterance: "how much memory am I using",         expected_tool: get_cpu_ram,       category: system}
+  - {utterance: "system performance",                 expected_tool: get_cpu_ram,       category: system}
+  - {utterance: "cpu load",                           expected_tool: get_cpu_ram,       category: system}
+  - {utterance: "my computer's performance has dropped", expected_tool: llm_chat,       category: system, notes: "Negative"}
+  - {utterance: "I forgot what I had for memory yesterday", expected_tool: llm_chat,    category: system, notes: "Negative — figurative memory"}
+
+  # -------------------------------------------------------------------
+  # get_system_status
+  # -------------------------------------------------------------------
+  - {utterance: "system status",                      expected_tool: get_system_status, category: system}
+  - {utterance: "system health",                      expected_tool: get_system_status, category: system}
+  - {utterance: "give me a system overview",          expected_tool: get_system_status, category: system}
+  - {utterance: "how is the machine doing",           expected_tool: get_system_status, category: system}
+
+  # -------------------------------------------------------------------
+  # get_friday_status
+  # -------------------------------------------------------------------
+  - {utterance: "friday status",                      expected_tool: get_friday_status, category: status}
+  - {utterance: "are you ready friday",               expected_tool: get_friday_status, category: status}
+  - {utterance: "are you online",                     expected_tool: get_friday_status, category: status}
+  - {utterance: "check friday",                       expected_tool: get_friday_status, category: status}
+  - {utterance: "your status",                        expected_tool: get_friday_status, category: status}
+  - {utterance: "is everything loaded",               expected_tool: get_friday_status, category: status}
+
+  # -------------------------------------------------------------------
+  # get_weather  (Issue 13)
+  # -------------------------------------------------------------------
+  - {utterance: "what's the weather in Mumbai",       expected_tool: get_weather,       category: weather}
+  - {utterance: "weather in Bangalore",               expected_tool: get_weather,       category: weather}
+  - {utterance: "how's the weather today",            expected_tool: get_weather,       category: weather}
+  - {utterance: "is it going to rain tomorrow",       expected_tool: get_weather,       category: weather}
+  - {utterance: "what's the temperature outside",     expected_tool: get_weather,       category: weather}
+  - {utterance: "forecast for Delhi tomorrow",        expected_tool: get_weather,       category: weather}
+  - {utterance: "is it sunny in New York",            expected_tool: get_weather,       category: weather}
+  - {utterance: "what's the wheather like",           expected_tool: get_weather,       category: weather, notes: "STT typo"}
+  - {utterance: "weather forecast please",            expected_tool: get_weather,       category: weather}
+
+  # -------------------------------------------------------------------
+  # launch_app
+  # -------------------------------------------------------------------
+  - {utterance: "open calculator",                    expected_tool: launch_app,        category: launch}
+  - {utterance: "launch firefox",                     expected_tool: launch_app,        category: launch}
+  - {utterance: "start the terminal",                 expected_tool: launch_app,        category: launch}
+  - {utterance: "bring up the file manager",          expected_tool: launch_app,        category: launch}
+  - {utterance: "open vscode for me",                 expected_tool: launch_app,        category: launch}
+  - {utterance: "launch chromium",                    expected_tool: launch_app,        category: launch}
+  - {utterance: "open spotify and discord",           expected_tool: launch_app,        category: launch, notes: "Multi-app"}
+  - {utterance: "I deleted my screenshot folder",     expected_tool: llm_chat,          category: launch, notes: "Negative"}
+
+  # -------------------------------------------------------------------
+  # take_screenshot
+  # -------------------------------------------------------------------
+  - {utterance: "take a screenshot",                  expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "capture the screen",                 expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "screenshot please",                  expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "grab a screen capture",              expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "snap a screenshot",                  expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "take a picture of my screen",        expected_tool: take_screenshot,   category: screenshot}
+  - {utterance: "I lost the screenshot I took earlier", expected_tool: llm_chat,        category: screenshot, notes: "Negative"}
+
+  # -------------------------------------------------------------------
+  # set_volume
+  # -------------------------------------------------------------------
+  - {utterance: "set volume to 50",                   expected_tool: set_volume,        category: volume}
+  - {utterance: "turn the volume up",                 expected_tool: set_volume,        category: volume}
+  - {utterance: "mute",                               expected_tool: set_volume,        category: volume}
+  - {utterance: "unmute",                             expected_tool: set_volume,        category: volume}
+  - {utterance: "lower the volume",                   expected_tool: set_volume,        category: volume}
+  - {utterance: "increase volume by 10",              expected_tool: set_volume,        category: volume}
+  - {utterance: "make it louder",                     expected_tool: set_volume,        category: volume}
+  - {utterance: "raise the question with the team",   expected_tool: llm_chat,          category: volume, notes: "Negative"}
+
+  # -------------------------------------------------------------------
+  # set_voice_mode (Issue 2)
+  # -------------------------------------------------------------------
+  - {utterance: "set voice mode to manual",           expected_tool: set_voice_mode,    category: voice}
+  - {utterance: "set voice to manual",                expected_tool: set_voice_mode,    category: voice, notes: "Issue 2 — 'mode' dropped"}
+  - {utterance: "switch voice on demand",             expected_tool: set_voice_mode,    category: voice, notes: "Issue 2"}
+  - {utterance: "change voice mode to persistent",    expected_tool: set_voice_mode,    category: voice}
+  - {utterance: "use wake word mode",                 expected_tool: set_voice_mode,    category: voice}
+  - {utterance: "turn off the voice mode",            expected_tool: set_voice_mode,    category: voice}
+
+  # -------------------------------------------------------------------
+  # enable_voice / disable_voice
+  # -------------------------------------------------------------------
+  - {utterance: "enable voice",                       expected_tool: enable_voice,      category: voice}
+  - {utterance: "turn the microphone on",             expected_tool: enable_voice,      category: voice}
+  - {utterance: "start listening",                    expected_tool: enable_voice,      category: voice}
+  - {utterance: "Friday wake up",                     expected_tool: enable_voice,      category: voice}
+  - {utterance: "disable voice",                      expected_tool: disable_voice,     category: voice}
+  - {utterance: "turn the microphone off",            expected_tool: disable_voice,     category: voice}
+  - {utterance: "stop listening",                     expected_tool: disable_voice,     category: voice}
+  - {utterance: "mute the mic",                       expected_tool: disable_voice,     category: voice}
+
+  # -------------------------------------------------------------------
+  # set_reminder
+  # -------------------------------------------------------------------
+  - {utterance: "remind me to drink water in 15 minutes", expected_tool: set_reminder,  category: reminders}
+  - {utterance: "set a reminder for 5 pm",             expected_tool: set_reminder,    category: reminders}
+  - {utterance: "remind me to call mom at 4pm",        expected_tool: set_reminder,    category: reminders}
+  - {utterance: "remind me about the gym",             expected_tool: set_reminder,    category: reminders}
+  - {utterance: "set a 10 minute reminder",            expected_tool: set_reminder,    category: reminders}
+  - {utterance: "remind me to take medicine at 9 every night", expected_tool: set_reminder, category: reminders}
+  - {utterance: "remind me",                           expected_tool: set_reminder,    category: reminders}
+  - {utterance: "set up a reminer to stretch",         expected_tool: set_reminder,    category: reminders, notes: "STT typo"}
+
+  # -------------------------------------------------------------------
+  # list_reminders  (Issue 7)
+  # -------------------------------------------------------------------
+  - {utterance: "list my reminders",                  expected_tool: list_reminders,    category: reminders, notes: "Issue 7"}
+  - {utterance: "what are my reminders",              expected_tool: list_reminders,    category: reminders}
+  - {utterance: "show me my reminders",               expected_tool: list_reminders,    category: reminders}
+  - {utterance: "upcoming reminders",                  expected_tool: list_reminders,   category: reminders}
+  - {utterance: "what reminders do I have",           expected_tool: list_reminders,    category: reminders}
+
+  # -------------------------------------------------------------------
+  # list_calendar_events  (Issue 7)
+  # -------------------------------------------------------------------
+  - {utterance: "what's on my calendar",              expected_tool: list_calendar_events, category: calendar, notes: "Issue 7"}
+  - {utterance: "list calendar events",               expected_tool: list_calendar_events, category: calendar}
+  - {utterance: "show me my agenda",                  expected_tool: list_calendar_events, category: calendar}
+  - {utterance: "what's my schedule today",           expected_tool: list_calendar_events, category: calendar}
+  - {utterance: "any meetings today",                 expected_tool: list_calendar_events, category: calendar}
+  - {utterance: "upcoming events",                    expected_tool: list_calendar_events, category: calendar}
+
+  # -------------------------------------------------------------------
+  # create_calendar_event  (Issues 8, 11)
+  # -------------------------------------------------------------------
+  - {utterance: "schedule a meeting in 15 minutes",   expected_tool: create_calendar_event, category: calendar, notes: "Issue 11 — title=Meeting"}
+  - {utterance: "add a calendar event Lunch tomorrow at noon", expected_tool: create_calendar_event, category: calendar}
+  - {utterance: "create a calendar event titled Q4 review at 3pm", expected_tool: create_calendar_event, category: calendar}
+  - {utterance: "create a calender evnet",            expected_tool: create_calendar_event, category: calendar, notes: "Issue 8 — STT typo"}
+  - {utterance: "book a dentist appointment for Friday at 3pm", expected_tool: create_calendar_event, category: calendar}
+  - {utterance: "put a meeting on the calendar tomorrow at 10am", expected_tool: create_calendar_event, category: calendar}
+  - {utterance: "schedule a 1 on 1 with Sam",         expected_tool: create_calendar_event, category: calendar}
+  - {utterance: "set up an event for next Monday",    expected_tool: create_calendar_event, category: calendar}
+
+  # -------------------------------------------------------------------
+  # move_calendar_event
+  # -------------------------------------------------------------------
+  - {utterance: "move my 3pm to 4pm",                 expected_tool: move_calendar_event, category: calendar}
+  - {utterance: "reschedule the standup to 11am",     expected_tool: move_calendar_event, category: calendar}
+  - {utterance: "shift the dentist to next week",     expected_tool: move_calendar_event, category: calendar}
+  - {utterance: "push the gym block back an hour",    expected_tool: move_calendar_event, category: calendar}
+
+  # -------------------------------------------------------------------
+  # cancel_calendar_event
+  # -------------------------------------------------------------------
+  - {utterance: "cancel the next event",              expected_tool: cancel_calendar_event, category: calendar}
+  - {utterance: "cancel the dentist appointment",     expected_tool: cancel_calendar_event, category: calendar}
+  - {utterance: "delete the 3pm meeting",             expected_tool: cancel_calendar_event, category: calendar}
+  - {utterance: "remove tomorrow's standup",          expected_tool: cancel_calendar_event, category: calendar}
+  - {utterance: "drop the gym block",                 expected_tool: cancel_calendar_event, category: calendar}
+
+  # -------------------------------------------------------------------
+  # save_note
+  # -------------------------------------------------------------------
+  - {utterance: "save note milk eggs bread",          expected_tool: save_note,         category: notes}
+  - {utterance: "make a quick note that I owe Sam 20 dollars", expected_tool: save_note, category: notes}
+  - {utterance: "note this down: ship the PR by Friday", expected_tool: save_note,      category: notes}
+  - {utterance: "remember that I prefer dark mode",   expected_tool: save_note,         category: notes}
+  - {utterance: "jot down: pick up dry cleaning",     expected_tool: save_note,         category: notes}
+  - {utterance: "add to my notes: read the new RFC",  expected_tool: save_note,         category: notes}
+  - {utterance: "save a note about the meeting",      expected_tool: save_note,         category: notes}
+
+  # -------------------------------------------------------------------
+  # read_notes
+  # -------------------------------------------------------------------
+  - {utterance: "read my notes",                      expected_tool: read_notes,        category: notes}
+  - {utterance: "show me my notes",                   expected_tool: read_notes,        category: notes}
+  - {utterance: "list my notes",                      expected_tool: read_notes,        category: notes}
+  - {utterance: "what notes do I have",               expected_tool: read_notes,        category: notes}
+
+  # -------------------------------------------------------------------
+  # manage_file (create)
+  # -------------------------------------------------------------------
+  - {utterance: "create a file",                      expected_tool: manage_file,       category: files}
+  - {utterance: "create a file named ideas.md",       expected_tool: manage_file,       category: files}
+  - {utterance: "make a new file called todo.txt",    expected_tool: manage_file,       category: files}
+  - {utterance: "save that to a file called reverse.py", expected_tool: manage_file,    category: files, notes: "Issue 10"}
+  - {utterance: "write the answer to notes.md",       expected_tool: manage_file,       category: files}
+  - {utterance: "append second line to scratch.md",   expected_tool: manage_file,       category: files, notes: "Issue 5"}
+
+  # -------------------------------------------------------------------
+  # open_file / read_file / summarize_file / search_file
+  # -------------------------------------------------------------------
+  - {utterance: "open the README file",               expected_tool: open_file,         category: files}
+  - {utterance: "open notes.md",                      expected_tool: open_file,         category: files}
+  - {utterance: "read me the latest report",          expected_tool: read_file,         category: files}
+  - {utterance: "show the contents of config.yaml",   expected_tool: read_file,         category: files}
+  - {utterance: "summarize that file for me",         expected_tool: summarize_file,    category: files}
+  - {utterance: "give me a summary of the report",    expected_tool: summarize_file,    category: files}
+  - {utterance: "find the resume pdf",                expected_tool: search_file,       category: files}
+  - {utterance: "search for budget xlsx",             expected_tool: search_file,       category: files}
+  - {utterance: "locate my driver's license image",   expected_tool: search_file,       category: files}
+
+  # -------------------------------------------------------------------
+  # list_folder_contents / open_folder
+  # -------------------------------------------------------------------
+  - {utterance: "what's in my Downloads folder",      expected_tool: list_folder_contents, category: files}
+  - {utterance: "list the desktop",                   expected_tool: list_folder_contents, category: files}
+  - {utterance: "show me the documents folder",       expected_tool: list_folder_contents, category: files}
+  - {utterance: "open the downloads folder",          expected_tool: open_folder,       category: files}
+  - {utterance: "open my projects folder",            expected_tool: open_folder,       category: files}
+
+  # -------------------------------------------------------------------
+  # Browser / media (Issue 9)
+  # -------------------------------------------------------------------
+  - {utterance: "play sahiba on youtube",             expected_tool: play_youtube,      category: media}
+  - {utterance: "play despacito on youtube",          expected_tool: play_youtube,      category: media}
+  - {utterance: "pull up that song on youtube",       expected_tool: play_youtube,      category: media}
+  - {utterance: "play sahiba on youtube music",       expected_tool: play_youtube_music, category: media}
+  - {utterance: "play lofi on youtube music",         expected_tool: play_youtube_music, category: media}
+  - {utterance: "google capital of france",           expected_tool: search_google,     category: media}
+  - {utterance: "search google for python typing",    expected_tool: search_google,     category: media}
+  - {utterance: "look up the weather on google",      expected_tool: search_google,     category: media}
+  - {utterance: "open github.com",                    expected_tool: open_browser_url,  category: media}
+  - {utterance: "go to nytimes.com",                  expected_tool: open_browser_url,  category: media}
+  - {utterance: "pause",                              expected_tool: browser_media_control, category: media}
+  - {utterance: "resume the video",                   expected_tool: browser_media_control, category: media}
+  - {utterance: "skip 30 seconds forward",            expected_tool: browser_media_control, category: media}
+  - {utterance: "next track",                         expected_tool: browser_media_control, category: media}
+  - {utterance: "next year is my promotion",          expected_tool: llm_chat,          category: media, notes: "Issue 9 — must NOT hijack"}
+  - {utterance: "remember that I work as a backend engineer at Acme", expected_tool: save_note, category: media, notes: "Issue 9"}
+
+  # -------------------------------------------------------------------
+  # Email
+  # -------------------------------------------------------------------
+  - {utterance: "read my latest email",               expected_tool: read_latest_email, category: email}
+  - {utterance: "what's the newest email in my inbox", expected_tool: read_latest_email, category: email}
+  - {utterance: "read the most recent email",         expected_tool: read_latest_email, category: email}
+  - {utterance: "summarize my inbox",                 expected_tool: summarize_inbox,   category: email}
+  - {utterance: "give me an inbox summary",           expected_tool: summarize_inbox,   category: email}
+  - {utterance: "summarize all my unread emails",     expected_tool: summarize_inbox,   category: email}
+
+  # -------------------------------------------------------------------
+  # Focus session
+  # -------------------------------------------------------------------
+  - {utterance: "start a focus session",              expected_tool: start_focus_session, category: focus}
+  - {utterance: "begin a pomodoro",                   expected_tool: start_focus_session, category: focus}
+  - {utterance: "focus mode on",                      expected_tool: start_focus_session, category: focus}
+  - {utterance: "start a 25 minute focus block",      expected_tool: start_focus_session, category: focus}
+  - {utterance: "end focus",                          expected_tool: end_focus_session, category: focus}
+  - {utterance: "stop the focus session",             expected_tool: end_focus_session, category: focus}
+  - {utterance: "exit focus mode",                    expected_tool: end_focus_session, category: focus}
+  - {utterance: "how much focus is left",             expected_tool: focus_session_status, category: focus}
+  - {utterance: "time left in focus",                 expected_tool: focus_session_status, category: focus}
+  - {utterance: "am I in focus mode",                 expected_tool: focus_session_status, category: focus}
+
+  # -------------------------------------------------------------------
+  # Dictation
+  # -------------------------------------------------------------------
+  - {utterance: "take a memo",                        expected_tool: start_dictation,   category: dictation}
+  - {utterance: "start dictation",                    expected_tool: start_dictation,   category: dictation}
+  - {utterance: "begin a journal entry",              expected_tool: start_dictation,   category: dictation}
+  - {utterance: "Friday end memo",                    expected_tool: end_dictation,     category: dictation}
+  - {utterance: "stop dictation",                     expected_tool: end_dictation,     category: dictation}
+  - {utterance: "finish the memo",                    expected_tool: end_dictation,     category: dictation}
+  - {utterance: "cancel memo",                        expected_tool: cancel_dictation,  category: dictation}
+  - {utterance: "discard the dictation",              expected_tool: cancel_dictation,  category: dictation}
+
+  # -------------------------------------------------------------------
+  # Memory / show_memories / delete_memory
+  # -------------------------------------------------------------------
+  - {utterance: "what do you remember about me",      expected_tool: show_memories,     category: memory}
+  - {utterance: "what do you know about me",          expected_tool: show_memories,     category: memory}
+  - {utterance: "show me my memories",                expected_tool: show_memories,     category: memory}
+  - {utterance: "what are my preferences",            expected_tool: show_memories,     category: memory}
+  - {utterance: "forget what I told you",             expected_tool: delete_memory,     category: memory}
+  - {utterance: "delete that memory",                 expected_tool: delete_memory,     category: memory}
+  - {utterance: "stop remembering my address",        expected_tool: delete_memory,     category: memory}
+
+  # -------------------------------------------------------------------
+  # Help / capabilities / shutdown
+  # -------------------------------------------------------------------
+  - {utterance: "what can you do",                    expected_tool: show_capabilities, category: help}
+  - {utterance: "list your tools",                    expected_tool: show_capabilities, category: help}
+  - {utterance: "what features do you have",          expected_tool: show_capabilities, category: help}
+  - {utterance: "show me your commands",              expected_tool: show_capabilities, category: help}
+  - {utterance: "tell me what you can do",            expected_tool: show_capabilities, category: help}
+  - {utterance: "help me understand quantum entanglement", expected_tool: llm_chat,     category: help, notes: "T-19.7 — must NOT show capabilities"}
+  - {utterance: "goodbye friday",                     expected_tool: shutdown_assistant, category: help}
+  - {utterance: "bye",                                expected_tool: shutdown_assistant, category: help}
+  - {utterance: "shut down",                          expected_tool: shutdown_assistant, category: help}
+
+  # -------------------------------------------------------------------
+  # Confirmations / file candidate selection
+  # -------------------------------------------------------------------
+  - {utterance: "yes",                                expected_tool: confirm_yes,       category: confirm}
+  - {utterance: "yeah do it",                         expected_tool: confirm_yes,       category: confirm}
+  - {utterance: "sure go ahead",                      expected_tool: confirm_yes,       category: confirm}
+  - {utterance: "no",                                 expected_tool: confirm_no,        category: confirm}
+  - {utterance: "nope",                               expected_tool: confirm_no,        category: confirm}
+  - {utterance: "cancel",                             expected_tool: confirm_no,        category: confirm}
+  - {utterance: "the first one",                      expected_tool: select_file_candidate, category: confirm}
+  - {utterance: "the second one",                     expected_tool: select_file_candidate, category: confirm}
+  - {utterance: "the pdf one",                        expected_tool: select_file_candidate, category: confirm}
+
+  # -------------------------------------------------------------------
+  # Greeting
+  # -------------------------------------------------------------------
+  - {utterance: "hello",                              expected_tool: greet,             category: greet}
+  - {utterance: "hi there",                           expected_tool: greet,             category: greet}
+  - {utterance: "hey friday",                         expected_tool: greet,             category: greet}
+  - {utterance: "good morning",                       expected_tool: greet,             category: greet}
+  - {utterance: "good evening friday",                expected_tool: greet,             category: greet}
+
+  # -------------------------------------------------------------------
+  # Chat fallback (no specific tool fits)
+  # -------------------------------------------------------------------
+  - {utterance: "tell me a story",                    expected_tool: llm_chat,          category: chat}
+  - {utterance: "explain how photosynthesis works",   expected_tool: llm_chat,          category: chat}
+  - {utterance: "why is the sky blue",                expected_tool: llm_chat,          category: chat}
+  - {utterance: "what's the meaning of life",         expected_tool: llm_chat,          category: chat}
+  - {utterance: "I'm feeling tired today",            expected_tool: llm_chat,          category: chat}
+  - {utterance: "do you think AI will replace jobs",  expected_tool: llm_chat,          category: chat}
+  - {utterance: "give me a joke",                     expected_tool: llm_chat,          category: chat}
+  - {utterance: "what should I have for dinner",      expected_tool: llm_chat,          category: chat}
+  - {utterance: "I am bored",                         expected_tool: llm_chat,          category: chat}
+  - {utterance: "tell me about general relativity",   expected_tool: llm_chat,          category: chat}
+  - {utterance: "how do I learn rust",                expected_tool: llm_chat,          category: chat}
+  - {utterance: "write a haiku",                      expected_tool: llm_chat,          category: chat}

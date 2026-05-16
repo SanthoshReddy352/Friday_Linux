@@ -1,0 +1,328 @@
+{"utterance": "real quick - what you've learned about me", "expected_tool": "show_memories", "category": "show_memories", "source": "synth/query"}
+{"utterance": "uh hey, the temperature in tokyo", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "real quick, mute the audio", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "any chance you could end the work session", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "do me a favor and forget what i just said", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "i need you to switch to on demand listening", "expected_tool": "set_voice_mode", "category": "set_voice_mode", "source": "synth/command"}
+{"utterance": "let's push that call to next week", "expected_tool": "move_calendar_event", "category": "move_calendar_event", "source": "synth/command"}
+{"utterance": "this milk is past its date", "expected_tool": "llm_chat", "category": "neg/get_date", "source": "registry/hard_negative"}
+{"utterance": "how about you open that text file", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "actually, tldr this file", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "let's open the projects directory", "expected_tool": "open_folder", "category": "open_folder", "source": "synth/command"}
+{"utterance": "any chance you could cancel my meeting at three", "expected_tool": "cancel_calendar_event", "category": "cancel_calendar_event", "source": "synth/command"}
+{"utterance": "any chance you could share the one called report", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "real quick, copy the report to desktop", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "any chance you could share my inbox", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "give me an unpopular opinion", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "mind telling me current time", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "mind telling me system status", "expected_tool": "get_system_status", "category": "get_system_status", "source": "synth/query"}
+{"utterance": "would you exit friday", "expected_tool": "shutdown_assistant", "category": "shutdown_assistant", "source": "synth/command"}
+{"utterance": "real quick, open the spreadsheet from yesterday", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "real quick - my pomodoro timer", "expected_tool": "focus_session_status", "category": "focus_session_status", "source": "synth/query"}
+{"utterance": "mind telling me the one called report", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "i need you to end this pomodoro", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "see you on friday", "expected_tool": "llm_chat", "category": "neg/get_friday_status", "source": "registry/hard_negative"}
+{"utterance": "i'd love to know system status", "expected_tool": "get_system_status", "category": "get_system_status", "source": "synth/query"}
+{"utterance": "i need you to read that document aloud", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "let's open that text file", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "i need you to drop that preference", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "actually, google how to fix a leaky faucet", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "i need you to open the anthropic website", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "actually, my last unread email", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "how about you start listening", "expected_tool": "enable_voice", "category": "enable_voice", "source": "synth/command"}
+{"utterance": "status quo is fine", "expected_tool": "llm_chat", "category": "neg/focus_session_status", "source": "registry/hard_negative"}
+{"utterance": "set in my ways", "expected_tool": "llm_chat", "category": "neg/set_voice_mode", "source": "registry/hard_negative"}
+{"utterance": "do me a favor and copy the report to desktop", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "i need you to remind me to take the laundry out", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "i love a good screen door in summer", "expected_tool": "llm_chat", "category": "neg/take_screenshot", "source": "registry/hard_negative"}
+{"utterance": "actually, play the new kendrick album", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "well hello", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "real quick, play that funny cat video", "expected_tool": "play_youtube", "category": "play_youtube", "source": "synth/command"}
+{"utterance": "let's find a file called report", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "any advice for a quiet evening", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "any chance you could start a work session", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "actually, open the anthropic website", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "real quick, read the contents of notes.txt", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "do me a favor and begin a deep work block", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "cancel that thought", "expected_tool": "llm_chat", "category": "neg/cancel_dictation", "source": "registry/hard_negative"}
+{"utterance": "let's tldr this file", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "uh hey, close your ears", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/query"}
+{"utterance": "i need you to go ahead", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/command"}
+{"utterance": "would you mind sharing the gmail backlog", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "any chance you could share the weather today", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "i need you to summarize this pdf", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "forget me not flowers", "expected_tool": "llm_chat", "category": "neg/delete_memory", "source": "registry/hard_negative"}
+{"utterance": "got a sec - what's on my desktop", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "got a sec - the charge", "expected_tool": "get_battery", "category": "get_battery", "source": "synth/query"}
+{"utterance": "memory of last summer", "expected_tool": "llm_chat", "category": "neg/get_cpu_ram", "source": "registry/hard_negative"}
+{"utterance": "marital status update", "expected_tool": "llm_chat", "category": "neg/get_system_status", "source": "registry/hard_negative"}
+{"utterance": "let's add a dentist appointment friday", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "mind telling me what reminders i have", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "real quick, exit friday", "expected_tool": "shutdown_assistant", "category": "shutdown_assistant", "source": "synth/command"}
+{"utterance": "real quick, turn the volume up", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "do me a favor and google how to fix a leaky faucet", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "uh hey, will it rain tomorrow", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "real quick, google the price of bitcoin", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "do me a favor and start vscode", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "any chance you could share computer status", "expected_tool": "get_system_status", "category": "get_system_status", "source": "synth/query"}
+{"utterance": "let's take a screenshot", "expected_tool": "take_screenshot", "category": "take_screenshot", "source": "synth/command"}
+{"utterance": "any chance you could move lunch to tuesday", "expected_tool": "move_calendar_event", "category": "move_calendar_event", "source": "synth/command"}
+{"utterance": "play me like a fiddle", "expected_tool": "llm_chat", "category": "neg/play_youtube", "source": "registry/hard_negative"}
+{"utterance": "any chance you could turn the volume down", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "got a sec - friday's state", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "alright yeah", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/confirm"}
+{"utterance": "how about you turn off voice input", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/command"}
+{"utterance": "the end justifies the means", "expected_tool": "llm_chat", "category": "neg/end_dictation", "source": "registry/hard_negative"}
+{"utterance": "actually, what's on my calendar", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "how about you add a dentist appointment friday", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "let's stop dictation", "expected_tool": "end_dictation", "category": "end_dictation", "source": "synth/command"}
+{"utterance": "the end of the workday", "expected_tool": "llm_chat", "category": "neg/end_focus_session", "source": "registry/hard_negative"}
+{"utterance": "real quick, snap a screenshot", "expected_tool": "take_screenshot", "category": "take_screenshot", "source": "synth/command"}
+{"utterance": "do me a favor and open chrome", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "let's go ahead", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/command"}
+{"utterance": "any chance you could share battery level", "expected_tool": "get_battery", "category": "get_battery", "source": "synth/query"}
+{"utterance": "i can read you like a book", "expected_tool": "llm_chat", "category": "neg/read_file", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing how is the system", "expected_tool": "get_system_status", "category": "get_system_status", "source": "synth/query"}
+{"utterance": "let's end transcribing", "expected_tool": "end_dictation", "category": "end_dictation", "source": "synth/command"}
+{"utterance": "let's open my documents folder", "expected_tool": "open_folder", "category": "open_folder", "source": "synth/command"}
+{"utterance": "would you delete the draft", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "how about you read that document aloud", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "actually, delete the draft", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "uh hey, the newest email", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "let's turn on the mic", "expected_tool": "enable_voice", "category": "enable_voice", "source": "synth/command"}
+{"utterance": "any chance you could open your ears", "expected_tool": "enable_voice", "category": "enable_voice", "source": "synth/command"}
+{"utterance": "would you end this pomodoro", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "uh hey, my inbox", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "the suspect was charged with battery", "expected_tool": "llm_chat", "category": "neg/get_battery", "source": "registry/hard_negative"}
+{"utterance": "real quick, drop what i was dictating", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "yeah do it", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/confirm"}
+{"utterance": "hi was the highest grossing film", "expected_tool": "llm_chat", "category": "neg/greet", "source": "registry/hard_negative"}
+{"utterance": "uh hey, the contents of documents", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "real quick, give me a summary of that doc", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "would you fire up obs", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "any chance you could end the dictation now", "expected_tool": "end_dictation", "category": "end_dictation", "source": "synth/command"}
+{"utterance": "i need you to play the deep focus playlist", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "any chance you could summarize this pdf", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "would you mind sharing what mode you're in", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "do me a favor and open that folder", "expected_tool": "open_folder", "category": "open_folder", "source": "synth/command"}
+{"utterance": "any chance you could play jazz piano", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "i hate email chains", "expected_tool": "llm_chat", "category": "neg/read_latest_email", "source": "registry/hard_negative"}
+{"utterance": "actually, processor load", "expected_tool": "get_cpu_ram", "category": "get_cpu_ram", "source": "synth/query"}
+{"utterance": "real quick, add a dentist appointment friday", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "real quick - ram usage", "expected_tool": "get_cpu_ram", "category": "get_cpu_ram", "source": "synth/query"}
+{"utterance": "i need you to set an alarm for nine am", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "would you make a quick note about the demo", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "would you mute the mic for a bit", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/command"}
+{"utterance": "real quick - the first one", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "i need you to cancel", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/command"}
+{"utterance": "actually, reschedule the meeting to four pm", "expected_tool": "move_calendar_event", "category": "move_calendar_event", "source": "synth/command"}
+{"utterance": "do me a favor and play lofi study beats", "expected_tool": "play_youtube", "category": "play_youtube", "source": "synth/command"}
+{"utterance": "actually, what you've learned about me", "expected_tool": "show_memories", "category": "show_memories", "source": "synth/query"}
+{"utterance": "any chance you could open chrome", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "let's save a note that the wifi password is changed", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "i'm overscheduled this month", "expected_tool": "llm_chat", "category": "neg/list_calendar_events", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing system status", "expected_tool": "get_system_status", "category": "get_system_status", "source": "synth/query"}
+{"utterance": "do me a favor and save a note saying call the plumber", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "how about you cancel my meeting at three", "expected_tool": "cancel_calendar_event", "category": "cancel_calendar_event", "source": "synth/command"}
+{"utterance": "i need to create some space in my life", "expected_tool": "llm_chat", "category": "neg/create_calendar_event", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing what time it is", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "any chance you could forget what i just said", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "i need you to shut down friday", "expected_tool": "shutdown_assistant", "category": "shutdown_assistant", "source": "synth/command"}
+{"utterance": "real quick, find files named invoice", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "do me a favor and pause the music", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "launch a missile in halo", "expected_tool": "llm_chat", "category": "neg/launch_app", "source": "registry/hard_negative"}
+{"utterance": "mind telling me the notes from yesterday", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "mind telling me my alarms", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "you remind me of someone", "expected_tool": "llm_chat", "category": "neg/set_reminder", "source": "registry/hard_negative"}
+{"utterance": "share a thought worth thinking about", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "real quick, switch to on demand listening", "expected_tool": "set_voice_mode", "category": "set_voice_mode", "source": "synth/command"}
+{"utterance": "uh hey, files in this folder", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "start a fire in the pit", "expected_tool": "llm_chat", "category": "neg/start_dictation", "source": "registry/hard_negative"}
+{"utterance": "tell me what you'd do if you were human", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "lose focus", "expected_tool": "llm_chat", "category": "neg/start_focus_session", "source": "registry/hard_negative"}
+{"utterance": "okay no", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/confirm"}
+{"utterance": "would you turn the volume up", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "what's the one thing worth remembering today", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "well hey", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "would you open github.com", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "actually, turn off voice input", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/command"}
+{"utterance": "the movers come monday", "expected_tool": "llm_chat", "category": "neg/move_calendar_event", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing upcoming meetings", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "open the meeting with introductions", "expected_tool": "llm_chat", "category": "neg/open_file", "source": "registry/hard_negative"}
+{"utterance": "uh hey, the notes from yesterday", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "i need you to open discord", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "what's a fun fact you like", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "any chance you could share upcoming meetings", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "let's move that to downloads", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "i'd love to know the most recent message", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "uh hey, my notes", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "any chance you could give me a summary of that doc", "expected_tool": "summarize_file", "category": "summarize_file", "source": "synth/command"}
+{"utterance": "i'd love to know the contents of documents", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "cancel culture is real", "expected_tool": "llm_chat", "category": "neg/cancel_calendar_event", "source": "registry/hard_negative"}
+{"utterance": "i need you to set voice mode to wake word", "expected_tool": "set_voice_mode", "category": "set_voice_mode", "source": "synth/command"}
+{"utterance": "would you mind sharing the forecast for the weekend", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "real quick - my unread emails", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "any chance you could share the charge", "expected_tool": "get_battery", "category": "get_battery", "source": "synth/query"}
+{"utterance": "real quick, play the new kendrick album", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "would you end the deep work block", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "actually, the time", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "what's on your mind today", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "let's start dictating", "expected_tool": "start_dictation", "category": "start_dictation", "source": "synth/command"}
+{"utterance": "would you mind sharing the notes from yesterday", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "i need you to enable the microphone", "expected_tool": "enable_voice", "category": "enable_voice", "source": "synth/command"}
+{"utterance": "how about you play the new kendrick album", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "would you start dictating", "expected_tool": "start_dictation", "category": "start_dictation", "source": "synth/command"}
+{"utterance": "actually, open my documents folder", "expected_tool": "open_folder", "category": "open_folder", "source": "synth/command"}
+{"utterance": "how about you start a pomodoro", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "do me a favor and launch spotify", "expected_tool": "launch_app", "category": "launch_app", "source": "synth/command"}
+{"utterance": "would you snap a screenshot", "expected_tool": "take_screenshot", "category": "take_screenshot", "source": "synth/command"}
+{"utterance": "do me a favor and move my dentist appointment to friday", "expected_tool": "move_calendar_event", "category": "move_calendar_event", "source": "synth/command"}
+{"utterance": "i'd love to know today's date", "expected_tool": "get_date", "category": "get_date", "source": "synth/query"}
+{"utterance": "open your mind to it", "expected_tool": "llm_chat", "category": "neg/open_browser_url", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing the clock", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "let's remind me about the deadline tomorrow", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "face the music", "expected_tool": "llm_chat", "category": "neg/play_youtube_music", "source": "registry/hard_negative"}
+{"utterance": "any chance you could share the third file", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "real quick - the newest email", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "i need you to play some taylor swift", "expected_tool": "play_youtube_music", "category": "play_youtube_music", "source": "synth/command"}
+{"utterance": "let's cancel this transcription", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "got a sec - the first one", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "real quick, forget the fact about my dog", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "uh hey, what you remember about me", "expected_tool": "show_memories", "category": "show_memories", "source": "synth/query"}
+{"utterance": "actually, cancel this transcription", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "would you grab the screen", "expected_tool": "take_screenshot", "category": "take_screenshot", "source": "synth/command"}
+{"utterance": "i'd love to know current time", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "let's pause the music", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "i need you to end the focus session", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "real quick, schedule a meeting tomorrow at three", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "real quick, open the anthropic website", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "would you play the obama farewell speech", "expected_tool": "play_youtube", "category": "play_youtube", "source": "synth/command"}
+{"utterance": "would you set an alarm for nine am", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "real quick - close your ears", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/query"}
+{"utterance": "would you cancel the dentist appointment", "expected_tool": "cancel_calendar_event", "category": "cancel_calendar_event", "source": "synth/command"}
+{"utterance": "i'd love to know how much focus time is left", "expected_tool": "focus_session_status", "category": "focus_session_status", "source": "synth/query"}
+{"utterance": "i'd love to know battery level", "expected_tool": "get_battery", "category": "get_battery", "source": "synth/query"}
+{"utterance": "real quick, play the latest mkbhd review", "expected_tool": "play_youtube", "category": "play_youtube", "source": "synth/command"}
+{"utterance": "i'd love to know the one called report", "expected_tool": "select_file_candidate", "category": "select_file_candidate", "source": "synth/query"}
+{"utterance": "any chance you could share my latest email", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "real quick - the day of the week", "expected_tool": "get_date", "category": "get_date", "source": "synth/query"}
+{"utterance": "uh hey, don't", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/query"}
+{"utterance": "inbox zero is a myth", "expected_tool": "llm_chat", "category": "neg/summarize_inbox", "source": "registry/hard_negative"}
+{"utterance": "real quick, quit friday", "expected_tool": "shutdown_assistant", "category": "shutdown_assistant", "source": "synth/command"}
+{"utterance": "real quick - the forecast for the weekend", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "sure thing no", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/confirm"}
+{"utterance": "actually, cancel the dictation and discard", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "well howdy", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "sure thing sure", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/confirm"}
+{"utterance": "any chance you could exit friday", "expected_tool": "shutdown_assistant", "category": "shutdown_assistant", "source": "synth/command"}
+{"utterance": "she said yes to the proposal", "expected_tool": "llm_chat", "category": "neg/confirm_yes", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing the date", "expected_tool": "get_date", "category": "get_date", "source": "synth/query"}
+{"utterance": "let's cancel the dictation and discard", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "let's skip this track", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "how about you start a work session", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "in summary the team did well", "expected_tool": "llm_chat", "category": "neg/summarize_file", "source": "registry/hard_negative"}
+{"utterance": "any chance you could delete that memory", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "any wisdom to drop on me", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "move on already", "expected_tool": "llm_chat", "category": "neg/manage_file", "source": "registry/hard_negative"}
+{"utterance": "real quick, start listening", "expected_tool": "enable_voice", "category": "enable_voice", "source": "synth/command"}
+{"utterance": "any chance you could share what you remember about me", "expected_tool": "show_memories", "category": "show_memories", "source": "synth/query"}
+{"utterance": "do me a favor and cancel my meeting at three", "expected_tool": "cancel_calendar_event", "category": "cancel_calendar_event", "source": "synth/command"}
+{"utterance": "i'd love to know my preferences", "expected_tool": "show_memories", "category": "show_memories", "source": "synth/query"}
+{"utterance": "i have a long todo list", "expected_tool": "llm_chat", "category": "neg/list_folder_contents", "source": "registry/hard_negative"}
+{"utterance": "actually, my unread emails", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "got a sec - your status", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "actually, find a file called report", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "how about you schedule lunch with sara monday", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "okay nope", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/confirm"}
+{"utterance": "any chance you could cancel the dentist appointment", "expected_tool": "cancel_calendar_event", "category": "cancel_calendar_event", "source": "synth/command"}
+{"utterance": "what a time to be alive", "expected_tool": "llm_chat", "category": "neg/get_time", "source": "registry/hard_negative"}
+{"utterance": "do me a favor and start a work session", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "would you search for the best ramen near me", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "do me a favor and start taking dictation", "expected_tool": "start_dictation", "category": "start_dictation", "source": "synth/command"}
+{"utterance": "any chance you could share what reminders i have", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "would you mind sharing my notes", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "let's copy the report to desktop", "expected_tool": "manage_file", "category": "manage_file", "source": "synth/command"}
+{"utterance": "uh hey, the most recent message", "expected_tool": "read_latest_email", "category": "read_latest_email", "source": "synth/query"}
+{"utterance": "i need you to play that", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "any chance you could switch to persistent listening", "expected_tool": "set_voice_mode", "category": "set_voice_mode", "source": "synth/command"}
+{"utterance": "uh hey, my pending alerts", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "real quick, start a work session", "expected_tool": "start_focus_session", "category": "start_focus_session", "source": "synth/command"}
+{"utterance": "any chance you could share your status", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "how about you switch to manual mode", "expected_tool": "set_voice_mode", "category": "set_voice_mode", "source": "synth/command"}
+{"utterance": "well hi", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "i'm searching for meaning", "expected_tool": "llm_chat", "category": "neg/search_file", "source": "registry/hard_negative"}
+{"utterance": "enabler is a strong word", "expected_tool": "llm_chat", "category": "neg/enable_voice", "source": "registry/hard_negative"}
+{"utterance": "would you mind sharing my inbox", "expected_tool": "summarize_inbox", "category": "summarize_inbox", "source": "synth/query"}
+{"utterance": "uh hey, what's on my calendar", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "the factory is shutting down next year", "expected_tool": "llm_chat", "category": "neg/shutdown_assistant", "source": "registry/hard_negative"}
+{"utterance": "how about you go ahead", "expected_tool": "confirm_yes", "category": "confirm_yes", "source": "synth/command"}
+{"utterance": "do me a favor and remind me about the deadline tomorrow", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "search me i don't know", "expected_tool": "llm_chat", "category": "neg/search_google", "source": "registry/hard_negative"}
+{"utterance": "any chance you could open my email tab", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "real quick - current time", "expected_tool": "get_time", "category": "get_time", "source": "synth/query"}
+{"utterance": "do me a favor and turn the volume down", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "actually, schedule a meeting tomorrow at three", "expected_tool": "create_calendar_event", "category": "create_calendar_event", "source": "synth/command"}
+{"utterance": "would you mind sharing your status", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "let's look for the budget spreadsheet", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "any chance you could share my notes", "expected_tool": "read_notes", "category": "read_notes", "source": "synth/query"}
+{"utterance": "mind telling me the contents of documents", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "i need you to take a screenshot", "expected_tool": "take_screenshot", "category": "take_screenshot", "source": "synth/command"}
+{"utterance": "no man is an island", "expected_tool": "llm_chat", "category": "neg/confirm_no", "source": "registry/hard_negative"}
+{"utterance": "how about you search for the best ramen near me", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "would you open hacker news", "expected_tool": "open_browser_url", "category": "open_browser_url", "source": "synth/command"}
+{"utterance": "real quick, google how to fix a leaky faucet", "expected_tool": "search_google", "category": "search_google", "source": "synth/command"}
+{"utterance": "next time will be better", "expected_tool": "llm_chat", "category": "neg/browser_media_control", "source": "registry/hard_negative"}
+{"utterance": "do me a favor and play that funny cat video", "expected_tool": "play_youtube", "category": "play_youtube", "source": "synth/command"}
+{"utterance": "uh hey, my pomodoro timer", "expected_tool": "focus_session_status", "category": "focus_session_status", "source": "synth/query"}
+{"utterance": "how about you set volume to max", "expected_tool": "set_volume", "category": "set_volume", "source": "synth/command"}
+{"utterance": "actually, read what's in this file", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "got a sec - cpu usage", "expected_tool": "get_cpu_ram", "category": "get_cpu_ram", "source": "synth/query"}
+{"utterance": "how about you open the resume pdf", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "would you mind sharing what's on my desktop", "expected_tool": "list_folder_contents", "category": "list_folder_contents", "source": "synth/query"}
+{"utterance": "let's mute the tab", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "i need you to make a quick note about the demo", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "real quick - the charge", "expected_tool": "get_battery", "category": "get_battery", "source": "synth/query"}
+{"utterance": "real quick - my schedule today", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "let's stop taking dictation", "expected_tool": "end_dictation", "category": "end_dictation", "source": "synth/command"}
+{"utterance": "the trade volume tripled", "expected_tool": "llm_chat", "category": "neg/set_volume", "source": "registry/hard_negative"}
+{"utterance": "got a sec - what reminders i have", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "oh, yo", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "let's read the contents of notes.txt", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "musical notes are fun", "expected_tool": "llm_chat", "category": "neg/read_notes", "source": "registry/hard_negative"}
+{"utterance": "i'd love to know what's on my calendar", "expected_tool": "list_calendar_events", "category": "list_calendar_events", "source": "synth/query"}
+{"utterance": "real quick - how much focus time is left", "expected_tool": "focus_session_status", "category": "focus_session_status", "source": "synth/query"}
+{"utterance": "any chance you could remind me about the deadline tomorrow", "expected_tool": "set_reminder", "category": "set_reminder", "source": "synth/command"}
+{"utterance": "actually, end the work session", "expected_tool": "end_focus_session", "category": "end_focus_session", "source": "synth/command"}
+{"utterance": "actually, your status", "expected_tool": "get_friday_status", "category": "get_friday_status", "source": "synth/query"}
+{"utterance": "mind telling me processor load", "expected_tool": "get_cpu_ram", "category": "get_cpu_ram", "source": "synth/query"}
+{"utterance": "actually, will it rain tomorrow", "expected_tool": "get_weather", "category": "get_weather", "source": "synth/query"}
+{"utterance": "would you search for my resume", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "how about you open my notes file", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "real quick, save a note saying call the plumber", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "got a sec - the date", "expected_tool": "get_date", "category": "get_date", "source": "synth/query"}
+{"utterance": "actually, the date", "expected_tool": "get_date", "category": "get_date", "source": "synth/query"}
+{"utterance": "i need you to push that call to next week", "expected_tool": "move_calendar_event", "category": "move_calendar_event", "source": "synth/command"}
+{"utterance": "would you start dictation", "expected_tool": "start_dictation", "category": "start_dictation", "source": "synth/command"}
+{"utterance": "make some good memories this trip", "expected_tool": "llm_chat", "category": "neg/show_memories", "source": "registry/hard_negative"}
+{"utterance": "let's read what's in this file", "expected_tool": "read_file", "category": "read_file", "source": "synth/command"}
+{"utterance": "would you drop what i was dictating", "expected_tool": "cancel_dictation", "category": "cancel_dictation", "source": "synth/command"}
+{"utterance": "do me a favor and jot down this idea", "expected_tool": "save_note", "category": "save_note", "source": "synth/command"}
+{"utterance": "real quick, open my notes file", "expected_tool": "open_file", "category": "open_file", "source": "synth/command"}
+{"utterance": "let's disable the microphone", "expected_tool": "disable_voice", "category": "disable_voice", "source": "synth/command"}
+{"utterance": "how about you skip this track", "expected_tool": "browser_media_control", "category": "browser_media_control", "source": "synth/command"}
+{"utterance": "mind telling me how much focus time is left", "expected_tool": "focus_session_status", "category": "focus_session_status", "source": "synth/query"}
+{"utterance": "real quick, drop that preference", "expected_tool": "delete_memory", "category": "delete_memory", "source": "synth/command"}
+{"utterance": "would you open that folder", "expected_tool": "open_folder", "category": "open_folder", "source": "synth/command"}
+{"utterance": "first come first served", "expected_tool": "llm_chat", "category": "neg/select_file_candidate", "source": "registry/hard_negative"}
+{"utterance": "i need you to stop dictation", "expected_tool": "end_dictation", "category": "end_dictation", "source": "synth/command"}
+{"utterance": "any chance you could share my reminders", "expected_tool": "list_reminders", "category": "list_reminders", "source": "synth/query"}
+{"utterance": "actually, ram usage", "expected_tool": "get_cpu_ram", "category": "get_cpu_ram", "source": "synth/query"}
+{"utterance": "actually, find files named invoice", "expected_tool": "search_file", "category": "search_file", "source": "synth/command"}
+{"utterance": "make me laugh real quick", "expected_tool": "llm_chat", "category": "chitchat", "source": "chitchat/seed"}
+{"utterance": "the folder chair broke", "expected_tool": "llm_chat", "category": "neg/open_folder", "source": "registry/hard_negative"}
+{"utterance": "she saved me a lot of trouble", "expected_tool": "llm_chat", "category": "neg/save_note", "source": "registry/hard_negative"}
+{"utterance": "oh, hello", "expected_tool": "greet", "category": "greet", "source": "synth/greet"}
+{"utterance": "let's start dictation", "expected_tool": "start_dictation", "category": "start_dictation", "source": "synth/command"}
+{"utterance": "she's been disabled by the injury", "expected_tool": "llm_chat", "category": "neg/disable_voice", "source": "registry/hard_negative"}
+{"utterance": "real quick - don't", "expected_tool": "confirm_no", "category": "confirm_no", "source": "synth/query"}
+{"utterance": "in any weather i'll be there", "expected_tool": "llm_chat", "category": "neg/get_weather", "source": "registry/hard_negative"}

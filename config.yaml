@@ -54,9 +54,9 @@ voice:
   wake_transcript_fallback: true
   media_max_uninvoked_words: 4
   input_device:
-    id: 109
+    id: 49
     kind: pipewire
-    label: Nirvana Ion
+    label: Built-in Audio Analog Stereo
 modules:
   greeter:
     enabled: true

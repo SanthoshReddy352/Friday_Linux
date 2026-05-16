@@ -163,7 +163,7 @@ class SystemControlPlugin(FridayPlugin):
             "description": "Capture the current screen and save it as an image file.",
             "parameters": {},
             "side_effect_level": "write",
-        }, lambda t, a: take_screenshot())
+        }, self.handle_take_screenshot)
 
         self.app.router.register_tool({
             "name": "search_file",
@@ -259,6 +259,14 @@ class SystemControlPlugin(FridayPlugin):
         }, self.handle_shutdown)
 
         logger.info("SystemControlPlugin loaded.")
+
+    def handle_take_screenshot(self, text, args):
+        result = take_screenshot()
+        match = re.search(r"at:\s*(.+\.png)", result or "")
+        if match:
+            self.dialog_state.remember_file(match.group(1).strip())
+            return "Screenshot taken."
+        return result  # pass error messages through unchanged
 
     def handle_launch_app(self, text, args):
         app_names = args.get("app_names", [])

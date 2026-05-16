@@ -1625,6 +1625,49 @@ class ModelsPanel(QWidget):
             self._rows_container.addWidget(empty)
             self._rows["__empty"] = {"card": empty}
 
+        self._build_vision_row()
+
+    def _build_vision_row(self) -> None:
+        """Add a card for the VLM if vision is enabled in config."""
+        cfg = getattr(self._app_core, "config", None)
+        vis_cfg = cfg.get("vision", {}) if cfg else {}
+        if not vis_cfg.get("enabled", False):
+            return
+        model_path = vis_cfg.get("model_path", "")
+        if not model_path:
+            return
+
+        role = "vision"
+        card = QFrame()
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        lane_label = QLabel(role.upper())
+        status_dot = QLabel("●")
+        header.addWidget(lane_label)
+        header.addStretch(1)
+        header.addWidget(status_dot)
+        card_layout.addLayout(header)
+
+        name_label = QLabel(os.path.basename(model_path))
+        name_label.setWordWrap(True)
+        card_layout.addWidget(name_label)
+
+        n_ctx = vis_cfg.get("n_ctx", 2048)
+        detail_label = QLabel(f"ctx {n_ctx}  ·  lazy")
+        card_layout.addWidget(detail_label)
+
+        self._rows_container.addWidget(card)
+        self._rows[role] = {
+            "card": card,
+            "lane_label": lane_label,
+            "status_dot": status_dot,
+            "name_label": name_label,
+            "detail_label": detail_label,
+        }
+
     def _apply_theme(self, theme: Theme) -> None:
         for role, row in self._rows.items():
             if role == "__empty":
@@ -1658,6 +1701,8 @@ class ModelsPanel(QWidget):
         return theme.text_muted  # exists but not loaded
 
     def _lane_status(self, role: str) -> str:
+        if role == "vision":
+            return self._vision_status()
         manager = self._manager()
         if not manager:
             return "unknown"
@@ -1672,6 +1717,34 @@ class ModelsPanel(QWidget):
         if status.get("loaded"):
             return "loaded"
         return "available"
+
+    def _vision_status(self) -> str:
+        cfg = getattr(self._app_core, "config", None)
+        vis_cfg = cfg.get("vision", {}) if cfg else {}
+        model_path = vis_cfg.get("model_path", "")
+        if not model_path:
+            return "unknown"
+        manager = self._manager()
+        base_dir = getattr(manager, "base_dir", None) if manager else None
+        if base_dir and not os.path.isabs(model_path):
+            abs_path = os.path.join(base_dir, model_path)
+        else:
+            abs_path = model_path
+        if not os.path.exists(abs_path):
+            return "missing"
+        svc = self._vision_service()
+        if svc and svc._llm is not None:
+            return "loaded"
+        return "available"
+
+    def _vision_service(self):
+        loader = getattr(self._app_core, "extension_loader", None)
+        for ext in getattr(loader, "extensions", []):
+            plugin = getattr(ext, "plugin", ext)
+            svc = getattr(plugin, "_service", None)
+            if svc and hasattr(svc, "_model_path") and hasattr(svc, "_llm"):
+                return svc
+        return None
 
     def _manager(self):
         router = getattr(self._app_core, "router", None)
@@ -1979,6 +2052,9 @@ class JarvisHUD(QMainWindow):
         right_btns = QHBoxLayout()
         right_btns.setSpacing(8)
         right_btns.addStretch(1)
+        self.preflight_badge = self._build_preflight_badge()
+        if self.preflight_badge is not None:
+            right_btns.addWidget(self.preflight_badge)
         self.theme_btn = QPushButton()
         self.theme_btn.setFixedWidth(110)
         self.theme_btn.clicked.connect(self._toggle_theme)
@@ -1987,6 +2063,46 @@ class JarvisHUD(QMainWindow):
         layout.addLayout(right_zone, stretch=3)
 
         return header
+
+    def _build_preflight_badge(self):
+        """Return a small "LITE MODE" pill if optional deps are missing.
+
+        Reads the cached preflight report captured during ``main.py`` boot.
+        When all deps are present the method returns ``None`` and no widget
+        is added to the header.
+        """
+        try:
+            from core.bootstrap.preflight import last_report
+        except Exception:
+            return None
+        report = last_report()
+        if report is None or not report.degraded:
+            return None
+        badge = QLabel("LITE MODE")
+        badge.setObjectName("preflight_badge")
+        badge.setFixedHeight(22)
+        badge.setStyleSheet(
+            "background: #5a2a00;"
+            "color: #ffb877;"
+            f"font-family: {MONO_STACK};"
+            "font-size: 10px;"
+            "font-weight: 700;"
+            "letter-spacing: 1.5px;"
+            "padding: 2px 8px;"
+            "border: 1px solid #ffb877;"
+            "border-radius: 3px;"
+        )
+        missing = ", ".join(d.import_name for d in report.missing_degraded)
+        tip_lines = [
+            "Some optional dependencies are missing — FRIDAY is running in lite mode.",
+            "",
+            f"Missing: {missing}",
+            "",
+            "To restore full capability, activate your venv and run:",
+            f"  {report.pip_install_command()}",
+        ]
+        badge.setToolTip("\n".join(tip_lines))
+        return badge
 
     def _toggle_theme(self) -> None:
         name = self.theme_mgr.toggle()
@@ -2317,8 +2433,8 @@ class JarvisHUD(QMainWindow):
                 # Fallback: still non-ideal but better than nothing
                 self.app_core.cancel_current_task(announce=False)
             self.event_stream.append("INFO", "Task cancelled")
-        else:
-            self.handle_return_pressed()
+        # Always attempt to send whatever is in the input box (guarded against empty inside)
+        self.handle_return_pressed()
 
     def stop_speaking(self, _checked=False):
         if getattr(self.app_core, "tts", None):

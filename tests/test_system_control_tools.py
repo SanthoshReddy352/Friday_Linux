@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.dialog_state import DialogState
@@ -68,7 +69,7 @@ def test_take_screenshot_tool_is_registered_and_routable(monkeypatch):
             break
 
     assert screenshot_callback is not None
-    assert screenshot_callback("take a screenshot", {}) == "Screenshot saved successfully at: /tmp/shot.png"
+    assert screenshot_callback("take a screenshot", {}) == "Screenshot taken."
 
 
 def test_copy_portal_screenshot_uri(tmp_path):
@@ -442,3 +443,349 @@ def test_manage_file_appends_content(monkeypatch, tmp_path):
 
     assert "Updated notes.txt" in response
     assert existing.read_text(encoding="utf-8") == "alpha\nbeta"
+
+
+# ── Wayland black-screenshot regression tests ────────────────────────────────
+
+def test_take_screenshot_skips_mss_on_wayland(monkeypatch):
+    """mss must never be called when XDG_SESSION_TYPE is wayland."""
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    import modules.system_control.screenshot as sc
+    monkeypatch.setattr(sc, "_take_screenshot_via_mutter_screencast", lambda p: "err")
+    monkeypatch.setattr(sc, "_take_screenshot_via_gdbus_shell", lambda p: "err")
+    monkeypatch.setattr(sc, "_take_screenshot_via_portal", lambda p, **kw: "err")
+    monkeypatch.setattr(sc, "_take_screenshot_via_gnome_shell", lambda p: "err")
+    monkeypatch.setattr(sc, "_take_screenshot_via_gnome_adapter", lambda p, **kw: "err")
+
+    called = []
+    fake_mss_mod = type(sys)("mss")
+    class _FakeMSS:
+        def __enter__(self): called.append(True); return self
+        def __exit__(self, *a): pass
+    fake_mss_mod.MSS = _FakeMSS
+    fake_mss_mod.tools = MagicMock()
+    monkeypatch.setitem(sys.modules, "mss", fake_mss_mod)
+    monkeypatch.setitem(sys.modules, "mss.tools", fake_mss_mod.tools)
+
+    sc.take_screenshot()
+    assert called == [], "mss.MSS() must not be called on a Wayland session"
+
+
+def test_is_mostly_black_rejects_black_png(tmp_path):
+    """_is_mostly_black must return True for a solid-black PNG."""
+    PIL = pytest.importorskip("PIL")
+    from PIL import Image
+    import modules.system_control.screenshot as sc
+
+    f = tmp_path / "black.png"
+    Image.new("RGB", (100, 100), (0, 0, 0)).save(str(f))
+    assert sc._is_mostly_black(str(f)) is True
+
+
+def test_is_mostly_black_passes_real_content(tmp_path):
+    """_is_mostly_black must return False for a non-black image."""
+    PIL = pytest.importorskip("PIL")
+    from PIL import Image
+    import modules.system_control.screenshot as sc
+
+    f = tmp_path / "grey.png"
+    Image.new("RGB", (100, 100), (128, 128, 128)).save(str(f))
+    assert sc._is_mostly_black(str(f)) is False
+
+
+def test_is_mostly_black_image_rejects_black():
+    """_is_mostly_black_image must correctly classify PIL images."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from modules.vision.screenshot import _is_mostly_black_image
+
+    assert _is_mostly_black_image(Image.new("RGB", (50, 50), (0, 0, 0))) is True
+    assert _is_mostly_black_image(Image.new("RGB", (50, 50), (200, 200, 200))) is False
+
+
+# ── Pending file-name clarification ──────────────────────────────────────────
+
+def test_open_file_without_context_sets_pending_file_name_request(tmp_path, monkeypatch):
+    """'open it' with no active file must ask 'Which file?' AND set pending_file_name_request."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    response = plugin.handle_open_file("open it", {})
+
+    assert "which file" in response.lower()
+    assert app.dialog_state.pending_file_name_request == "open"
+
+
+def test_search_file_without_name_sets_pending_file_name_request(tmp_path, monkeypatch):
+    """'search file' with no filename sets pending_file_name_request = 'find'."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app = MagicMock()
+    app.router.register_tool = MagicMock()
+    app.router.get_llm.return_value = None
+    app.dialog_state = DialogState()
+    plugin = SystemControlPlugin(app)
+
+    response = plugin.handle_search_file("find", {})
+
+    assert "which file" in response.lower()
+    assert app.dialog_state.pending_file_name_request == "find"
+
+
+def _make_intent_recognizer_with_pending_file(action, monkeypatch):
+    """Build a minimal IntentRecognizer wired to a DialogState with pending_file_name_request set."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    ds = DialogState()
+    ds.pending_file_name_request = action
+    router.dialog_state = ds
+    router._tools_by_name = {}
+    router.context_store = None
+    router.session_id = None
+    return IntentRecognizer(router), ds
+
+
+def test_pending_file_name_routes_screenshot_to_open_file_not_take_screenshot():
+    """After 'Which file?', saying 'screenshot' must route to open_file, NOT take_screenshot."""
+    recognizer, ds = _make_intent_recognizer_with_pending_file("open", None)
+
+    plans = recognizer.plan("screenshot")
+
+    assert plans, "Expected a non-empty plan"
+    assert plans[0]["tool"] == "open_file"
+    assert ds.pending_file_name_request is None  # consumed
+
+
+def test_pending_file_name_routes_bare_word_with_filename_arg():
+    """The plan produced by pending_file_name_request must carry the user's word as filename arg."""
+    recognizer, ds = _make_intent_recognizer_with_pending_file("read", None)
+
+    plans = recognizer.plan("notes")
+
+    assert plans[0]["tool"] == "read_file"
+    assert plans[0]["args"].get("filename") == "notes"
+
+
+def test_pending_file_name_strips_leading_article():
+    """'the screenshot' → filename arg should be 'screenshot', not 'the screenshot'."""
+    recognizer, ds = _make_intent_recognizer_with_pending_file("open", None)
+
+    plans = recognizer.plan("the screenshot")
+
+    assert plans[0]["args"]["filename"] == "screenshot"
+
+
+def test_pending_file_name_cancel_clears_state():
+    """Saying 'cancel' while pending_file_name_request is set must clear the state."""
+    recognizer, ds = _make_intent_recognizer_with_pending_file("open", None)
+
+    plans = recognizer.plan("cancel")
+
+    assert ds.pending_file_name_request is None
+    # 'cancel' falls through to _parse_confirmation → confirm_no
+    # (or no plan if confirm_no isn't in tools_by_name) — just verify state cleared
+
+
+def test_pending_candidate_prefix_match_routes_to_select():
+    """'screenshot' should select 'screenshot_20260515_123456.png' from a candidate list."""
+    from core.intent_recognizer import IntentRecognizer
+    from core.dialog_state import DialogState, PendingFileRequest
+    router = MagicMock()
+    ds = DialogState()
+    ds.set_pending_file_request(
+        candidates=["/home/user/Pictures/screenshot_20260515_123456.png"],
+        requested_actions=["open"],
+    )
+    router.dialog_state = ds
+    router._tools_by_name = {}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("screenshot")
+
+    assert plans[0]["tool"] == "select_file_candidate"
+
+
+# ── _parse_notes coverage ─────────────────────────────────────────────────────
+
+def test_make_a_note_routes_to_save_note():
+    """'make a note' must route to save_note, not manage_file."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"save_note": object(), "manage_file": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    for phrase in ("make a note: buy milk", "jot this down", "note that I prefer tea"):
+        plans = recognizer.plan(phrase)
+        assert plans and plans[0]["tool"] == "save_note", f"Expected save_note for: {phrase!r}"
+
+
+def test_add_to_notes_routes_to_save_note():
+    """'add to my notes' must route to save_note."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"save_note": object(), "manage_file": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("add to my notes: meeting at 3pm")
+    assert plans and plans[0]["tool"] == "save_note"
+
+
+# ── _parse_friday_status tests ────────────────────────────────────────────────
+
+def test_friday_status_routes_to_get_friday_status():
+    """'friday status' and variants must route to get_friday_status deterministically."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"get_friday_status": object(), "get_system_status": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    for phrase in (
+        "friday status",
+        "friday, are you ready",
+        "are you ready friday",
+        "how are you doing friday",
+        "assistant status",
+        "runtime status",
+        "check friday",
+        "your status",
+    ):
+        plans = recognizer.plan(phrase)
+        assert plans and plans[0]["tool"] == "get_friday_status", (
+            f"Expected get_friday_status for: {phrase!r}, got {plans}"
+        )
+
+
+def test_friday_status_not_intercepted_by_knowledge_question():
+    """'how does friday work' is a knowledge question, not a status request."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"get_friday_status": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("how does friday work")
+    assert not plans or plans[0]["tool"] != "get_friday_status", (
+        "Knowledge question must not route to get_friday_status"
+    )
+
+
+# ── _parse_query_document tests ───────────────────────────────────────────────
+
+def test_query_document_fires_when_active_document_present():
+    """A WH-question with [active_document=...] prefix routes to query_document."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"query_document": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    # Simulate _resolve_references injecting the active_document prefix
+    clause = "[active_document=/home/user/report.pdf] what does it say about the budget?"
+    plans = recognizer.plan(clause)
+    assert plans and plans[0]["tool"] == "query_document", (
+        f"Expected query_document, got {plans}"
+    )
+
+
+def test_query_document_does_not_fire_without_active_document():
+    """A plain WH-question without [active_document=...] must NOT route to query_document."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"query_document": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("what is the capital of France")
+    assert not plans or plans[0]["tool"] != "query_document", (
+        "Plain question without active_document must not route to query_document"
+    )
+
+
+# ── _parse_help expansion tests ───────────────────────────────────────────────
+
+def test_help_expanded_phrases_route_to_show_capabilities():
+    """Expanded help phrases must route to show_capabilities."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {"show_capabilities": object()}
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    for phrase in (
+        "what tools do you have",
+        "what features do you have",
+        "what can I ask you",
+        "list your tools",
+        "tell me what you can do",
+    ):
+        plans = recognizer.plan(phrase)
+        assert plans and plans[0]["tool"] == "show_capabilities", (
+            f"Expected show_capabilities for: {phrase!r}, got {plans}"
+        )
+
+
+# ── Integration routing tests ─────────────────────────────────────────────────
+
+def test_calendar_event_routes_to_create_calendar_event():
+    """'add a calendar event Lunch' must reach create_calendar_event, never a file tool."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    router.dialog_state = DialogState()
+    router._tools_by_name = {
+        "create_calendar_event": object(),
+        "manage_file": object(),
+        "save_note": object(),
+    }
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("add a calendar event Lunch")
+    assert plans and plans[0]["tool"] == "create_calendar_event", (
+        f"Expected create_calendar_event, got {plans}"
+    )
+
+
+def test_reminder_after_screenshot_context_routes_to_set_reminder():
+    """'remind me at 3pm' after a screenshot is in dialog_state must route to set_reminder."""
+    from core.intent_recognizer import IntentRecognizer
+    router = MagicMock()
+    ds = DialogState()
+    ds.selected_file = "/home/user/Pictures/FRIDAY_Screenshots/screenshot_20260515_120000.png"
+    router.dialog_state = ds
+    router._tools_by_name = {
+        "set_reminder": object(),
+        "manage_file": object(),
+    }
+    router.context_store = None
+    router.session_id = None
+    recognizer = IntentRecognizer(router)
+
+    plans = recognizer.plan("remind me at 3pm")
+    assert plans and plans[0]["tool"] == "set_reminder", (
+        f"Expected set_reminder, got {plans}"
+    )

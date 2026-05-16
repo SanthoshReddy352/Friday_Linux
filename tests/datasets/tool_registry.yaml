@@ -1,0 +1,520 @@
+# =====================================================================
+# FRIDAY tool registry — single source of truth for the LoRA pipeline.
+#
+# Consumed by:
+#   * scripts/synth_intent_data.py     — paraphrase synthesis seeds
+#   * scripts/format_for_finetune.py   — tool-schema JSON in the prompt
+#   * scripts/bench_intent_routing.py  — (optional) sanity that every
+#     registered tool has a registry entry
+#
+# Schema per entry:
+#   name           : exact tool name as registered with CommandRouter
+#   description    : one-line description for prompts (≤120 chars)
+#   parameters     : JSON-schema-ish dict; use {} for no-arg tools
+#   concepts       : 3–6 short noun phrases used as {concept} in synth
+#                    paraphrase templates (Pool A, training side)
+#   hard_negatives : utterances that mention the tool's keywords but
+#                    must route to llm_chat (homonyms, figurative use,
+#                    narrative). Each one becomes a row in the train set
+#                    labeled expected_tool=llm_chat.
+#
+# Conventions:
+#   * Tool names are lowercase snake_case and MUST match code exactly.
+#   * Concepts stay lowercase, short (≤4 words), no punctuation.
+#   * Hard negatives are full sentences, lowercase, mirror real misroutes
+#     observed in docs/bench_results_*.md and the existing bench yaml.
+#   * The llm_chat bucket is the catch-all fallback — it has no
+#     hard_negatives because it IS the negative class.
+# =====================================================================
+
+tools:
+
+  # -------------------------------------------------------------------
+  # Time / date
+  # -------------------------------------------------------------------
+  - name: get_time
+    description: Tell the user the current local time.
+    parameters: {}
+    concepts: [the time, current time, what time it is, the clock]
+    hard_negatives:
+      - "set my time zone to utc"
+      - "time to leave for dinner"
+      - "i had a great time last night"
+      - "give it some time to load"
+      - "what a time to be alive"
+
+  - name: get_date
+    description: Tell the user today's date or day of the week.
+    parameters: {}
+    concepts: [today's date, the date, what day it is, the day of the week]
+    hard_negatives:
+      - "i have a date tonight"
+      - "the deadline is the fifteenth"
+      - "save the date for the wedding"
+      - "this milk is past its date"
+
+  # -------------------------------------------------------------------
+  # System status / hardware
+  # -------------------------------------------------------------------
+  - name: get_battery
+    description: Report the laptop's battery percentage and charging state.
+    parameters: {}
+    concepts: [my battery, battery status, battery level, the charge, how charged i am]
+    hard_negatives:
+      - "the battery in my car died"
+      - "i bought a new battery yesterday"
+      - "this watch needs a new battery"
+      - "the suspect was charged with battery"
+
+  - name: get_cpu_ram
+    description: Report current CPU usage and RAM consumption.
+    parameters: {}
+    concepts: [cpu usage, ram usage, memory usage, system load, processor load]
+    hard_negatives:
+      - "i need more ram for my truck bed"
+      - "the cpu of any company is its people"
+      - "memory of last summer"
+
+  - name: get_system_status
+    description: Summarize overall system health (cpu, ram, disk, battery).
+    parameters: {}
+    concepts: [system status, system health, computer status, how is the system, machine health]
+    hard_negatives:
+      - "what's the status of my order"
+      - "marital status update"
+
+  - name: get_friday_status
+    description: Report FRIDAY's own runtime state (modules loaded, voice mode, uptime).
+    parameters: {}
+    concepts: [friday status, your status, what mode you're in, friday's state, how friday is doing]
+    hard_negatives:
+      - "is it friday yet"
+      - "happy friday"
+      - "see you on friday"
+
+  # -------------------------------------------------------------------
+  # App / window control
+  # -------------------------------------------------------------------
+  - name: launch_app
+    description: Open or launch a desktop application by name.
+    parameters:
+      app_name: {type: string, required: true}
+    concepts: [open chrome, launch spotify, start vscode, open discord, fire up obs]
+    hard_negatives:
+      - "open the door for me"
+      - "open up about your feelings"
+      - "an open question is how we proceed"
+      - "launch a missile in halo"
+
+  - name: set_volume
+    description: Set the system audio volume (0–100, or mute/max).
+    parameters:
+      level: {type: string, required: true}
+    concepts: [set the volume to fifty, turn the volume up, turn the volume down, mute the audio, set volume to max]
+    hard_negatives:
+      - "this book is volume two of a trilogy"
+      - "she spoke at high volume"
+      - "the trade volume tripled"
+
+  - name: take_screenshot
+    description: Capture a screenshot of the desktop and save it.
+    parameters:
+      target: {type: string, required: false}
+    concepts: [take a screenshot, capture the screen, snap a screenshot, grab the screen, take a screenshot of this]
+    hard_negatives:
+      - "the movie has great screenshots"
+      - "i love a good screen door in summer"
+
+  - name: shutdown_assistant
+    description: Gracefully shut down FRIDAY itself (not the OS).
+    parameters: {}
+    concepts: [goodbye friday, shut down friday, exit friday, quit friday, shut yourself down]
+    hard_negatives:
+      - "shut the door please"
+      - "shut up about politics"
+      - "shutdown the database server"
+      - "shut down the conversation"
+      - "the factory is shutting down next year"
+
+  # -------------------------------------------------------------------
+  # File / folder operations
+  # -------------------------------------------------------------------
+  - name: search_file
+    description: Search the filesystem for files matching a name or pattern.
+    parameters:
+      query: {type: string, required: true}
+    concepts: [find a file called report, search for my resume, find files named invoice, look for the budget spreadsheet]
+    hard_negatives:
+      - "search the web for cat memes"
+      - "search my heart for an answer"
+      - "i'm searching for meaning"
+
+  - name: manage_file
+    description: Move, rename, copy, or delete a file or folder.
+    parameters:
+      action: {type: string, required: true}
+      target: {type: string, required: true}
+    concepts: [rename this file, move that to downloads, delete the draft, copy the report to desktop]
+    hard_negatives:
+      - "manage my expectations"
+      - "delete that thought from your head"
+      - "move on already"
+
+  - name: open_file
+    description: Open a specific file in its default application.
+    parameters:
+      path: {type: string, required: true}
+    concepts: [open the resume pdf, open that text file, open the spreadsheet from yesterday, open my notes file]
+    hard_negatives:
+      - "open up to me"
+      - "open the meeting with introductions"
+
+  - name: read_file
+    description: Read the contents of a text file aloud.
+    parameters:
+      path: {type: string, required: true}
+    concepts: [read the contents of notes.txt, read what's in this file, read me the readme, read that document aloud]
+    hard_negatives:
+      - "read me a bedtime story"
+      - "read between the lines"
+      - "i can read you like a book"
+
+  - name: summarize_file
+    description: Produce a short summary of a document or text file.
+    parameters:
+      path: {type: string, required: true}
+    concepts: [summarize this pdf, summarize the report, give me a summary of that doc, tldr this file]
+    hard_negatives:
+      - "summarize the meeting we just had"
+      - "in summary the team did well"
+
+  - name: list_folder_contents
+    description: List the files and folders inside a directory.
+    parameters:
+      path: {type: string, required: false}
+    concepts: [what's in downloads, the contents of documents, files in this folder, what's on my desktop]
+    hard_negatives:
+      - "list of demands"
+      - "i have a long todo list"
+
+  - name: open_folder
+    description: Open a folder in the system file manager.
+    parameters:
+      path: {type: string, required: true}
+    concepts: [open the downloads folder, open my documents folder, open the projects directory, open that folder]
+    hard_negatives:
+      - "open the kimono"
+      - "the folder chair broke"
+
+  # -------------------------------------------------------------------
+  # Dialog-state confirmations (rare, but real intents)
+  # -------------------------------------------------------------------
+  - name: select_file_candidate
+    description: After a search, pick one of the offered file candidates by index or name.
+    parameters:
+      choice: {type: string, required: true}
+    concepts: [the first one, option two, the third file, the one called report]
+    hard_negatives:
+      - "pick me up at eight"
+      - "first come first served"
+
+  - name: confirm_yes
+    description: Confirm the previous prompt with yes/affirmative.
+    parameters: {}
+    concepts: ["yes", "yeah", "yep", "sure", "go ahead", "do it", "please do"]
+    hard_negatives:
+      - "yes i was at the party last night"
+      - "she said yes to the proposal"
+
+  - name: confirm_no
+    description: Decline the previous prompt with no/negative.
+    parameters: {}
+    concepts: ["no", "nope", "nah", "cancel", "don't", "stop", "never mind"]
+    hard_negatives:
+      - "i have no idea what you mean"
+      - "no man is an island"
+
+  # -------------------------------------------------------------------
+  # Calendar / reminders / notes
+  # -------------------------------------------------------------------
+  - name: create_calendar_event
+    description: Create a calendar event with title, date, and time.
+    parameters:
+      title: {type: string, required: true}
+      when: {type: string, required: true}
+    concepts: [schedule a meeting tomorrow at three, add a dentist appointment friday, schedule lunch with sara monday, create a calendar event for next week]
+    hard_negatives:
+      - "create an account for me"
+      - "i need to create some space in my life"
+
+  - name: cancel_calendar_event
+    description: Cancel or delete a calendar event.
+    parameters:
+      title: {type: string, required: true}
+    concepts: [cancel the dentist appointment, cancel my meeting at three, cancel tomorrow's standup, cancel the friday call]
+    hard_negatives:
+      - "cancel my netflix subscription"
+      - "cancel culture is real"
+
+  - name: list_calendar_events
+    description: List upcoming calendar events.
+    parameters:
+      window: {type: string, required: false}
+    concepts: [my schedule today, what's on my calendar, upcoming meetings, my events this week]
+    hard_negatives:
+      - "list the seven wonders of the world"
+      - "i'm overscheduled this month"
+
+  - name: move_calendar_event
+    description: Reschedule an existing calendar event to a new time.
+    parameters:
+      title: {type: string, required: true}
+      new_when: {type: string, required: true}
+    concepts: [move my dentist appointment to friday, reschedule the meeting to four pm, push that call to next week, move lunch to tuesday]
+    hard_negatives:
+      - "move on with your life"
+      - "the movers come monday"
+
+  - name: set_reminder
+    description: Schedule a reminder for a specific time.
+    parameters:
+      message: {type: string, required: true}
+      when: {type: string, required: true}
+    concepts: [remind me to call mom at six, remind me to take the laundry out, remind me about the deadline tomorrow, set an alarm for nine am]
+    hard_negatives:
+      - "remind me of better days"
+      - "you remind me of someone"
+
+  - name: list_reminders
+    description: List active reminders.
+    parameters: {}
+    concepts: [my reminders, my alarms, what reminders i have, my pending alerts]
+    hard_negatives:
+      - "the reminders of war are everywhere"
+
+  - name: save_note
+    description: Save a free-form note for later.
+    parameters:
+      content: {type: string, required: true}
+    concepts: [save a note that the wifi password is changed, save a note saying call the plumber, jot down this idea, make a quick note about the demo]
+    hard_negatives:
+      - "take note of the warning signs"
+      - "she saved me a lot of trouble"
+
+  - name: read_notes
+    description: Read back saved notes.
+    parameters:
+      query: {type: string, required: false}
+    concepts: [my notes, the notes from yesterday, my saved notes, what i wrote down]
+    hard_negatives:
+      - "read between the lines"
+      - "musical notes are fun"
+
+  # -------------------------------------------------------------------
+  # Browser / media
+  # -------------------------------------------------------------------
+  - name: open_browser_url
+    description: Open a URL in the default web browser.
+    parameters:
+      url: {type: string, required: true}
+    concepts: [open github.com, open the anthropic website, open hacker news, open my email tab]
+    hard_negatives:
+      - "open the door for me"
+      - "open your mind to it"
+
+  - name: search_google
+    description: Run a Google web search.
+    parameters:
+      query: {type: string, required: true}
+    concepts: [search for the best ramen near me, google how to fix a leaky faucet, search the latest python release, google the price of bitcoin]
+    hard_negatives:
+      - "google is a useful company"
+      - "search your feelings luke"
+      - "search me i don't know"
+
+  - name: play_youtube
+    description: Play a YouTube video matching a query.
+    parameters:
+      query: {type: string, required: true}
+    concepts: [play the latest mkbhd review, play that funny cat video, play lofi study beats, play the obama farewell speech]
+    hard_negatives:
+      - "play it cool"
+      - "play hard to get"
+      - "play me like a fiddle"
+
+  - name: play_youtube_music
+    description: Play music on YouTube Music matching a query.
+    parameters:
+      query: {type: string, required: true}
+    concepts: [play some taylor swift, play jazz piano, play the new kendrick album, play the deep focus playlist]
+    hard_negatives:
+      - "music to my ears"
+      - "face the music"
+
+  - name: browser_media_control
+    description: Control playback in the active browser tab (play, pause, next, previous, volume).
+    parameters:
+      action: {type: string, required: true}
+    concepts: [pause the music, skip this track, play that, next song, mute the tab]
+    hard_negatives:
+      - "pause for thought"
+      - "skip leg day"
+      - "next time will be better"
+
+  # -------------------------------------------------------------------
+  # Weather
+  # -------------------------------------------------------------------
+  - name: get_weather
+    description: Report the current weather or forecast for a location.
+    parameters:
+      location: {type: string, required: false}
+    concepts: [the weather today, will it rain tomorrow, the forecast for the weekend, is it cold outside, the temperature in tokyo]
+    hard_negatives:
+      - "weather the storm"
+      - "weather permitting we go saturday"
+      - "in any weather i'll be there"
+
+  # -------------------------------------------------------------------
+  # Voice mode
+  # -------------------------------------------------------------------
+  - name: set_voice_mode
+    description: Switch listening mode (persistent, wake-word, on-demand, manual).
+    parameters:
+      mode: {type: string, required: true}
+    concepts: [set voice mode to wake word, switch to persistent listening, switch to manual mode, switch to on demand listening]
+    hard_negatives:
+      - "set the table"
+      - "set in my ways"
+
+  - name: enable_voice
+    description: Enable the microphone and start listening for voice commands.
+    parameters: {}
+    concepts: [enable the microphone, start listening, turn on voice input, open your ears, turn on the mic]
+    hard_negatives:
+      - "enable two factor auth"
+      - "enabler is a strong word"
+
+  - name: disable_voice
+    description: Disable the microphone and stop listening for voice commands.
+    parameters: {}
+    concepts: [disable the microphone, stop listening for now, turn off voice input, mute the mic for a bit, close your ears]
+    hard_negatives:
+      - "disable the alarm system"
+      - "she's been disabled by the injury"
+
+  # -------------------------------------------------------------------
+  # Email (stubs in bench)
+  # -------------------------------------------------------------------
+  - name: read_latest_email
+    description: Read the most recent unread email aloud.
+    parameters: {}
+    concepts: [my latest email, the newest email, the most recent message, my last unread email]
+    hard_negatives:
+      - "email is dead long live slack"
+      - "i hate email chains"
+
+  - name: summarize_inbox
+    description: Summarize all unread Gmail emails into a single spoken paragraph.
+    parameters: {}
+    concepts: [my inbox, what's in my email, my unread emails, the gmail backlog]
+    hard_negatives:
+      - "in box terms it's a knockout"
+      - "inbox zero is a myth"
+
+  # -------------------------------------------------------------------
+  # Memory
+  # -------------------------------------------------------------------
+  - name: show_memories
+    description: Show what FRIDAY remembers about the user.
+    parameters: {}
+    concepts: [what you remember about me, my memories, my preferences, what you've learned about me]
+    hard_negatives:
+      - "memories of childhood are fading"
+      - "make some good memories this trip"
+
+  - name: delete_memory
+    description: Forget a previously remembered fact.
+    parameters:
+      target: {type: string, required: false}
+    concepts: [forget what i just said, delete that memory, forget the fact about my dog, drop that preference]
+    hard_negatives:
+      - "forget about it"
+      - "i'll never forget you"
+      - "forget me not flowers"
+
+  # -------------------------------------------------------------------
+  # Dictation
+  # -------------------------------------------------------------------
+  - name: start_dictation
+    description: Start dictation mode — transcribe speech into the active text field.
+    parameters: {}
+    concepts: [start dictation, start dictating, start taking dictation, begin transcribing what i say, switch to dictation mode]
+    hard_negatives:
+      - "start the car"
+      - "start a fire in the pit"
+
+  - name: end_dictation
+    description: Stop dictation and finalize the transcript.
+    parameters: {}
+    concepts: [stop dictation, end transcribing, stop taking dictation, end the dictation now]
+    hard_negatives:
+      - "end of an era"
+      - "the end justifies the means"
+
+  - name: cancel_dictation
+    description: Abort the current dictation without keeping the transcript.
+    parameters: {}
+    concepts: [cancel the dictation, cancel this transcription, cancel the dictation and discard, drop what i was dictating]
+    hard_negatives:
+      - "cancel the wedding"
+      - "cancel that thought"
+
+  # -------------------------------------------------------------------
+  # Focus session
+  # -------------------------------------------------------------------
+  - name: start_focus_session
+    description: Begin a focus session for a duration with a stated goal.
+    parameters:
+      duration_min: {type: integer, required: false}
+      goal: {type: string, required: false}
+    concepts: [start a focus session, start a pomodoro, begin a deep work block, start a thirty minute focus, start a work session]
+    hard_negatives:
+      - "focus on what matters"
+      - "focus the camera lens"
+      - "lose focus"
+
+  - name: end_focus_session
+    description: End the current focus session.
+    parameters: {}
+    concepts: [end the focus session, end this pomodoro, end the deep work block, end the work session]
+    hard_negatives:
+      - "end of the road"
+      - "the end of the workday"
+
+  - name: focus_session_status
+    description: Report time remaining and current goal of the active focus session.
+    parameters: {}
+    concepts: [how much focus time is left, the focus session status, my pomodoro timer, time left in this session]
+    hard_negatives:
+      - "what's the status of the project"
+      - "status quo is fine"
+
+  # -------------------------------------------------------------------
+  # Greeting (chat-only stub)
+  # -------------------------------------------------------------------
+  - name: greet
+    description: Greet the user back when they say hello.
+    parameters: {}
+    concepts: [hi, hello, hey, yo, howdy]
+    hard_negatives:
+      - "hello darkness my old friend"
+      - "hi was the highest grossing film"
+
+  # -------------------------------------------------------------------
+  # Catch-all fallback — IS the negative class
+  # -------------------------------------------------------------------
+  - name: llm_chat
+    description: Free-form conversation with no tool dispatch.
+    parameters: {}
+    concepts: [a joke, your opinion on this, what you think about that, advice on this, your take]
+    hard_negatives: []

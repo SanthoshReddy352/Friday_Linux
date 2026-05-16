@@ -27,6 +27,12 @@ class DialogState:
     last_error: str | None = None
     pending_file_request: PendingFileRequest | None = None
     pending_clarification: PendingClarification | None = None
+    # Set when FRIDAY asks "Which file would you like me to X?" with no candidates.
+    # Stores the action name ("open", "read", "summarize", "find") so the next
+    # user turn is treated as providing the file name, not parsed independently.
+    pending_file_name_request: str | None = None
+    # Set when FRIDAY asks "Which folder?" — stores "list" or "open".
+    pending_folder_request: str | None = None
 
     def remember_folder(self, folder_path):
         self.current_folder = folder_path
@@ -83,3 +89,19 @@ class DialogState:
 
     def has_pending_clarification(self):
         return bool(self.pending_clarification and self.pending_clarification.action_text)
+
+    def reset_pending(self, reason: str = "") -> None:
+        """Clear every pending-* field in one call (Batch 3 / Issue 3).
+
+        Wired to the InterruptBus so any user-initiated cancel (stop word,
+        wake-word barge-in, "Friday cancel") atomically forgets the file
+        / folder / clarification slot we were waiting on. Without this,
+        a cancelled turn left FRIDAY stuck re-prompting "Which file?" or
+        "Say yes or no" on the next utterance.
+
+        ``reason`` is logged for traceability; it does not affect state.
+        """
+        self.pending_file_request = None
+        self.pending_clarification = None
+        self.pending_file_name_request = None
+        self.pending_folder_request = None

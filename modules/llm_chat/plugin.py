@@ -49,6 +49,10 @@ class LLMChatPlugin(FridayPlugin):
             return "My language model isn't loaded right now. Please check the models directory."
 
         messages = with_no_think_user_message(self._build_messages(query))
+        # Batch 6 / Issue 5c: budget the prompt to the model's context
+        # window so a long session can't trigger the "Requested tokens
+        # (N) exceed context window of M" crash we hit in the wild.
+        messages = self._fit_to_context(llm, messages)
 
         logger.debug(f"[LLMChat] Sending chat prompt for: '{query}'")
         try:
@@ -70,6 +74,35 @@ class LLMChatPlugin(FridayPlugin):
         if config and hasattr(config, "get"):
             return int(config.get("routing.chat_max_tokens", 512) or 512)
         return 512
+
+    def _chat_n_ctx(self) -> int:
+        """Read the chat model's configured context window (n_ctx)."""
+        router = getattr(self.app, "router", None)
+        model_manager = getattr(router, "model_manager", None) if router else None
+        if model_manager and hasattr(model_manager, "profile"):
+            try:
+                profile = model_manager.profile("chat")
+                if profile and getattr(profile, "n_ctx", 0):
+                    return int(profile.n_ctx)
+            except Exception:
+                pass
+        config = getattr(self.app, "config", None)
+        if config and hasattr(config, "get"):
+            return int(config.get("models.chat.n_ctx", 4096) or 4096)
+        return 4096
+
+    def _fit_to_context(self, llm, messages):
+        """Drop oldest messages so the prompt + reserved response tokens
+        stay under the model's context window. See ``core.context_window``.
+        """
+        try:
+            from core.context_window import fit_messages  # noqa: PLC0415
+        except Exception as exc:
+            logger.debug("[LLMChat] context-window helper unavailable: %s", exc)
+            return messages
+        n_ctx = self._chat_n_ctx()
+        response_budget = self._chat_max_tokens()
+        return fit_messages(llm, messages, n_ctx, response_budget=response_budget)
 
     def _generate_reply(self, llm, messages):
         max_tokens = self._chat_max_tokens()

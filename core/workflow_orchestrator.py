@@ -1,8 +1,60 @@
+import difflib
 import os
 import re
 from dataclasses import dataclass, field
 
 from core.logger import logger
+
+
+# Words that indicate the user wants to abandon the active workflow.
+# Matched fuzzily to catch common typos ("cancle", "canecl", etc.).
+_WORKFLOW_CANCEL_TOKENS = frozenset({
+    "cancel", "abort", "nevermind", "stop", "quit", "exit", "halt", "drop",
+})
+_WORKFLOW_CANCEL_FILLER = frozenset({
+    "that", "it", "please", "the", "this", "a", "ok", "okay", "mind",
+    "friday", "hey",
+})
+
+
+def _is_workflow_cancel(text: str) -> bool:
+    """Return True when *text* is a bare cancellation command with no substantive follow-up."""
+    normalized = re.sub(r"[^a-z\s]", "", (text or "").strip().lower())
+    words = normalized.split()
+    meaningful = [w for w in words if w not in _WORKFLOW_CANCEL_FILLER]
+    if not meaningful:
+        return False
+    for word in meaningful:
+        if word in _WORKFLOW_CANCEL_TOKENS:
+            return True
+        # fuzzy match for typos like "cancle" → "cancel" (ratio ≥ 0.82)
+        if difflib.get_close_matches(word, _WORKFLOW_CANCEL_TOKENS, n=1, cutoff=0.82):
+            return True
+    return False
+
+
+# Issue 4: tiny yes/no parsers for the write-confirmation and dictate-or-
+# generate slots. We intentionally accept short conversational variants
+# without delegating to the IntentRecognizer — that would risk re-routing
+# the answer to a different tool.
+_AFFIRMATIVE_TOKENS = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "please",
+    "do that", "go ahead", "do it", "sounds good", "alright",
+})
+_NEGATIVE_TOKENS = frozenset({
+    "no", "nope", "nah", "not now", "don't", "do not", "skip",
+    "leave it", "leave it empty", "thats fine", "that's fine",
+})
+
+
+def _is_affirmative(text: str) -> bool:
+    t = (text or "").strip().lower().rstrip(".!?")
+    return t in _AFFIRMATIVE_TOKENS
+
+
+def _is_negative(text: str) -> bool:
+    t = (text or "").strip().lower().rstrip(".!?")
+    return t in _NEGATIVE_TOKENS
 
 try:
     from langgraph.graph import END, StateGraph
@@ -65,15 +117,41 @@ class BaseWorkflow:
 class FileWorkflow(BaseWorkflow):
     name = "file_workflow"
 
+    # Issue 10: detect an explicit *new* filename in the user's turn so we
+    # don't silently apply a "save that" instruction to whatever file the
+    # stale workflow target happened to point at. Matches "called X.ext",
+    # "to X.ext", or any bare token ending in a 1-4 char extension.
+    _EXPLICIT_FILENAME_RE = re.compile(
+        r"(?:(?:called|named|titled|to|into|in)\s+)?"
+        r"\b([A-Za-z0-9_][A-Za-z0-9_\-]*\.[A-Za-z0-9]{1,5})\b"
+    )
+
     def can_continue(self, user_text, state, context=None):
         if not state:
             return False
         normalized = (user_text or "").strip().lower()
+        # If the user named a different file than the workflow's stored
+        # target, stop continuing — let normal routing reparse so the new
+        # file becomes the target (Issue 10: context bleed fix). Without
+        # this check, "save that to reverse.py" while the workflow target
+        # is ideas.md silently wrote to ideas.md.
+        new_name = self._detect_new_filename(normalized)
+        active_target = (state.get("target") or {})
+        active_filename = (active_target.get("filename") or "").lower()
+        if new_name and active_filename and new_name.lower() != active_filename:
+            return False
         if state.get("pending_slots"):
             return True
         if normalized in {"yes", "yeah", "yep", "sure", "okay", "ok", "do that", "save that", "write that"}:
             return True
         return bool(re.search(r"\b(?:save|write|append|add)\s+(?:that|this|it)\b", normalized))
+
+    def _detect_new_filename(self, normalized: str) -> str:
+        """Return the first explicit file-with-extension token found in the
+        user's utterance, or empty string. Used to detect a switch of
+        target mid-workflow (Issue 10)."""
+        match = self._EXPLICIT_FILENAME_RE.search(normalized)
+        return match.group(1) if match else ""
 
     def _handle(self, state):
         user_text = state["user_text"]
@@ -108,6 +186,98 @@ class FileWorkflow(BaseWorkflow):
                         "extension": target.get("extension", ""),
                     },
                 )
+            state["result"] = WorkflowResult(
+                handled=True,
+                workflow_name=self.name,
+                response=response,
+                state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or {},
+            )
+            return state
+
+        # Issue 4: "Would you like me to write anything in it?" after a bare
+        # create. yes → drop into dictate-or-generate; no → graceful exit.
+        # Anything else releases the workflow so the user's new command can
+        # route normally — the slot is conversational, not a hard gate.
+        if "write_confirmation" in pending_slots:
+            filename = target.get("filename") or os.path.basename(target.get("path", ""))
+            if _is_affirmative(lower_text):
+                self._memory().save_workflow_state(session_id, self.name, {
+                    **workflow_state,
+                    "pending_slots": ["content_source"],
+                    "result_summary": f"Awaiting dictate/generate choice for {filename}.",
+                })
+                state["result"] = WorkflowResult(
+                    handled=True, workflow_name=self.name,
+                    response="Will you dictate the content, or should I generate it for you?",
+                    state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or {},
+                )
+                return state
+            if _is_negative(lower_text):
+                self._memory().clear_workflow_state(session_id, self.name)
+                state["result"] = WorkflowResult(
+                    handled=True, workflow_name=self.name,
+                    response=f"Okay — leaving {filename or 'the file'} empty.",
+                    state={},
+                )
+                return state
+            # Not a yes/no — let the normal router handle this turn.
+            state["result"] = WorkflowResult(
+                handled=False, workflow_name=self.name, state=workflow_state,
+            )
+            return state
+
+        # Issue 4: "dictate" → hand off to DictationService with the file as
+        # the target; "generate" → ask for the topic. Anything else releases.
+        if "content_source" in pending_slots:
+            filename = target.get("filename") or os.path.basename(target.get("path", ""))
+            target_path = target.get("path", "")
+            if any(w in lower_text for w in ("dictate", "i'll dictate", "i will dictate", "dictation")):
+                response = self._start_dictation_into(target_path, filename)
+                if response is not None:
+                    self._memory().clear_workflow_state(session_id, self.name)
+                    state["result"] = WorkflowResult(
+                        handled=True, workflow_name=self.name, response=response, state={},
+                    )
+                    return state
+                # Dictation unavailable — release so a fresh command can land.
+                state["result"] = WorkflowResult(
+                    handled=True, workflow_name=self.name,
+                    response="Dictation isn't available right now. Want me to generate instead?",
+                    state=workflow_state,
+                )
+                return state
+            if any(w in lower_text for w in ("generate", "you write", "you do it", "write it for me", "you generate")):
+                self._memory().save_workflow_state(session_id, self.name, {
+                    **workflow_state,
+                    "pending_slots": ["content_topic"],
+                    "result_summary": f"Awaiting topic for generated {filename}.",
+                })
+                state["result"] = WorkflowResult(
+                    handled=True, workflow_name=self.name,
+                    response=f"What topic should I write about for {filename or 'the file'}?",
+                    state=self._memory().get_active_workflow(session_id, workflow_name=self.name) or {},
+                )
+                return state
+            # Release for fresh routing.
+            state["result"] = WorkflowResult(
+                handled=False, workflow_name=self.name, state=workflow_state,
+            )
+            return state
+
+        # Issue 4: topic captured → controller generates and saves; workflow
+        # exits via the controller's success path.
+        if "content_topic" in pending_slots:
+            filename = target.get("filename") or os.path.basename(target.get("path", ""))
+            response = controller.manage(
+                user_text,
+                {
+                    "action": "write",
+                    "filename": filename,
+                    "folder": target.get("folder", ""),
+                    "extension": target.get("extension", ""),
+                    "content": normalized,
+                },
+            )
             state["result"] = WorkflowResult(
                 handled=True,
                 workflow_name=self.name,
@@ -178,6 +348,30 @@ class FileWorkflow(BaseWorkflow):
         state["result"] = WorkflowResult(handled=False, workflow_name=self.name, state=workflow_state)
         return state
 
+    def _start_dictation_into(self, target_path: str, filename: str) -> str | None:
+        """Hand off the dictate-content branch (Issue 4) to DictationService.
+
+        Returns the assistant response (the dictation start message), or
+        None if the dictation service is unavailable — callers fall back
+        to the generate branch in that case.
+        """
+        if not target_path:
+            return None
+        dictation = getattr(self.app, "dictation_service", None)
+        if dictation is None:
+            return None
+        try:
+            label = (filename or "memo").rsplit(".", 1)[0]
+            ok, message = dictation.start(label=label, target_path=target_path)
+        except TypeError:
+            # Older signature (no target_path kwarg) — fall back to default
+            # memo path; the user will hear the standard start message.
+            ok, message = dictation.start(label=filename or "memo")
+        except Exception as exc:
+            logger.warning("[file_workflow] dictation start failed: %s", exc)
+            return None
+        return message if ok else None
+
     def _extract_filename(self, text):
         cleaned = re.sub(r"[^\w.\- ]+", " ", text or "").strip()
         cleaned = re.sub(r"\s+", " ", cleaned)
@@ -189,6 +383,36 @@ class FileWorkflow(BaseWorkflow):
 class BrowserMediaWorkflow(BaseWorkflow):
     name = "browser_media"
 
+    # Verbs that, when present in the utterance, indicate narrative /
+    # personal-fact speech rather than a media command. If any of these
+    # appears, we never resume the media workflow even if a media
+    # keyword ("next", "play") is also in the sentence. (Issue 9 — the
+    # "...next year is my promotion" hijack.)
+    _NON_MEDIA_VERBS = (
+        "remember", "remembered", "learn", "learned", "learning",
+        "know", "knew", "knows", "work", "works", "working", "worked",
+        "said", "say", "says", "tell", "told", "telling",
+        "think", "thought", "thinking", "feel", "felt", "feeling",
+        "believe", "believed", "wonder", "wondered", "promised",
+    )
+
+    # Compound phrases that pair with "next" / "previous" but never mean
+    # "next track" / "previous chapter".
+    _TEMPORAL_NEXT_RE = re.compile(
+        r"\bnext\s+(?:year|month|week|time|session|chapter|step|page|"
+        r"morning|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    )
+
+    _MEDIA_NOUNS = (
+        "video", "song", "track", "music", "youtube", "tune", "podcast",
+        "episode", "playlist", "playback",
+    )
+
+    _MEDIA_KEYWORDS = frozenset({
+        "pause", "resume", "next", "skip", "play", "previous",
+        "forward", "back", "backward", "revert", "rewind",
+    })
+
     def should_start(self, user_text, context=None):
         lower_text = (user_text or "").lower()
         return "youtube" in lower_text or "youtube music" in lower_text
@@ -197,11 +421,36 @@ class BrowserMediaWorkflow(BaseWorkflow):
         lower_text = (user_text or "").lower().strip()
         if self.should_start(user_text, context=context):
             return True
-        media_keywords = {
-            "pause", "resume", "next", "skip", "play", "previous", "forward", "back", "backward", "revert", "rewind",
-            "open it in music instead", "play it in music instead"
-        }
-        return any(word in lower_text for word in media_keywords)
+        return self._is_likely_media_command(lower_text)
+
+    def _is_likely_media_command(self, lower_text):
+        """Boundary check: only resume the media workflow when the utterance
+        looks like an actual control intent, not conversational text that
+        happens to contain a media verb. (Issue 9.)
+
+        Conditions for accepting:
+          * No personal-fact verb in the sentence ("work", "remember", "said", …).
+          * No temporal "next year / month / week / time" phrase.
+          * Either short (<=5 tokens) — bare imperatives like "pause",
+            "next", "skip 30 seconds" — or contains an explicit media noun.
+        """
+        if not lower_text:
+            return False
+        if any(re.search(rf"\b{v}\b", lower_text) for v in self._NON_MEDIA_VERBS):
+            return False
+        if self._TEMPORAL_NEXT_RE.search(lower_text):
+            return False
+        if "music instead" in lower_text or "youtube instead" in lower_text:
+            return True
+        tokens = lower_text.split()
+        has_keyword = any(t.strip(".,!?") in self._MEDIA_KEYWORDS for t in tokens)
+        if not has_keyword:
+            return False
+        # Short imperative — trust the keyword.
+        if len(tokens) <= 5:
+            return True
+        # Long utterance: require an explicit media noun.
+        return any(noun in lower_text for noun in self._MEDIA_NOUNS)
 
     def _handle(self, state):
         user_text = state["user_text"]
@@ -525,9 +774,35 @@ class WorkflowOrchestrator:
         return workflow.run(user_text, session_id, context=context)
 
     def continue_active(self, user_text, session_id, context=None):
-        active = (getattr(self.app, "memory_service", None) or self.app.context_store).get_active_workflow(session_id)
+        memory = getattr(self.app, "memory_service", None) or self.app.context_store
+        active = memory.get_active_workflow(session_id)
         if not active:
             return WorkflowResult(handled=False)
+
+        # Cancel command → clear workflow state and acknowledge; do not feed
+        # the cancel word to the workflow step (it would be misinterpreted as
+        # an answer to whatever the workflow was asking for).
+        if _is_workflow_cancel(user_text):
+            workflow_name = active.get("workflow_name", "")
+            try:
+                memory.clear_workflow_state(session_id, workflow_name)
+            except Exception:
+                pass
+            logger.info("[workflow] Cancelled active workflow '%s' by user request.", workflow_name)
+            # Batch 3 / Issue 3: fire the bus so DialogState pending-* fields
+            # reset alongside the workflow. The audible TTS isn't speaking
+            # here so we don't need a "tts" signal — workflow scope is right.
+            try:
+                from core.interrupt_bus import get_interrupt_bus  # noqa: PLC0415
+                get_interrupt_bus().signal("workflow_cancel", scope="workflow")
+            except Exception as exc:
+                logger.debug("[workflow] interrupt-bus signal skipped: %s", exc)
+            return WorkflowResult(
+                handled=True,
+                workflow_name=workflow_name,
+                response="Okay, cancelled, sir.",
+            )
+
         workflow = self.workflows.get(active.get("workflow_name"))
         if workflow is None or not workflow.can_continue(user_text, active, context=context):
             return WorkflowResult(handled=False, workflow_name=active.get("workflow_name", ""))

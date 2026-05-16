@@ -24,6 +24,71 @@ POLITE_PREFIX_PATTERN = re.compile(
 )
 
 
+# Batch 6 / Issue 6b — retrieval gating. The semantic_recall + user_facts
+# fetch costs ~50-150ms; skipping it on small-talk turns is a real win.
+# These regexes detect a *referential signal* — a pronoun, an explicit
+# memory verb ("remember", "recall"), or a proper noun. When any fire we
+# fetch even if the query is short.
+_REFERENTIAL_PRONOUN_RE = re.compile(
+    r"\b(?:i|me|my|mine|myself|you|your|yours|we|us|our|ours|"
+    r"he|him|his|she|her|hers|they|them|their|theirs|"
+    r"it|its|that|this|these|those)\b",
+    re.IGNORECASE,
+)
+_REFERENTIAL_VERB_RE = re.compile(
+    r"\b(?:remember|recall|forget|known|knew|told|mentioned|"
+    r"earlier|previously|last\s+time|last\s+session)\b",
+    re.IGNORECASE,
+)
+# Tokens that are stylistic capitalisation rather than proper nouns —
+# they appear at the start of sentences without naming entities.
+_NON_PROPER_LEADING = frozenset({
+    "i", "i'm", "i've", "i'll", "i'd",
+    "what", "where", "when", "who", "why", "how",
+    "tell", "show", "list", "open", "close", "play",
+    "yes", "no", "ok", "okay", "sure",
+})
+
+
+def _has_proper_noun(text: str) -> bool:
+    """Cheap proper-noun probe.
+
+    Treats a token as a proper noun if it isn't the first word of the
+    sentence, starts uppercase, and is followed by lowercase letters
+    (so "USA" / "API" don't false-positive). Good enough as a trigger;
+    not meant to be an NER replacement.
+    """
+    if not text:
+        return False
+    tokens = text.strip().split()
+    for i, tok in enumerate(tokens):
+        if i == 0:
+            continue
+        cleaned = tok.strip(".,!?;:'\"()")
+        if (
+            len(cleaned) >= 2
+            and cleaned[0].isupper()
+            and cleaned[1:].islower()
+            and cleaned.lower() not in _NON_PROPER_LEADING
+        ):
+            return True
+    return False
+
+
+def _needs_referential_recall(query: str) -> bool:
+    """Return True iff the query contains any referential signal worth
+    paying the memory-bundle cost for. Used by ``build_chat_messages``
+    to override the cheap is-short gate for personal queries.
+    """
+    if not query:
+        return False
+    if _REFERENTIAL_PRONOUN_RE.search(query):
+        return True
+    if _REFERENTIAL_VERB_RE.search(query):
+        return True
+    return _has_proper_noun(query)
+
+
 class AssistantContext:
     """
     Shared conversational context for FRIDAY.
@@ -165,27 +230,37 @@ class AssistantContext:
 
     def build_chat_messages(self, query, dialog_state=None):
         is_short = len((query or "").split()) <= 6
+        # Batch 6 / Issue 6b: even a "short" turn earns semantic recall
+        # when it contains a referential signal (pronoun, proper noun,
+        # explicit "remember/recall" verb). Without this override,
+        # "what do you know about me?" and "remind me of Mumbai trip"
+        # would silently skip recall because they're under the
+        # six-word threshold.
+        needs_recall = _needs_referential_recall(query)
         session_summary = ""
         workflow_summary = ""
         semantic_recall = []
         user_facts = ""
         if self.context_store and self.session_id:
             workflow_summary = self.context_store.get_workflow_summary(self.session_id)
-            if not is_short:
+            if (not is_short) or needs_recall:
                 session_summary = self.context_store.summarize_session(self.session_id, limit=4)
                 semantic_recall = self.context_store.semantic_recall(query, self.session_id, limit=2)
             # Surface durable user facts (Mem0 / curated profile facts) so the
             # chat model can answer "what do you remember about me?" without
             # routing to a tool. Best-effort — falls back silently on any error.
-            try:
-                memory_service = getattr(self, "memory_service", None)
-                if memory_service is not None:
-                    bundle = memory_service.build_context_bundle(self.session_id, query) or {}
-                    facts = bundle.get("user_facts")
-                    if facts:
-                        user_facts = str(facts).strip()
-            except Exception:
-                user_facts = ""
+            # Only fetch when there's a referential signal — otherwise we'd
+            # pay the bundle cost on every "hi" / "what time is it" turn.
+            if (not is_short) or needs_recall:
+                try:
+                    memory_service = getattr(self, "memory_service", None)
+                    if memory_service is not None:
+                        bundle = memory_service.build_context_bundle(self.session_id, query) or {}
+                        facts = bundle.get("user_facts")
+                        if facts:
+                            user_facts = str(facts).strip()
+                except Exception:
+                    user_facts = ""
 
         persona = (
             "You are FRIDAY, a personal AI assistant. "

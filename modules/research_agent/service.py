@@ -963,13 +963,21 @@ class ResearchAgentService:
     # straight through to the direct backends below.
 
     def _search_web(self, topic: str, limit: int) -> list[ResearchSource]:
-        """General web search. SearxNG → DuckDuckGo HTML → Wikipedia."""
-        searx = self._try_searx(topic, categories=["general"], limit=limit, default_origin="web")
-        if searx:
-            return searx
+        """General web search. DuckDuckGo HTML → SearxNG → Wikipedia.
+
+        Batch 6 / Issue 6a: DDG is the primary now. Public SearxNG
+        instances were timing out or returning anti-bot HTML in the user
+        logs ("Web Research Agent is failing entirely, timing out")
+        while DDG's HTML endpoint stays responsive. SearxNG drops to a
+        backup tier — still consulted if DDG returns nothing, but no
+        longer on the hot path.
+        """
         ddg = self._search_duckduckgo_fallback(topic, limit)
         if ddg:
             return ddg
+        searx = self._try_searx(topic, categories=["general"], limit=limit, default_origin="web")
+        if searx:
+            return searx
         return self._search_wikipedia_fallback(topic, min(limit, 5))
 
     def _search_academic(self, topic: str, limit: int) -> list[ResearchSource]:

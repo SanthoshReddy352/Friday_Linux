@@ -22,11 +22,21 @@ feedparser
 html2text
 beautifulsoup4
 lxml
+selectolax
+httpx[http2]
 
 # --- AGENTIC FRAMEWORK & STORAGE ---
 langgraph
 langchain-core
 chromadb
+sentence-transformers
+
+# --- DOCUMENT INTELLIGENCE ---
+markitdown[pdf]
+
+# --- INTENT & ENTITY ---
+rapidfuzz
+dateparser
 
 # --- BROWSER AUTOMATION ---
 playwright

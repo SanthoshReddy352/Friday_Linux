@@ -67,6 +67,17 @@ class DictationPlugin(FridayPlugin):
         return message
 
     def handle_end(self, text, args):
+        # Issue 6: if no dictation is active and the user's phrasing looks
+        # like "save note ..." (which used to cross-route here via the
+        # embedding router — now blocklisted but defence-in-depth still
+        # pays off), redirect explicitly to the save_note tool instead of
+        # surfacing the confusing "I'm not in a dictation session" reply.
+        if not self.service.is_active():
+            normalized = (text or "").lower()
+            if "save note" in normalized or "note this" in normalized or "note that" in normalized:
+                save_note = self.app.router._tools_by_name.get("save_note") if hasattr(self.app, "router") else None
+                if save_note and save_note.get("callback"):
+                    return save_note["callback"](text, {})
         ok, message = self.service.stop()
         return message
 

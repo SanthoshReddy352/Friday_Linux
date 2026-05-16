@@ -60,8 +60,8 @@
     "hash": "3194344dc704118bb27b3ab42260b66b"
   },
   "/home/tricky/Friday_Linux/core/app.py": {
-    "mtime": 1778745776.0658405,
-    "hash": "15f57e55a88039f4d8c5d6212a9b9c26"
+    "mtime": 1778818864.2950103,
+    "hash": "5991b61d8dbcde4f80e031dcf97fbf79"
   },
   "/home/tricky/Friday_Linux/core/context_store.py": {
     "mtime": 1778646204.682045,
@@ -120,8 +120,8 @@
     "hash": "c3af8c83d1adc3fa16c2a549a3aafed0"
   },
   "/home/tricky/Friday_Linux/core/task_runner.py": {
-    "mtime": 1777464827.3484144,
-    "hash": "590025b489a146cb8faf270609a8c332"
+    "mtime": 1778817917.118112,
+    "hash": "3bf984d8bff3e5f02e44678a537bd881"
   },
   "/home/tricky/Friday_Linux/core/assistant_context.py": {
     "mtime": 1778745754.7020438,
@@ -392,8 +392,8 @@
     "hash": "806cfb3212d01990a3c5941df7c9b7c7"
   },
   "/home/tricky/Friday_Linux/modules/llm_chat/plugin.py": {
-    "mtime": 1778327743.3598998,
-    "hash": "8ed9b38b3babde090a5f0b5be172c68c"
+    "mtime": 1778817926.2661576,
+    "hash": "1b428e51cc1084ab77d2867c444faebb"
   },
   "/home/tricky/Friday_Linux/modules/vision/prompts.py": {
     "mtime": 1778213410.387612,
@@ -404,8 +404,8 @@
     "hash": "630b42976059509e80e5ac84c7776d73"
   },
   "/home/tricky/Friday_Linux/modules/vision/screenshot.py": {
-    "mtime": 1778297965.1182873,
-    "hash": "c1c30a857db25ef194fac67dcae560e7"
+    "mtime": 1778821013.7950292,
+    "hash": "3c38e2711294cd0238f98d3dadbea6e8"
   },
   "/home/tricky/Friday_Linux/modules/vision/__init__.py": {
     "mtime": 1778213477.130581,
@@ -448,16 +448,16 @@
     "hash": "60e0688e90596b9d50a4c63abac373a2"
   },
   "/home/tricky/Friday_Linux/modules/system_control/screenshot.py": {
-    "mtime": 1778314782.8994305,
-    "hash": "302424ac5296942989a769bf5bc33d31"
+    "mtime": 1778821001.1390939,
+    "hash": "302ffc65502d7d02aa95f54c3bcc566a"
   },
   "/home/tricky/Friday_Linux/modules/system_control/__init__.py": {
     "mtime": 1776191533.6991754,
     "hash": "8c0442e31c8dbca5bf03a25a3f1751a5"
   },
   "/home/tricky/Friday_Linux/modules/system_control/plugin.py": {
-    "mtime": 1778743636.762164,
-    "hash": "8f1b40feade0c8dd43eae0d7b8c9514f"
+    "mtime": 1778818039.79453,
+    "hash": "35e091a0f718884bb8ea427d7f0e4db2"
   },
   "/home/tricky/Friday_Linux/modules/system_control/file_workspace.py": {
     "mtime": 1777957498.449804,
@@ -484,12 +484,12 @@
     "hash": "a41d4c0940ed88616476d5ca44c42814"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/register_wake.py": {
-    "mtime": 1778746039.4874752,
-    "hash": "e761542f78f5f1826db177b4e686df77"
+    "mtime": 1778814858.942863,
+    "hash": "57c228143b64ab9dc0dcecbf3eb669af"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/wake_porcupine.py": {
-    "mtime": 1778745999.1518228,
-    "hash": "c0bd3858e86d55cc723bb71acb6a60de"
+    "mtime": 1778814846.8390357,
+    "hash": "8a7be40e3afe088ff68f0a1c9b45d35b"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/plugin.py": {
     "mtime": 1777956786.0509255,
@@ -504,8 +504,8 @@
     "hash": "2b97ba45318237f5b9fde6e2eb17b37a"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/stt.py": {
-    "mtime": 1778314782.9012554,
-    "hash": "7cf502f611b08f1aff192c055b297618"
+    "mtime": 1778818374.4860632,
+    "hash": "d05fbdd348b4b29aa726e09f599da546"
   },
   "/home/tricky/Friday_Linux/modules/voice_io/clap_detector.py": {
     "mtime": 1778347969.614148,
@@ -2528,8 +2528,8 @@
     "hash": "dec0fd08af1df1247d0b313c512a32fa"
   },
   "/home/tricky/Friday_Linux/gui/hud.py": {
-    "mtime": 1778813526.0619006,
-    "hash": "d05e8fac7eeba8f4327d517e5f062076"
+    "mtime": 1778820024.9780447,
+    "hash": "ac466a76f537afe805948978703b358e"
   },
   "/home/tricky/Friday_Linux/gui/main_window.py": {
     "mtime": 1778764825.88224,
@@ -2616,8 +2616,8 @@
     "hash": "f950d72652869fe328312fdea6535248"
   },
   "/home/tricky/Friday_Linux/config.yaml": {
-    "mtime": 1778762279.6351883,
-    "hash": "dc25537145062cbf4b33d921eb6080e7"
+    "mtime": 1778820736.7883599,
+    "hash": "d49816e9c5c17343c73c760ea9cd3510"
   },
   "/home/tricky/Friday_Linux/SETUP_GUIDE_WINDOWS.md": {
     "mtime": 1778747624.30391,
@@ -2732,8 +2732,8 @@
     "hash": "1f83dc4b4c0349d39ee60c56683cfe5d"
   },
   "/home/tricky/Friday_Linux/docs/testing_guide.md": {
-    "mtime": 1778813655.8191667,
-    "hash": "c97b85c38ade3bdd2d1dac4ae239568c"
+    "mtime": 1778821026.782962,
+    "hash": "d1016856ef57644c3e4aa714ab64e597"
   },
   "/home/tricky/Friday_Linux/docs/architecture.md": {
     "mtime": 1778746282.3174603,

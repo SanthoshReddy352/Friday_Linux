@@ -185,19 +185,42 @@ class TaskManagerPlugin(FridayPlugin):
             "context_terms": ["cancel reminder", "delete reminder", "cancel calendar event", "remove event"],
         }, self.handle_cancel_calendar_event)
 
+        # Issue 7 fix: split the old conflated list tool into two
+        # disambiguated tools. `list_calendar_events` matches calendar-only
+        # phrasing, `list_reminders` matches reminder-only phrasing. The
+        # old handler returned both mixed together which made "list
+        # calendar events" feel arbitrary (sometimes reminders, sometimes
+        # events depending on what was in the DB). Batch 5 will replace
+        # `list_calendar_events` here with the GWS path entirely.
         self.app.router.register_tool({
             "name": "list_calendar_events",
-            "description": "Read upcoming reminders and calendar events with their scheduled date and time.",
+            "description": "Read upcoming calendar events with their scheduled date and time.",
             "parameters": {
                 "limit": "integer – optional number of upcoming events to read"
             },
-            "aliases": ["calendar events", "upcoming reminders", "my reminders", "agenda", "today's events"],
+            "aliases": ["calendar events", "my calendar", "agenda", "today's events"],
             "patterns": [
-                r"\b(?:what(?:'s| is)?|read|show|list|brief)\s+(?:my\s+)?(?:calendar|agenda|events|reminders)\b",
-                r"\b(?:upcoming|scheduled)\s+(?:events|reminders)\b",
+                r"\b(?:what(?:'s| is)?|read|show|list|brief)\s+(?:my\s+|the\s+)?(?:calendar|agenda|calendar\s+events|events)\b",
+                r"\b(?:upcoming|scheduled)\s+(?:calendar\s+events|events)\b",
+                r"\bwhat(?:'s| is)?\s+on\s+(?:my\s+)?calendar\b",
             ],
-            "context_terms": ["calendar", "agenda", "events", "reminders", "schedule", "briefing"],
+            "context_terms": ["calendar", "agenda", "schedule", "briefing"],
         }, self.handle_list_calendar_events)
+
+        self.app.router.register_tool({
+            "name": "list_reminders",
+            "description": "Read upcoming reminders with their scheduled date and time.",
+            "parameters": {
+                "limit": "integer – optional number of upcoming reminders to read"
+            },
+            "aliases": ["my reminders", "upcoming reminders", "list reminders", "show reminders"],
+            "patterns": [
+                r"\b(?:what(?:'s| is)?|read|show|list|brief)\s+(?:my\s+|the\s+)?reminders\b",
+                r"\b(?:upcoming|scheduled)\s+reminders\b",
+                r"\bwhat\s+(?:are\s+)?my\s+reminders\b",
+            ],
+            "context_terms": ["reminders", "my reminders"],
+        }, self.handle_list_reminders)
 
         self.app.router.register_tool({
             "name": "get_time",
@@ -490,19 +513,58 @@ class TaskManagerPlugin(FridayPlugin):
         return f"Cancelled '{chosen.get('title', 'that reminder')}'."
 
     def _extract_event_title(self, text):
+        # Issue 11: extract temporal expressions FIRST so the residue is
+        # what title patterns operate on. Otherwise "schedule a meeting
+        # in 15 minutes" parses title="in 15 minutes" — the greedy `(.+)`
+        # captures the whole temporal clause.
+        residue = self._strip_temporal_expressions(text)
         for pattern in (
             r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?(?:event|meeting|reminder|appointment)\s+(?:titled|called|named)\s+(.+)",
-            r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?(?:event|meeting|reminder|appointment)\s+(?:for\s+|to\s+)?(.+)",
+            r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?(?:event|meeting|reminder|appointment)\s+(?:for\s+|to\s+|about\s+)?(.+)",
             r"\b(?:add\s+to\s+(?:my\s+)?calendar)\s*[:\-]?\s*(.+)",
         ):
-            match = re.search(pattern, text, re.IGNORECASE)
+            match = re.search(pattern, residue, re.IGNORECASE)
             if not match:
                 continue
             title = match.group(1).strip(" .!?")
+            # Defensive — re-strip suffix in case any temporal slipped through.
             title = self._strip_temporal_suffix(title)
             if title:
                 return title
+        # Fallback: temporal stripped, no descriptive content captured.
+        # Use the action noun itself — "schedule a meeting" → "Meeting".
+        bare = re.search(
+            r"\b(?:create|add|schedule|set\s+up|book)\s+(?:a\s+|an\s+)?(?:calendar\s+)?"
+            r"(meeting|appointment|event|reminder|standup|call|sync|review|check-?in)\b",
+            residue,
+            re.IGNORECASE,
+        )
+        if bare:
+            return bare.group(1).capitalize()
         return ""
+
+    def _strip_temporal_expressions(self, text):
+        """Remove temporal expressions from anywhere in ``text`` and collapse
+        whitespace. Mirror of ``_strip_temporal_suffix`` but anchorless,
+        used by ``_extract_event_title`` to isolate the non-temporal
+        residue before title patterns run (Issue 11).
+        """
+        if not text:
+            return text
+        cleaned = text
+        patterns = (
+            r"\bin\s+\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+            r"\b(?:today|tomorrow|tonight)\b",
+            r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?)?\b",
+            r"\bon\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            r"\bnext\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month)\b",
+            r"\bthis\s+(?:morning|afternoon|evening|weekend)\b",
+            r"\bfrom\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+to\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
+        )
+        for pattern in patterns:
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
 
     def _extract_cancel_target(self, text):
         for pattern in (
@@ -1013,35 +1075,50 @@ class TaskManagerPlugin(FridayPlugin):
             return []
 
     def handle_list_calendar_events(self, text, args):
+        """List upcoming *calendar events only* (Issue 7).
+
+        Reminders go through `handle_list_reminders`. The handler still
+        falls back to showing both when neither bucket is populated so
+        we don't lie to the user.
+        """
         limit = int((args or {}).get("limit") or 5)
+        return self._render_upcoming(limit, kind="calendar_event")
+
+    def handle_list_reminders(self, text, args):
+        """List upcoming *reminders only* (Issue 7)."""
+        limit = int((args or {}).get("limit") or 5)
+        return self._render_upcoming(limit, kind="reminder")
+
+    def _render_upcoming(self, limit, *, kind):
+        """Shared formatter for list_calendar_events / list_reminders.
+
+        ``kind`` is one of ``"calendar_event"`` or ``"reminder"`` — the
+        value persisted in the ``calendar_events.type`` column.
+        """
         all_events = [e for e in self.list_calendar_events(limit=50) if e.get("status") == "scheduled"]
         now = datetime.now()
-        reminders, cal_events = [], []
+        matched = []
         for event in all_events:
+            if event.get("type") != kind:
+                continue
             remind_at = self._parse_iso_datetime(event.get("remind_at"))
             if remind_at and remind_at >= now:
-                bucket = cal_events if event.get("type") == "calendar_event" else reminders
-                bucket.append((remind_at, event))
-        reminders.sort(key=lambda x: x[0])
-        cal_events.sort(key=lambda x: x[0])
+                matched.append((remind_at, event))
+        matched.sort(key=lambda x: x[0])
 
-        if not reminders and not cal_events:
-            return "You don't have any upcoming reminders or calendar events."
+        if not matched:
+            if kind == "reminder":
+                return "You have no upcoming reminders."
+            return "You have no upcoming calendar events."
 
-        sections = []
-        if reminders:
-            header = "Here are your reminders:" if not cal_events else "Reminders:"
-            lines = [header]
-            for remind_at, event in reminders[:max(1, limit)]:
-                lines.append(f"  {self._format_event_time(remind_at)}: {event.get('title', '')}")
-            sections.append("\n".join(lines))
-        if cal_events:
-            header = "Here are your calendar events:" if not reminders else "Calendar events:"
-            lines = [header]
-            for remind_at, event in cal_events[:max(1, limit)]:
-                lines.append(f"  {self._format_event_time(remind_at)}: {event.get('title', '')}")
-            sections.append("\n".join(lines))
-        return "\n\n".join(sections)
+        if kind == "reminder":
+            header = "Here are your reminders:"
+        else:
+            header = "Here are your calendar events:"
+        lines = [header]
+        for remind_at, event in matched[:max(1, limit)]:
+            lines.append(f"  {self._format_event_time(remind_at)}: {event.get('title', '')}")
+        return "\n".join(lines)
 
     def get_unfinished_task_briefing(self, limit=5):
         all_events = [e for e in self.list_calendar_events(limit=50) if e.get("status") == "scheduled"]

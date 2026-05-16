@@ -69,6 +69,7 @@ class WorkspaceFileController:
     def search(self, text, args):
         request = self.parse_lookup_request(text, args, default_actions=["open"])
         if not request.filename:
+            self.dialog_state.pending_file_name_request = "find"
             return "Which file would you like me to find?"
 
         folder_path, matches, error = self.resolve_matches(request)
@@ -123,6 +124,7 @@ class WorkspaceFileController:
             folder_path = self.dialog_state.current_folder
 
         if not folder_path:
+            self.dialog_state.pending_folder_request = "list"
             return "Which folder should I inspect?"
 
         listing = list_folder_contents(folder_path, limit=25)
@@ -139,6 +141,7 @@ class WorkspaceFileController:
         if not folder_query and self.dialog_state.current_folder:
             return open_folder(self.dialog_state.current_folder)
         if not folder_query:
+            self.dialog_state.pending_folder_request = "open"
             return "Which folder should I open?"
 
         folder_path = self.resolve_folder(folder_query)
@@ -302,6 +305,31 @@ class WorkspaceFileController:
             return f"FAILURE: Failed to update the file: {exc}"
 
         self.dialog_state.remember_file(target_path)
+        # Issue 10: a freshly created/written file is an *explicit* artifact
+        # — the user told us what to operate on. Persist it as such so a
+        # later "read it" / "open it" resolves to this file even if some
+        # auto-scope side effect (e.g. a generated chat artifact) follows.
+        self._publish_explicit_artifact(target_path)
+
+        # Issue 4: after a successful `create` with no content yet, drop into
+        # the new write-confirmation slot instead of ending the workflow.
+        # The follow-up prompt asks the user whether to write anything in
+        # the file (yes → dictate-or-generate; no → graceful terminate).
+        is_bare_create = request.action == "create" and not content
+        if is_bare_create:
+            self._save_file_workflow_state({
+                "status": "active",
+                "pending_slots": ["write_confirmation"],
+                "last_action": request.action,
+                "action": request.action,
+                "target": self._target_payload(target_path, request.extension),
+                "result_summary": f"Created {os.path.basename(target_path)}. Awaiting write decision.",
+            })
+            return (
+                f"Created {os.path.basename(target_path)}. "
+                "Would you like me to write anything in it?"
+            )
+
         self._save_file_workflow_state({
             "status": "active",
             "pending_slots": [],
@@ -311,6 +339,26 @@ class WorkspaceFileController:
             "result_summary": f"{verb} {os.path.basename(target_path)}.",
         })
         return f"SUCCESS: {verb} {os.path.basename(target_path)}."
+
+    def _publish_explicit_artifact(self, target_path: str) -> None:
+        """Save the working artifact with scope='explicit' (Issue 10)."""
+        memory = self._memory()
+        session_id = getattr(self.app, "session_id", None)
+        if memory is None or not session_id or not hasattr(memory, "save_artifact"):
+            return
+        try:
+            from core.context_store import WorkingArtifact  # noqa: PLC0415
+            artifact = WorkingArtifact(
+                content="",
+                output_type="file",
+                capability_name="manage_file",
+                artifact_type="file",
+                source_path=target_path,
+                scope="explicit",
+            )
+            memory.save_artifact(session_id, artifact)
+        except Exception as exc:
+            logger.debug("[file_controller] explicit artifact save skipped: %s", exc)
 
     def parse_lookup_request(self, text, args=None, default_actions=None):
         args = dict(args or {})
@@ -418,6 +466,7 @@ class WorkspaceFileController:
                 return self._finalize_pending_file(pending.candidates[0], actions)
             if self.dialog_state.selected_file and request.requested_actions != ["open"]:
                 return self._execute_file_actions(self.dialog_state.selected_file, request.requested_actions)
+            self.dialog_state.pending_file_name_request = fallback_actions[0]
             return f"Which file would you like me to {fallback_actions[0]}?"
 
         folder_path, matches, error = self.resolve_matches(request)
@@ -462,7 +511,8 @@ class WorkspaceFileController:
         query = self._clean_entity(request.filename).lower()
         if request.extension and request.extension != ext:
             return False
-        return query in {basename, stem}
+        # exact match OR prefix match (e.g. "screenshot" matches "screenshot_20260515.png")
+        return query in {basename, stem} or stem.startswith(query)
 
     def _looks_like_topic_phrase(self, content):
         text = (content or "").strip()
@@ -476,6 +526,13 @@ class WorkspaceFileController:
         return True
 
     def _should_generate_content(self, content, request):
+        # Issue 5: appends default to *literal* text. The earlier heuristic
+        # treated any short noun phrase ("second line", "hello friday")
+        # as a topic to generate about — that surprised the user, who
+        # expected the literal text to land in the file. Generation now
+        # only kicks in for action="write"/"create".
+        if request.action == "append":
+            return False
         if self._looks_like_topic_phrase(content):
             return True
         extension = (request.extension or os.path.splitext(request.filename)[1] or "").lower()
@@ -707,6 +764,9 @@ class WorkspaceFileController:
 
         self.dialog_state.remember_file(filepath)
         self.dialog_state.remember_error(None)
+        # Clear pending clarification states — the file has been resolved.
+        self.dialog_state.pending_file_name_request = None
+        self.dialog_state.pending_folder_request = None
 
         for action in actions:
             if action == "open":
