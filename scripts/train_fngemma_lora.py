@@ -98,7 +98,7 @@ ENVELOPE_CLOSE = "<end_function_call>"
 
 
 DEFAULTS = dict(
-    model_id="google/functiongemma-270m-it",   # VERIFY before running
+    model_id="unsloth/functiongemma-270m-it",   # matches install_gemma_270m.py
     max_seq_length=2048,         # train.fngemma.jsonl max ≈ 1,707 tokens
     lora_r=16,
     lora_alpha=32,
@@ -188,10 +188,17 @@ def main() -> int:
     _check_prereqs()
     _check_input(args.input)
 
+    import torch
     from unsloth import FastLanguageModel
     from unsloth.chat_templates import train_on_responses_only
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
+
+    # bf16 needs Ampere+ (compute capability >= 8.0). T4 / GTX-era cards
+    # fall back to fp16 mixed precision; CPU runs in fp32.
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    use_fp16 = torch.cuda.is_available() and not use_bf16
+    print(f"[train-fn] precision: bf16={use_bf16} fp16={use_fp16}")
 
     print(f"[train-fn] loading {args.model_id} (max_seq_length={args.max_seq_length}) …")
     t0 = time.perf_counter()
@@ -259,7 +266,8 @@ def main() -> int:
             lr_scheduler_type="cosine",
             logging_steps=10,
             save_strategy="epoch",
-            bf16=True,
+            bf16=use_bf16,
+            fp16=use_fp16,
             optim="adamw_8bit",
             weight_decay=DEFAULTS["weight_decay"],
             max_seq_length=args.max_seq_length,

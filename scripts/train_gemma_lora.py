@@ -159,10 +159,18 @@ def main() -> int:
 
     # Imports deferred until after prereq + input checks so a clean
     # error message wins over an ImportError trace.
+    import torch
     from unsloth import FastLanguageModel
     from unsloth.chat_templates import get_chat_template, train_on_responses_only
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
+
+    # Precision: bf16 needs Ampere+ (compute capability >= 8.0). T4 is
+    # Turing (7.5) — fall back to fp16 mixed-precision there. On CPU
+    # both are unavailable, so leave both off (fp32 training).
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    use_fp16 = torch.cuda.is_available() and not use_bf16
+    print(f"[train-gemma] precision: bf16={use_bf16} fp16={use_fp16}")
 
     print(f"[train-gemma] loading {args.model_id} (max_seq_length={args.max_seq_length}) …")
     t0 = time.perf_counter()
@@ -228,7 +236,8 @@ def main() -> int:
             lr_scheduler_type="cosine",
             logging_steps=10,
             save_strategy="epoch",
-            bf16=True,
+            bf16=use_bf16,
+            fp16=use_fp16,
             optim="adamw_8bit",
             weight_decay=DEFAULTS["weight_decay"],
             max_seq_length=args.max_seq_length,
