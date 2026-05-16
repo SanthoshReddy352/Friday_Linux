@@ -240,25 +240,15 @@ def main() -> int:
     ckpt_dir = args.out / "_ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # SFTTrainer's tokenizer kwarg name keeps changing across versions:
-    # TRL <0.12 → `tokenizer`, TRL >=0.12 (with transformers 5.x) →
-    # `processing_class`, and Unsloth's compiled wrapper sometimes
-    # accepts neither. Detect what's accepted and fall back to setting
-    # the attribute after construction.
-    import inspect
-    _sft_params = set(inspect.signature(SFTTrainer.__init__).parameters)
-    _sft_kwargs = dict(model=model, train_dataset=ds)
-    if "processing_class" in _sft_params:
-        _sft_kwargs["processing_class"] = tokenizer
-        print("[train-gemma] using SFTTrainer(processing_class=…)")
-    elif "tokenizer" in _sft_params:
-        _sft_kwargs["tokenizer"] = tokenizer
-        print("[train-gemma] using SFTTrainer(tokenizer=…)")
-    else:
-        print("[train-gemma] SFTTrainer accepts neither kwarg — will set after init")
-
+    # Construct WITHOUT a tokenizer kwarg — Unsloth's compiled
+    # _UnslothSFTTrainer declares one in its signature but blindly
+    # forwards kwargs to the underlying transformers Trainer, which (in
+    # Transformers 5.x) accepts neither `tokenizer` nor `processing_class`.
+    # We attach the tokenizer as an attribute after construction below.
+    print("[train-gemma] constructing SFTTrainer (tokenizer attached post-init)")
     trainer = SFTTrainer(
-        **_sft_kwargs,
+        model=model,
+        train_dataset=ds,
         args=SFTConfig(
             output_dir=str(ckpt_dir),
             per_device_train_batch_size=args.batch,
