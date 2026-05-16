@@ -167,28 +167,25 @@ def main() -> int:
 
     # ----- Compatibility shim -----
     # Transformers 5.x renamed Trainer's `tokenizer=` kwarg to
-    # `processing_class=` and rejects the old name. Unsloth's wrapped
-    # SFTTrainer still auto-injects `tokenizer=` (pulled from the model)
-    # before forwarding to the base Trainer, so the call crashes no
-    # matter what WE do at the call site. Patch Unsloth's saved
-    # reference to the original Trainer.__init__ to strip the bad kwarg
-    # and re-attach the tokenizer as `processing_class` after init.
-    try:
-        import unsloth.models._utils as _u_utils
-        if not getattr(_u_utils, "_friday_tokenizer_compat", False):
-            _orig_trainer_init_ref = _u_utils._original_trainer_init
+    # `processing_class=`. Unsloth's wrapped SFTTrainer auto-injects
+    # `tokenizer=` (pulled from the model) and forwards it down the
+    # chain to the underlying Trainer, which now rejects it.
+    # By this point in the import sequence Unsloth has already
+    # replaced ``transformers.Trainer.__init__`` with its own wrapper.
+    # We wrap *that* wrapper to strip the bad kwarg before delegating.
+    from transformers import Trainer
+    if not getattr(Trainer.__init__, "_friday_tok_compat", False):
+        _wrapped_init = Trainer.__init__
 
-            def _compat_trainer_init(self, *args, **kwargs):
-                tok = kwargs.pop("tokenizer", None)
-                _orig_trainer_init_ref(self, *args, **kwargs)
-                if tok is not None and not getattr(self, "processing_class", None):
-                    self.processing_class = tok
+        def _compat_trainer_init(self, *args, **kwargs):
+            tok = kwargs.pop("tokenizer", None)
+            _wrapped_init(self, *args, **kwargs)
+            if tok is not None and not getattr(self, "processing_class", None):
+                self.processing_class = tok
 
-            _u_utils._original_trainer_init = _compat_trainer_init
-            _u_utils._friday_tokenizer_compat = True
-            print("[train-gemma] installed tokenizer-kwarg compat shim")
-    except (ImportError, AttributeError) as e:
-        print(f"[train-gemma] WARNING: could not install compat shim: {e}")
+        _compat_trainer_init._friday_tok_compat = True
+        Trainer.__init__ = _compat_trainer_init
+        print("[train-gemma] installed Trainer.__init__ tokenizer-kwarg shim")
 
     # Precision: bf16 needs Ampere+ (compute capability >= 8.0). T4 is
     # Turing (7.5) — fall back to fp16 mixed-precision there. On CPU

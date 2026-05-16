@@ -194,25 +194,22 @@ def main() -> int:
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
 
-    # Tokenizer-kwarg compat shim — see train_gemma_lora.py for the
-    # full explanation. Transformers 5.x dropped `tokenizer=` in
-    # Trainer.__init__, but Unsloth's wrapper still auto-injects it.
-    try:
-        import unsloth.models._utils as _u_utils
-        if not getattr(_u_utils, "_friday_tokenizer_compat", False):
-            _orig_trainer_init_ref = _u_utils._original_trainer_init
+    # Tokenizer-kwarg compat shim — see train_gemma_lora.py for full
+    # explanation. Wrap whatever is currently bound to Trainer.__init__
+    # (which is Unsloth's wrapper by this point) to strip `tokenizer=`.
+    from transformers import Trainer
+    if not getattr(Trainer.__init__, "_friday_tok_compat", False):
+        _wrapped_init = Trainer.__init__
 
-            def _compat_trainer_init(self, *args, **kwargs):
-                tok = kwargs.pop("tokenizer", None)
-                _orig_trainer_init_ref(self, *args, **kwargs)
-                if tok is not None and not getattr(self, "processing_class", None):
-                    self.processing_class = tok
+        def _compat_trainer_init(self, *args, **kwargs):
+            tok = kwargs.pop("tokenizer", None)
+            _wrapped_init(self, *args, **kwargs)
+            if tok is not None and not getattr(self, "processing_class", None):
+                self.processing_class = tok
 
-            _u_utils._original_trainer_init = _compat_trainer_init
-            _u_utils._friday_tokenizer_compat = True
-            print("[train-fn] installed tokenizer-kwarg compat shim")
-    except (ImportError, AttributeError) as e:
-        print(f"[train-fn] WARNING: could not install compat shim: {e}")
+        _compat_trainer_init._friday_tok_compat = True
+        Trainer.__init__ = _compat_trainer_init
+        print("[train-fn] installed Trainer.__init__ tokenizer-kwarg shim")
 
     # bf16 needs Ampere+ (compute capability >= 8.0). T4 / GTX-era cards
     # fall back to fp16 mixed precision; CPU runs in fp32.
