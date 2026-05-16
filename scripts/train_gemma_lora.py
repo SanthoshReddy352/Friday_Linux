@@ -202,22 +202,40 @@ def main() -> int:
     # the canonical token sequence (``<start_of_turn>{role}\n…<end_of_turn>``).
     tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
 
-    # Convert the messages-format JSONL into the flat-text format SFT expects.
+    # Convert messages → input_ids in a plain Python loop. We avoid
+    # ``datasets.map()`` because it pickles the tokenize function to
+    # compute a fingerprint, and modern ``safetensors.safe_open`` has
+    # recursive self-references that ``dill`` can't serialize (raises
+    # ``PicklingError: Can't pickle <class 'builtins.safe_open'>``).
     print(f"[train-gemma] loading dataset {args.input} …")
-    ds = load_dataset("json", data_files=str(args.input), split="train")
+    ds_raw = load_dataset("json", data_files=str(args.input), split="train")
 
-    def _to_text(example: dict) -> dict:
-        return {
-            "text": tokenizer.apply_chat_template(
-                example["messages"],
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-        }
+    print(f"[train-gemma] tokenizing {len(ds_raw)} rows in-process …")
+    input_ids_list:  list[list[int]] = []
+    attention_masks: list[list[int]] = []
+    sample_text = ""
+    for i, ex in enumerate(ds_raw):
+        text = tokenizer.apply_chat_template(
+            ex["messages"], tokenize=False, add_generation_prompt=False,
+        )
+        if i == 0:
+            sample_text = text
+        enc = tokenizer(
+            text, truncation=True, max_length=args.max_seq_length,
+            padding=False, return_tensors=None,
+        )
+        input_ids_list.append(enc["input_ids"])
+        attention_masks.append(enc["attention_mask"])
 
-    ds = ds.map(_to_text, remove_columns=ds.column_names).shuffle(seed=args.seed)
-    print(f"[train-gemma] dataset prepared: {len(ds)} rows")
-    print(f"[train-gemma] sample text:\n---\n{ds[0]['text'][:400]}\n---")
+    from datasets import Dataset as HFDataset
+    ds = HFDataset.from_dict({
+        "input_ids":      input_ids_list,
+        "attention_mask": attention_masks,
+    }).shuffle(seed=args.seed)
+    seq_lens = [len(x) for x in input_ids_list]
+    print(f"[train-gemma] dataset ready: {len(ds)} rows pre-tokenized "
+          f"(seq lens min={min(seq_lens)} median={sorted(seq_lens)[len(seq_lens)//2]} max={max(seq_lens)})")
+    print(f"[train-gemma] sample text:\n---\n{sample_text[:400]}\n---")
 
     ckpt_dir = args.out / "_ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -241,8 +259,10 @@ def main() -> int:
             optim="adamw_8bit",
             weight_decay=DEFAULTS["weight_decay"],
             max_seq_length=args.max_seq_length,
-            dataset_text_field="text",
-            dataset_num_proc=1,   # avoid dill PicklingError on safe_open
+            # Dataset is already tokenized (input_ids + attention_mask);
+            # skip_prepare_dataset prevents SFTTrainer from re-tokenizing,
+            # which is where the dill/safetensors pickle bug strikes.
+            dataset_kwargs={"skip_prepare_dataset": True},
             seed=args.seed,
             report_to="none",
         ),
