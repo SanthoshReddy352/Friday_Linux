@@ -69,7 +69,7 @@ class GemmaIntentRouter:
         *,
         n_ctx: int = 2048,
         n_threads: int | None = None,
-        max_tokens: int = 64,
+        max_tokens: int = 16,   # tool name is ≤6 tokens; cap kills latency outliers
         temperature: float = 0.0,
         mode: str = "chat",
     ):
@@ -135,13 +135,16 @@ class GemmaIntentRouter:
     # ------------------------------------------------------------------
 
     def route(self, utterance: str, tools: list[dict]) -> GemmaRouterDecision:
-        """Classify ``utterance`` against the supplied ``tools`` list.
+        """Classify ``utterance`` against the supplied ``tools``.
 
-        Each tool entry must be a dict with ``name`` and (optionally)
-        ``description`` and ``examples`` (list of short phrasings). The
-        returned decision contains the chosen tool name (or None if the
-        model declines), any extracted args (best-effort), the elapsed
-        ms, and the raw model output for debugging.
+        The prompt is built as raw bytes that mirror what the LoRA was
+        trained on (``scripts/format_for_finetune.py``) — same system
+        text, same tool-list format, same Gemma chat-template markers.
+        We then call ``create_completion`` (NOT ``create_chat_completion``)
+        so llama.cpp doesn't re-apply its own chat template on top. Any
+        drift between training and inference prompts collapses the
+        LoRA's accuracy to near-base, so do not edit these strings
+        without also retraining.
         """
         text = (utterance or "").strip()
         if not text:
@@ -150,25 +153,19 @@ class GemmaIntentRouter:
             return GemmaRouterDecision(tool=None, args={}, latency_ms=0.0, raw_output="", error="model unavailable")
 
         if self.mode == "function":
-            system_msg, user_msg = self._build_function_messages(text, tools)
+            prompt = self._build_function_prompt(text, tools)
         else:
-            system_msg, user_msg = self._build_messages(text, tools)
+            prompt = self._build_chat_prompt(text, tools)
+
         t0 = time.perf_counter()
         try:
             with self._lock:
-                # ``create_chat_completion`` lets llama-cpp apply the
-                # Gemma chat template (``<start_of_turn>user … model``).
-                # A 270M model parrots the prompt back when fed as raw
-                # text — the chat template is what gets it to actually
-                # respond.
-                response = self._llm.create_chat_completion(  # type: ignore[union-attr]
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
-                    ],
+                response = self._llm.create_completion(  # type: ignore[union-attr]
+                    prompt,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                     top_p=1.0,
+                    stop=["<end_of_turn>", "<|endoftext|>"],
                 )
         except Exception as exc:
             elapsed = (time.perf_counter() - t0) * 1000.0
@@ -178,85 +175,80 @@ class GemmaIntentRouter:
             )
         elapsed = (time.perf_counter() - t0) * 1000.0
 
-        raw = (response.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        raw = (response.get("choices", [{}])[0].get("text") or "").strip()
+
         if self.mode == "function":
             parsed = self._parse_function_call(raw)
+            tool = parsed.get("tool")
+            args = parsed.get("args") or {}
+            err = "" if parsed else "unparseable model output"
         else:
-            parsed = self._parse_response(raw)
+            # Chat mode — output is the bare tool name on its own line.
+            tool = raw.splitlines()[0].strip() if raw else None
+            if tool and tool.lower() in {"null", "none", ""}:
+                tool = None
+            args = {}
+            err = "" if tool else "empty model output"
+
         return GemmaRouterDecision(
-            tool=parsed.get("tool"),
-            args=parsed.get("args") or {},
-            latency_ms=elapsed,
-            raw_output=raw,
-            error="" if parsed else "unparseable model output",
+            tool=tool, args=args, latency_ms=elapsed,
+            raw_output=raw, error=err,
         )
 
     # ------------------------------------------------------------------
-    # Prompt + response handling
+    # Prompts — MUST match scripts/format_for_finetune.py byte-for-byte.
     # ------------------------------------------------------------------
 
-    _SYSTEM_MSG = (
-        "You are an intent classifier for a voice assistant. "
-        "Given a user request and a list of tools, return JSON of the form "
-        "{\"tool\": \"name\"} naming the single best tool. "
-        "Use the EXACT tool name from the list — do not abbreviate or invent. "
-        "If no tool fits, return {\"tool\": null}. "
-        "Output one line of JSON only — no prose, no markdown."
-    )
-
-    # Cap the prompt size — a 270M model's accuracy collapses past ~30
-    # tools in the context and the cap keeps inference fast.
-    _MAX_TOOLS_IN_PROMPT = 30
-
-    def _build_messages(self, utterance: str, tools: list[dict]) -> tuple[str, str]:
-        lines = ["Tools:"]
-        for tool in tools[: self._MAX_TOOLS_IN_PROMPT]:
-            name = (tool.get("name") or "").strip()
-            if not name:
-                continue
-            desc = (tool.get("description") or "").strip()
-            if desc:
-                desc = desc.split(".")[0][:60]
-            ex = tool.get("examples") or []
-            ex_text = " / ".join(str(x).strip()[:30] for x in ex[:1] if x)
-            tail = f"  (e.g. {ex_text})" if ex_text else ""
-            lines.append(f"- {name}: {desc}{tail}")
-        lines.append("")
-        lines.append(f"User request: {utterance.strip()}")
-        lines.append("JSON:")
-        return self._SYSTEM_MSG, "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # Function Gemma prompt + parse
-    # ------------------------------------------------------------------
-
-    _FUNCTION_SYSTEM = (
-        "You are a function caller. Given the user's request and the "
-        "tool list below, emit a single function call. "
-        "Reply with exactly: <start_function_call>{\"tool\": \"name\"}<end_function_call> "
-        "If no tool fits, reply <start_function_call>{\"tool\": null}<end_function_call>"
-    )
-
-    # Match either <start_function_call>...<end_function_call> envelope
-    # or a bare ``{"tool": ...}`` object on its own line. Function Gemma
-    # often emits both forms; ``re.DOTALL`` covers multi-line bodies.
+    # Match envelope tokens emitted by the FN-Gemma tune.
     _FUNCTION_CALL_RE = re.compile(
         r"<start_function_call>(.*?)<end_function_call>", re.DOTALL,
     )
 
-    def _build_function_messages(self, utterance: str, tools: list[dict]) -> tuple[str, str]:
-        lines = ["Available tools:"]
-        for tool in tools[: self._MAX_TOOLS_IN_PROMPT]:
-            name = (tool.get("name") or "").strip()
-            if not name:
-                continue
-            desc = (tool.get("description") or "").strip()
-            if desc:
-                desc = desc.split(".")[0][:60]
-            lines.append(f"- {name}: {desc}")
-        lines.append("")
-        lines.append(f"User: {utterance.strip()}")
-        return self._FUNCTION_SYSTEM, "\n".join(lines)
+    def _build_chat_prompt(self, utterance: str, tools: list[dict]) -> str:
+        """Standard Gemma intent-classifier prompt.
+
+        Output target during training was the bare tool name (e.g.
+        ``get_time``) so we cut the model off at the first ``<end_of_turn>``.
+        """
+        tool_list = ", ".join(
+            (t.get("name") or "").strip() for t in tools if t.get("name")
+        )
+        user_content = (
+            "You are an intent classifier. Reply with only the tool name.\n\n"
+            f"Tools: {tool_list}\n\n"
+            f"Utterance: {utterance.strip()}"
+        )
+        # No literal <bos> — llama.cpp auto-prepends it (avoids the
+        # "duplicate leading <bos>" warning and the small accuracy hit
+        # that comes with double-BOS).
+        return (
+            f"<start_of_turn>user\n{user_content}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
+
+    def _build_function_prompt(self, utterance: str, tools: list[dict]) -> str:
+        """Function-Gemma developer-role prompt + JSON tool schema.
+
+        Output target during training was the literal envelope:
+        ``<start_function_call>{"tool":"X","args":{}}<end_function_call>``.
+        """
+        schemas = [{
+            "name": t["name"],
+            "description": (t.get("description") or "")[:120],
+            "parameters": t.get("parameters") or {},
+        } for t in tools if t.get("name")]
+        schema_json = json.dumps(schemas, separators=(",", ":"))
+        developer = (
+            "You are a function-calling assistant. Choose at most one tool "
+            'from this list. If none fit, return {"tool": null}.\n\n'
+            f"{schema_json}"
+        )
+        # No literal <bos> — llama.cpp auto-prepends it.
+        return (
+            f"<start_of_turn>developer\n{developer}<end_of_turn>\n"
+            f"<start_of_turn>user\n{utterance.strip()}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
 
     def _parse_function_call(self, raw: str) -> dict:
         if not raw:

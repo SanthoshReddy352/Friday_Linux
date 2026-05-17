@@ -163,7 +163,11 @@ class AssistantContext:
             return ""
 
         cleaned = text.lower().strip()
-        cleaned = re.sub(r"[^\w\s']", " ", cleaned)
+        # Strip special chars only for voice/STT input — typed text (chat,
+        # telegram, gui) can contain meaningful punctuation like dots in model
+        # version numbers ("3.5-0.6B"), hyphens, slashes, etc.
+        if source == "voice":
+            cleaned = re.sub(r"[^\w\s']", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
         # Fix common typos
@@ -268,6 +272,34 @@ class AssistantContext:
             "Match the user's energy and give responses as long as the topic deserves. "
             "No preamble, no chain-of-thought, no emoji unless the user uses one first."
         )
+
+        # User profile block — populated by the onboarding flow. Always
+        # injected when any profile field is set, regardless of Mem0 status,
+        # so questions like "what's my name?" don't fall back to a generic
+        # "I'm an AI" reply.
+        user_profile_block = ""
+        if self.context_store:
+            try:
+                profile_facts = {
+                    f["key"]: (f["value"] or "").strip()
+                    for f in self.context_store.get_facts_by_namespace("user_profile")
+                }
+                name = profile_facts.get("name", "")
+                role = profile_facts.get("role", "")
+                location = profile_facts.get("location", "")
+                preferences = profile_facts.get("preferences", "")
+                comm_style = profile_facts.get("comm_style", "")
+                if any((name, role, location, preferences, comm_style)):
+                    lines = ["The user's profile (always known to you, refer to them by name):"]
+                    if name:        lines.append(f"  - Name: {name}")
+                    if role:        lines.append(f"  - Role: {role}")
+                    if location:    lines.append(f"  - Location: {location}")
+                    if preferences: lines.append(f"  - Cares about: {preferences}")
+                    if comm_style:  lines.append(f"  - Preferred communication style: {comm_style}")
+                    user_profile_block = "\n".join(lines)
+            except Exception:
+                user_profile_block = ""
+
         rag_context = ""
         if self.session_rag and self.session_rag.is_active:
             rag_context = self.session_rag.get_context_block(query)
@@ -284,6 +316,8 @@ class AssistantContext:
 
         if is_short:
             guidance = persona
+            if user_profile_block:
+                guidance += f"\n\n{user_profile_block}"
             if last_topic:
                 guidance += f"\nNote: In the previous session, you discussed: {last_topic}"
         else:
@@ -292,6 +326,8 @@ class AssistantContext:
                 f"Active workflow: {workflow_summary or 'none'}\n"
                 f"Session summary: {session_summary or 'none'}\n"
             )
+            if user_profile_block:
+                guidance += f"{user_profile_block}\n"
             if last_topic:
                 guidance += f"Previous session topic: {last_topic}\n"
             guidance += f"Relevant recall: {json.dumps(semantic_recall, ensure_ascii=True)}"

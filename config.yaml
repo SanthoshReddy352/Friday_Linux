@@ -3,7 +3,7 @@ app:
   version: '0.1'
   theme: dark
 conversation:
-  listening_mode: manual
+  listening_mode: on_demand
   online_permission_mode: ask_first
   wake_session_timeout_s: 12
   assistant_echo_window_s: 1.8
@@ -141,3 +141,7 @@ world_monitor:
   api_key: ''
   public_dashboard_fallback: true
   timeout_s: 12
+awareness:
+  enabled: true
+  capture_interval_s: 15
+  ocr_enabled: true

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape as html_escape
 
-from PyQt6.QtCore import QDateTime, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QDateTime, QPointF, QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -343,6 +343,30 @@ def _save_theme_pref(name: str) -> None:
             json.dump(data, fh, indent=2)
     except Exception:
         logger.exception("Failed to save theme preference")
+
+
+def _load_tts_muted() -> bool:
+    try:
+        with open(_THEME_STATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+            return bool(data.get("tts_muted", False))
+    except Exception:
+        return False
+
+
+def _save_tts_muted(muted: bool) -> None:
+    try:
+        os.makedirs(os.path.dirname(_THEME_STATE_PATH), exist_ok=True)
+        try:
+            with open(_THEME_STATE_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh) or {}
+        except Exception:
+            data = {}
+        data["tts_muted"] = muted
+        with open(_THEME_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except Exception:
+        logger.exception("Failed to save TTS mute preference")
 
 
 # ---------------------------------------------------------------------------
@@ -1335,10 +1359,7 @@ class ChatBubble(QFrame):
             meta_color = theme.text_muted
 
         self.setStyleSheet(
-            f"QFrame {{ background-color: {bg};"
-            f"border: none;"
-            f"border-left: 2px solid {border_top};"
-            "border-radius: 0px; }}"
+            f"QFrame {{ background-color: {bg}; border: none; border-left: 2px solid {border_top}; border-radius: 0px; }}"
         )
         self.meta_label.setStyleSheet(label_style(theme, meta_color, 10, "bold"))
         self.text_label.setStyleSheet(
@@ -1379,6 +1400,10 @@ class ChatView(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Return a compact fixed hint so Qt's layout never tries to grow the
+        # parent window when chat bubbles are added. Actual size is determined
+        # entirely by the layout's stretch factors — content scrolls internally.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._inner = QWidget()
         self._layout = QVBoxLayout(self._inner)
@@ -1393,6 +1418,12 @@ class ChatView(QScrollArea):
 
         theme_mgr.subscribe(self._apply_theme)
         self._apply_theme(theme_mgr.theme)
+
+    def sizeHint(self):
+        return QSize(400, 300)
+
+    def minimumSizeHint(self):
+        return QSize(200, 220)
 
     def _apply_theme(self, theme: Theme) -> None:
         self.setStyleSheet(
@@ -1477,6 +1508,8 @@ _EVENT_COLORS = {
     "USER": "accent",
     "ASSISTANT": "success",
     "SYSTEM": "text_dim",
+    "ROUTE": "info",      # which router picked the tool (deterministic/embed/etc.)
+    "GEMMA": "magenta",   # LoRA-tuned 270M shadow prediction
 }
 
 
@@ -1626,6 +1659,65 @@ class ModelsPanel(QWidget):
             self._rows["__empty"] = {"card": empty}
 
         self._build_vision_row()
+        self._build_gemma_row()
+
+    def _build_gemma_row(self) -> None:
+        """Add a card for the LoRA-tuned Gemma 270M intent router.
+
+        Always rendered when the GGUF exists in ``models/`` so users can
+        see (a) whether the model is on disk and (b) whether the
+        ``FRIDAY_USE_GEMMA_ROUTER=1`` flag actually loaded it. The card
+        highlights green when ``app.gemma_router`` is loaded, dim when
+        the file is there but the flag is off, red when the file is
+        missing.
+        """
+        role = "gemma"
+        if role in self._rows:
+            return
+        # Match the path bench / app.py use.
+        gguf = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "models", "gemma-3-270m-it-Q4_K_M.gguf",
+        )
+
+        card = QFrame()
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        lane_label = QLabel("GEMMA")
+        status_dot = QLabel("●")
+        header.addWidget(lane_label)
+        header.addStretch(1)
+        header.addWidget(status_dot)
+        card_layout.addLayout(header)
+
+        name_label = QLabel("gemma-3-270m-it-Q4_K_M.gguf  (LoRA — intent router)")
+        name_label.setWordWrap(True)
+        card_layout.addWidget(name_label)
+
+        detail_label = QLabel(self._gemma_detail(gguf))
+        card_layout.addWidget(detail_label)
+
+        self._rows_container.addWidget(card)
+        self._rows[role] = {
+            "card":         card,
+            "lane_label":   lane_label,
+            "status_dot":   status_dot,
+            "name_label":   name_label,
+            "detail_label": detail_label,
+            "_gguf_path":   gguf,
+        }
+
+    def _gemma_detail(self, gguf_path: str) -> str:
+        enabled = bool(getattr(self._app_core, "gemma_router", None))
+        on_disk = os.path.exists(gguf_path)
+        if enabled:
+            return "active  ·  shadow-routing every turn"
+        if on_disk:
+            return "loaded on disk  ·  set FRIDAY_USE_GEMMA_ROUTER=1 to activate"
+        return "missing  ·  retrain via scripts/train_gemma_lora.py"
 
     def _build_vision_row(self) -> None:
         """Add a card for the VLM if vision is enabled in config."""
@@ -1703,6 +1795,14 @@ class ModelsPanel(QWidget):
     def _lane_status(self, role: str) -> str:
         if role == "vision":
             return self._vision_status()
+        if role == "gemma":
+            row = self._rows.get("gemma") or {}
+            gguf = row.get("_gguf_path", "")
+            if not gguf or not os.path.exists(gguf):
+                return "missing"
+            if getattr(self._app_core, "gemma_router", None) is not None:
+                return "loaded"
+            return "available"
         manager = self._manager()
         if not manager:
             return "unknown"
@@ -1759,6 +1859,10 @@ class ModelsPanel(QWidget):
         self._apply_theme(self._theme_mgr.theme)
 
     def _refresh_status(self) -> None:
+        # Keep the Gemma card's detail line in sync with the flag/file state.
+        gemma_row = self._rows.get("gemma")
+        if gemma_row:
+            gemma_row["detail_label"].setText(self._gemma_detail(gemma_row.get("_gguf_path", "")))
         self._apply_theme(self._theme_mgr.theme)
 
 
@@ -1837,6 +1941,8 @@ class JarvisHUD(QMainWindow):
     turn_processing_ready = pyqtSignal(object)
     turn_finished_ready = pyqtSignal(object)
     tool_finished_ready = pyqtSignal(object)
+    router_decision_ready = pyqtSignal(object)
+    gemma_prediction_ready = pyqtSignal(object)
     listening_mode_ready = pyqtSignal(object)
     voice_runtime_ready = pyqtSignal(object)
     llm_chunk_ready = pyqtSignal(object)
@@ -1845,6 +1951,7 @@ class JarvisHUD(QMainWindow):
         super().__init__()
         self.app_core = app_core
         self.theme_mgr = ThemeManager(_load_theme_pref())
+        self.app_core.tts_muted = _load_tts_muted()
         self.turn_state = "idle"
         self.voice_runtime_state = {}
         self.drag_pos = None
@@ -1855,7 +1962,20 @@ class JarvisHUD(QMainWindow):
         self._turn_cancelled = False  # True only when STOP was clicked mid-turn
 
         self.setWindowTitle("FRIDAY")
-        self.resize(1180, 720)
+
+        # Fit the window inside the available screen area (excludes taskbar).
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            win_w = min(1180, avail.width())
+            win_h = min(720, avail.height())
+            self.resize(win_w, win_h)
+            # Centre on the available area
+            x = avail.x() + (avail.width() - win_w) // 2
+            y = avail.y() + (avail.height() - win_h) // 2
+            self.move(x, y)
+        else:
+            self.resize(1180, 720)
 
         self.central = QWidget()
         self.setCentralWidget(self.central)
@@ -1950,6 +2070,10 @@ class JarvisHUD(QMainWindow):
         self.voice_mode_combo.currentIndexChanged.connect(self.on_voice_mode_selected)
         self.voice_panel_frame.body.addWidget(self.voice_mode_combo)
 
+        self.stop_btn = QPushButton("STOP SPEECH")
+        self.stop_btn.clicked.connect(self.stop_speaking)
+        self.voice_panel_frame.body.addWidget(self.stop_btn)
+
         self.voice_state_label = QLabel("STATE: MUTED")
         self.mic_gate_label = QLabel("MIC GATE: CLOSED")
         self.wake_strategy_label = QLabel("WAKE ENGINE: Wake model")
@@ -1963,7 +2087,8 @@ class JarvisHUD(QMainWindow):
             self.rejected_reason_label,
         ]
         for label in self._voice_labels:
-            label.setWordWrap(True)
+            label.setWordWrap(False)
+            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             self.voice_panel_frame.body.addWidget(label)
         right.addWidget(self.voice_panel_frame, stretch=2)
 
@@ -1976,9 +2101,13 @@ class JarvisHUD(QMainWindow):
         self.mic_selector.device_selected.connect(self.on_mic_selected)
         right.addWidget(self.mic_selector, stretch=1)
 
-        self.stop_btn = QPushButton("STOP SPEECH")
-        self.stop_btn.clicked.connect(self.stop_speaking)
-        right.addWidget(self.stop_btn)
+        # Cap each right-column panel's minimum so their summed minimum never
+        # forces the window to grow beyond the screen height.  Stretch factors
+        # distribute the actual space proportionally at runtime.
+        self.models_panel_frame.setMinimumHeight(60)
+        self.voice_panel_frame.setMinimumHeight(60)
+        self.telemetry_panel.setMinimumHeight(60)
+        self.mic_selector.setMinimumHeight(40)
 
         self.right_widget = QWidget()
         self.right_widget.setLayout(right)
@@ -1991,6 +2120,10 @@ class JarvisHUD(QMainWindow):
 
         self.theme_mgr.subscribe(self._apply_theme)
         self._apply_theme(self.theme_mgr.theme)
+
+        # Decouple the window's minimum size from its content layout so Qt
+        # never auto-resizes the window downward when bubble sizeHints grow.
+        self.setMinimumSize(0, 0)
 
         self._connect_runtime()
         self.refresh_voice_mode_button()
@@ -2055,6 +2188,10 @@ class JarvisHUD(QMainWindow):
         self.preflight_badge = self._build_preflight_badge()
         if self.preflight_badge is not None:
             right_btns.addWidget(self.preflight_badge)
+        self.tts_btn = QPushButton()
+        self.tts_btn.setFixedWidth(130)
+        self.tts_btn.clicked.connect(self._toggle_tts)
+        right_btns.addWidget(self.tts_btn)
         self.theme_btn = QPushButton()
         self.theme_btn.setFixedWidth(110)
         self.theme_btn.clicked.connect(self._toggle_theme)
@@ -2104,6 +2241,19 @@ class JarvisHUD(QMainWindow):
         badge.setToolTip("\n".join(tip_lines))
         return badge
 
+    def _toggle_tts(self) -> None:
+        muted = not getattr(self.app_core, "tts_muted", False)
+        self.app_core.tts_muted = muted
+        _save_tts_muted(muted)
+        self._update_tts_btn_label()
+        self.tts_btn.setStyleSheet(button_style(self.theme_mgr.theme, danger=muted))
+        if muted and getattr(self.app_core, "tts", None):
+            self.app_core.tts.stop()
+
+    def _update_tts_btn_label(self) -> None:
+        muted = getattr(self.app_core, "tts_muted", False)
+        self.tts_btn.setText("TTS: OFF" if muted else "TTS: ON")
+
     def _toggle_theme(self) -> None:
         name = self.theme_mgr.toggle()
         _save_theme_pref(name)
@@ -2136,6 +2286,9 @@ class JarvisHUD(QMainWindow):
         self.status_label.setStyleSheet(label_style(theme, theme.text_dim, 10))
 
         # Header — right zone
+        self._update_tts_btn_label()
+        muted = getattr(self.app_core, "tts_muted", False)
+        self.tts_btn.setStyleSheet(button_style(theme, danger=muted))
         self.theme_btn.setStyleSheet(button_style(theme))
         self.theme_btn.setText("◐  LIGHT" if theme.name == "dark" else "◑  DARK")
 
@@ -2168,6 +2321,8 @@ class JarvisHUD(QMainWindow):
         self.turn_processing_ready.connect(self._on_turn_processing)
         self.turn_finished_ready.connect(self._on_turn_finished)
         self.tool_finished_ready.connect(self._on_tool_finished)
+        self.router_decision_ready.connect(self._on_router_decision)
+        self.gemma_prediction_ready.connect(self._on_gemma_prediction)
         self.listening_mode_ready.connect(self._on_listening_mode_changed)
         self.voice_runtime_ready.connect(self._on_voice_runtime_state_changed)
         self.llm_chunk_ready.connect(self._on_llm_chunk)
@@ -2182,6 +2337,8 @@ class JarvisHUD(QMainWindow):
         bus.subscribe("tool_started", lambda payload: self.turn_processing_ready.emit(payload))
         bus.subscribe("llm_started", lambda payload: self.turn_processing_ready.emit(payload))
         bus.subscribe("tool_finished", lambda payload: self.tool_finished_ready.emit(payload))
+        bus.subscribe("router_decision", lambda payload: self.router_decision_ready.emit(payload))
+        bus.subscribe("gemma_prediction", lambda payload: self.gemma_prediction_ready.emit(payload))
         bus.subscribe("turn_completed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("turn_failed", lambda payload: self.turn_finished_ready.emit(payload))
         bus.subscribe("llm_chunk", lambda payload: self.llm_chunk_ready.emit(payload))
@@ -2371,6 +2528,37 @@ class JarvisHUD(QMainWindow):
         detail = f"  —  {err[:40]}" if err else ""
         tag = "DONE" if ok else "FAIL"
         self.event_stream.append(tag, f"{tool}  [{status}]  {dur:.0f}ms{detail}")
+
+    # Maps router_decision.source → ModelsPanel card key.
+    _ROUTER_SOURCE_TO_LANE = {
+        "deterministic": "tool",
+        "embedding":     "tool",
+        "workflow":      "tool",
+        "qwen_tool":     "tool",
+        "gemma_chat":    "chat",
+    }
+
+    def _on_router_decision(self, payload):
+        """Show which router actually decided the live turn's tool."""
+        if not isinstance(payload, dict):
+            return
+        source = payload.get("source", "?")
+        tool   = payload.get("tool_name", "") or "—"
+        self.event_stream.append("ROUTE", f"{source} -> {tool}")
+        lane = self._ROUTER_SOURCE_TO_LANE.get(source)
+        if lane and hasattr(self, "models_panel"):
+            self.models_panel.set_active_lane(lane)
+
+    def _on_gemma_prediction(self, payload):
+        """Show the LoRA-tuned Gemma router's shadow prediction (does not
+        affect live dispatch — purely visibility for A/B comparison)."""
+        if not isinstance(payload, dict):
+            return
+        tool   = payload.get("tool_name", "") or "—"
+        ms     = payload.get("latency_ms", 0.0) or 0.0
+        self.event_stream.append("GEMMA", f"shadow -> {tool}  ({ms:.0f} ms)")
+        if hasattr(self, "models_panel"):
+            self.models_panel.set_active_lane("gemma")
 
     def update_send_button_state(self):
         if not hasattr(self, "send_button"):

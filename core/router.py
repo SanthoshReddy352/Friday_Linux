@@ -363,6 +363,20 @@ class CommandRouter:
 
     def _set_routing_decision(self, source, tool_name="", args=None, spoken_ack=""):
         self.routing_state.set_decision(source, tool_name=tool_name, args=args, spoken_ack=spoken_ack)
+        # Surface the routing source on every decision so the HUD event
+        # stream + logs make the active path visible. Cheap (string log +
+        # bus publish); the event_bus drops messages with no subscribers.
+        try:
+            logger.info("[router] decision source=%s tool=%s", source, tool_name or "—")
+            if self.event_bus is not None:
+                self.event_bus.publish("router_decision", {
+                    "source":    source,
+                    "tool_name": tool_name or "",
+                    "args":      args or {},
+                })
+        except Exception:
+            # Telemetry must never break routing.
+            pass
 
     # ------------------------------------------------------------------
     # Public compatibility API for the capability broker

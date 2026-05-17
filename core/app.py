@@ -82,6 +82,10 @@ class FridayApp:
         # legacy app.context_store access remains valid during the migration.
         # Phase 6: Mem0 components wired in after server probe (see further below)
         self.memory_service = MemoryService(self.context_store, self.memory_broker)
+        # Port #3: audit trail — every capability execution is logged here.
+        from core.audit_trail import AuditTrail  # noqa: PLC0415
+        self.audit_trail = AuditTrail(self.memory_service, session_id=self.session_id)
+        self.capability_executor.audit_trail = self.audit_trail
         # Phase 3: kernel services — stateless, injected into broker/agent
         self.consent_service = ConsentService(self.config)
         self.permission_service = PermissionService()
@@ -98,6 +102,69 @@ class FridayApp:
         self.router.session_id = self.session_id
         self.workflow_orchestrator = WorkflowOrchestrator(self)
         self.router.workflow_orchestrator = self.workflow_orchestrator
+        # Optional LoRA-tuned intent router (Gemma 3 270M). Opt-in via
+        # ``FRIDAY_USE_GEMMA_ROUTER=1`` — defaults off so existing flows
+        # keep using the deterministic + embedding router. When enabled,
+        # ``self.gemma_router`` is preloaded so the first turn doesn't
+        # pay cold-load latency. Use ``self.gemma_predict(text)`` to
+        # query it; integration into the live turn loop is intentionally
+        # left to the caller so behavior changes are explicit.
+        # Bench: docs/bench_results_2026_05_16.md (macro F1 0.762, p95 163 ms).
+        self.gemma_router = None
+        # Tools Gemma was actually trained on. The live runtime has
+        # MORE tools than this (vision Tier 2 etc. were added after the
+        # LoRA training set was synthesized), so predictions for any
+        # name outside this set are out-of-distribution noise. Loaded
+        # below alongside the router so gemma_predict() can filter them.
+        self._gemma_trained_tools: set[str] = set()
+        if os.environ.get("FRIDAY_USE_GEMMA_ROUTER") == "1":
+            try:
+                from core.gemma_router import GemmaIntentRouter  # noqa: PLC0415
+                self.gemma_router = GemmaIntentRouter(mode="chat")
+                if not self.gemma_router.load():
+                    logger.warning(
+                        "[app] FRIDAY_USE_GEMMA_ROUTER=1 but Gemma 270M "
+                        "model failed to load — falling back to deterministic router."
+                    )
+                    self.gemma_router = None
+                else:
+                    # Load the trained-on tool set so gemma_predict()
+                    # can suppress hallucinated predictions for tools
+                    # Gemma never saw during fine-tuning.
+                    try:
+                        import yaml  # noqa: PLC0415
+                        reg_path = os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "tests", "datasets", "tool_registry.yaml",
+                        )
+                        with open(reg_path, encoding="utf-8") as fh:
+                            self._gemma_trained_tools = {
+                                t["name"] for t in (yaml.safe_load(fh) or {}).get("tools", [])
+                            }
+                    except Exception as exc:
+                        logger.warning(
+                            "[app] Could not load tool_registry.yaml for Gemma "
+                            "OOD filter (%s) — all predictions will pass through.", exc,
+                        )
+                    logger.info(
+                        "[app] Gemma 270M intent router enabled "
+                        "(loaded in %.0f ms, trained on %d tools).",
+                        self.gemma_router.last_load_ms, len(self._gemma_trained_tools),
+                    )
+            except Exception as exc:
+                logger.warning("[app] Gemma router init failed: %s", exc)
+                self.gemma_router = None
+        # Port #6: multi-agent hierarchy
+        from core.agent_hierarchy import AgentHierarchy, AgentTaskManager, AgentNode  # noqa: PLC0415
+        self.agent_hierarchy = AgentHierarchy()
+        self.agent_task_manager = AgentTaskManager(self.agent_hierarchy, self.memory_service)
+        # Register primary FRIDAY node
+        self.agent_hierarchy.add_agent(AgentNode(
+            agent_id="friday",
+            name="FRIDAY",
+            role="primary",
+            authority_level=10,
+        ))
         self.delegation_manager = DelegationManager(self)
         self.capability_broker = CapabilityBroker(self)
         self.ordered_tool_executor = OrderedToolExecutor(self)
@@ -123,6 +190,11 @@ class FridayApp:
         self.extension_loader = ExtensionLoader(self)
         # Phase 5: expose IntentRecognizer directly (avoids going through router)
         self.intent_recognizer = self.router.intent_recognizer
+        # Port #8: cloud LLM fallback chain (opt-in, respects local-first stance).
+        from core.llm_providers.fallback_chain import FallbackChain  # noqa: PLC0415
+        self.llm_fallback_chain = FallbackChain.from_config(self.config)
+        if self.llm_fallback_chain.enabled:
+            logger.info("[app] Cloud LLM fallback chain enabled.")
         # Phase 5: RouteScorer searches both router tools AND capability_registry
         # The lambda is evaluated at route-time so newly-registered extensions are visible.
         self.route_scorer = RouteScorer(lambda: self.router.tools + self._registry_routes())
@@ -308,6 +380,85 @@ class FridayApp:
         logger.info("FRIDAY: Cleanup complete.")
         sys.exit(0)
 
+    def gemma_predict(self, text: str) -> "tuple[str | None, float]":
+        """Run the optional LoRA-tuned intent router on *text*.
+
+        Returns ``(tool_name, latency_ms)``. ``tool_name`` is ``None``
+        when Gemma isn't loaded (flag off / model missing / load failed)
+        or when it declines to pick a tool. Latency is 0.0 in those
+        no-op cases. Safe to call from any thread.
+
+        Intentionally NOT wired into the live routing path — callers
+        decide when and how to use this signal (shadow-route + log,
+        replace deterministic, or A/B by feature flag) so behavior
+        changes stay explicit and reviewable.
+        """
+        if self.gemma_router is None:
+            return None, 0.0
+        try:
+            # Only show Gemma the tools it was trained on. Sending the
+            # full live tool list lets Gemma "predict" tools it has zero
+            # training signal for (e.g. explain_meme), which produces
+            # confidently-wrong shadow predictions. Intersecting with
+            # the trained set keeps Gemma in distribution.
+            trained = self._gemma_trained_tools
+            tools = [
+                {"name": name, "description": (route.get("spec") or {}).get("description", "")[:120]}
+                for name, route in self.router._tools_by_name.items()
+                if not trained or name in trained
+            ]
+            decision = self.gemma_router.route(text, tools)
+            allowed = [t["name"] for t in tools]
+            tool = self.gemma_router.normalize_tool_name(decision.tool, allowed)
+            # Belt-and-suspenders: drop any prediction that still leaks
+            # an out-of-distribution name (defense against future code
+            # paths that bypass the prompt filter above).
+            if tool and trained and tool not in trained:
+                logger.info(
+                    "[gemma_predict] suppressing OOD prediction %r "
+                    "(not in trained tool set)", tool,
+                )
+                tool = None
+            return tool, decision.latency_ms
+        except Exception as exc:
+            logger.warning("[gemma_predict] failed: %s", exc)
+            return None, 0.0
+
+    def _shadow_route_with_gemma(self, text: str) -> None:
+        """Run Gemma on *text* in a background thread and publish a
+        ``gemma_prediction`` event for HUD / log visibility.
+
+        Shadow only — does NOT affect the live routing decision. The
+        deterministic router runs in parallel on the main turn thread;
+        this just surfaces what Gemma WOULD have predicted so users can
+        compare both paths in the event stream before flipping the live
+        switch. Costs ~80–200 ms of background CPU on i5-12; the turn
+        itself is unblocked.
+        """
+        if self.gemma_router is None:
+            return
+        import threading  # noqa: PLC0415 — keep startup imports lean
+
+        def _run():
+            tool, latency_ms = self.gemma_predict(text)
+            logger.info(
+                "[gemma_shadow] utterance=%r -> tool=%s (%.0f ms)",
+                text[:80], tool or "—", latency_ms,
+            )
+            try:
+                self.event_bus.publish("gemma_prediction", {
+                    "utterance":  text,
+                    "tool_name":  tool or "",
+                    "latency_ms": latency_ms,
+                })
+            except Exception:
+                pass
+
+        try:
+            threading.Thread(target=_run, daemon=True, name="gemma-shadow").start()
+        except Exception as exc:
+            logger.warning("[gemma_shadow] thread start failed: %s", exc)
+
     _RAG_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".html", ".csv"}
 
     def _resolve_rag_file_path(self, text: str) -> "str | None":
@@ -356,6 +507,10 @@ class FridayApp:
 
         self.routing_state.clear_voice_spoken()
         self.emit_message("user", text, source=source)
+
+        # Shadow-run the optional LoRA-tuned Gemma router for visibility.
+        # No-op when FRIDAY_USE_GEMMA_ROUTER is unset (gemma_router is None).
+        self._shadow_route_with_gemma(text)
 
         if source in ("voice", "gui"):
             if source == "voice":

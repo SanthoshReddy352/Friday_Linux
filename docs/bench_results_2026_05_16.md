@@ -1,564 +1,610 @@
-# Intent-routing benchmark — 2026-05-16 02:19 UTC
+# Intent-routing benchmark — 2026-05-16 09:56 UTC
 
-**Cases:** 240
+**Cases:** 328
 
-**Models compared:** current, gemma, fn-gemma, qwen-1.7b, qwen-4b
+**Models compared:** current, gemma, fn-gemma
 
 
 ## Headline metrics
 
 | Model | Accuracy | Macro P | Macro R | Macro F1 | Micro F1 | p50 ms | p95 ms |
 |---|---|---|---|---|---|---|---|
-| current | 82.9% | 0.840 | 0.800 | 0.806 | 0.829 | 2 | 13 |
-| gemma | 6.2% | 0.160 | 0.073 | 0.079 | 0.065 | 437 | 1345 |
-| fn-gemma | 0.0% | 0.000 | 0.000 | 0.000 | 0.000 | 382 | 1910 |
-| qwen-1.7b | 0.0% | 0.000 | 0.000 | 0.000 | 0.000 | 3942 | 5749 |
-| qwen-4b | 0.0% | 0.000 | 0.000 | 0.000 | 0.000 | 7810 | 9386 |
+| current | 50.9% | 0.704 | 0.464 | 0.507 | 0.509 | 2 | 3 |
+| gemma | 77.4% | 0.851 | 0.759 | 0.762 | 0.777 | 93 | 163 |
+| fn-gemma | 69.2% | 0.746 | 0.820 | 0.754 | 0.703 | 388 | 456 |
 
 ## Per-category accuracy
 
-| Category | N | current ✓ | gemma ✓ | fn-gemma ✓ | qwen-1.7b ✓ | qwen-4b ✓ | current p50 | gemma p50 | fn-gemma p50 | qwen-1.7b p50 | qwen-4b p50 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| battery | 9 | 8/9 | 3/9 | 0/9 | 0/9 | 0/9 | 3ms | 437ms | 578ms | 3928ms | 7693ms |
-| calendar | 23 | 19/23 | 0/23 | 0/23 | 0/23 | 0/23 | 2ms | 408ms | 395ms | 4086ms | 7757ms |
-| chat | 12 | 12/12 | 0/12 | 0/12 | 0/12 | 0/12 | 12ms | 695ms | 413ms | 4304ms | 8009ms |
-| confirm | 9 | 8/9 | 0/9 | 0/9 | 0/9 | 0/9 | 3ms | 432ms | 140ms | 3611ms | 7529ms |
-| date | 9 | 8/9 | 0/9 | 0/9 | 0/9 | 0/9 | 3ms | 403ms | 752ms | 4063ms | 8105ms |
-| dictation | 8 | 8/8 | 1/8 | 0/8 | 0/8 | 0/8 | 1ms | 488ms | 143ms | 3457ms | 7853ms |
-| email | 6 | 6/6 | 0/6 | 0/6 | 0/6 | 0/6 | 5ms | 538ms | 404ms | 4252ms | 7960ms |
-| files | 20 | 14/20 | 1/20 | 0/20 | 0/20 | 0/20 | 3ms | 371ms | 201ms | 3988ms | 7899ms |
-| focus | 10 | 8/10 | 0/10 | 0/10 | 0/10 | 0/10 | 2ms | 480ms | 311ms | 3597ms | 7661ms |
-| greet | 5 | 5/5 | 0/5 | 0/5 | 0/5 | 0/5 | 1ms | 422ms | 442ms | 3918ms | 7383ms |
-| help | 9 | 3/9 | 0/9 | 0/9 | 0/9 | 0/9 | 13ms | 530ms | 161ms | 3729ms | 7601ms |
-| launch | 8 | 8/8 | 0/8 | 0/8 | 0/8 | 0/8 | 3ms | 448ms | 258ms | 3682ms | 8000ms |
-| media | 16 | 9/16 | 2/16 | 0/16 | 0/16 | 0/16 | 2ms | 432ms | 168ms | 4194ms | 7998ms |
-| memory | 7 | 7/7 | 0/7 | 0/7 | 0/7 | 0/7 | 1ms | 446ms | 737ms | 3542ms | 7706ms |
-| notes | 11 | 10/11 | 1/11 | 0/11 | 0/11 | 0/11 | 2ms | 417ms | 667ms | 4478ms | 7900ms |
-| reminders | 13 | 11/13 | 0/13 | 0/13 | 0/13 | 0/13 | 2ms | 435ms | 568ms | 4038ms | 7764ms |
-| screenshot | 7 | 6/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2ms | 502ms | 262ms | 4069ms | 8515ms |
-| status | 6 | 4/6 | 0/6 | 0/6 | 0/6 | 0/6 | 2ms | 493ms | 440ms | 3803ms | 8416ms |
-| system | 11 | 10/11 | 5/11 | 0/11 | 0/11 | 0/11 | 11ms | 438ms | 269ms | 3983ms | 8139ms |
-| time | 10 | 9/10 | 2/10 | 0/10 | 0/10 | 0/10 | 6ms | 458ms | 719ms | 3723ms | 7687ms |
-| voice | 14 | 11/14 | 0/14 | 0/14 | 0/14 | 0/14 | 2ms | 407ms | 225ms | 4076ms | 7500ms |
-| volume | 8 | 7/8 | 0/8 | 0/8 | 0/8 | 0/8 | 3ms | 462ms | 150ms | 3826ms | 7545ms |
-| weather | 9 | 8/9 | 0/9 | 0/9 | 0/9 | 0/9 | 3ms | 433ms | 619ms | 4080ms | 8321ms |
+| Category | N | current ✓ | gemma ✓ | fn-gemma ✓ | current p50 | gemma p50 | fn-gemma p50 |
+|---|---|---|---|---|---|---|---|
+| browser_media_control | 6 | 0/6 | 5/6 | 5/6 | 3ms | 135ms | 403ms |
+| cancel_calendar_event | 5 | 5/5 | 5/5 | 5/5 | 2ms | 105ms | 418ms |
+| cancel_dictation | 6 | 2/6 | 6/6 | 2/6 | 3ms | 120ms | 379ms |
+| chitchat | 9 | 8/9 | 8/9 | 0/9 | 3ms | 90ms | 382ms |
+| confirm_no | 6 | 0/6 | 5/6 | 5/6 | 3ms | 93ms | 355ms |
+| confirm_yes | 6 | 1/6 | 5/6 | 5/6 | 3ms | 68ms | 384ms |
+| create_calendar_event | 6 | 5/6 | 6/6 | 6/6 | 1ms | 109ms | 397ms |
+| delete_memory | 6 | 1/6 | 6/6 | 5/6 | 3ms | 93ms | 390ms |
+| disable_voice | 6 | 3/6 | 6/6 | 4/6 | 2ms | 73ms | 371ms |
+| enable_voice | 5 | 2/5 | 4/5 | 4/5 | 2ms | 73ms | 388ms |
+| end_dictation | 5 | 3/5 | 5/5 | 4/5 | 1ms | 85ms | 406ms |
+| end_focus_session | 6 | 0/6 | 6/6 | 6/6 | 3ms | 98ms | 418ms |
+| focus_session_status | 5 | 3/5 | 4/5 | 5/5 | 1ms | 143ms | 410ms |
+| get_battery | 5 | 2/5 | 1/5 | 5/5 | 3ms | 90ms | 397ms |
+| get_cpu_ram | 5 | 3/5 | 1/5 | 5/5 | 1ms | 133ms | 375ms |
+| get_date | 5 | 1/5 | 2/5 | 4/5 | 3ms | 125ms | 335ms |
+| get_friday_status | 6 | 4/6 | 0/6 | 5/6 | 1ms | 141ms | 392ms |
+| get_system_status | 5 | 3/5 | 1/5 | 5/5 | 1ms | 82ms | 433ms |
+| get_time | 6 | 4/6 | 2/6 | 6/6 | 1ms | 77ms | 390ms |
+| get_weather | 6 | 3/6 | 1/6 | 5/6 | 2ms | 84ms | 363ms |
+| greet | 6 | 4/6 | 6/6 | 5/6 | 2ms | 68ms | 300ms |
+| launch_app | 6 | 5/6 | 6/6 | 5/6 | 2ms | 72ms | 382ms |
+| list_calendar_events | 6 | 3/6 | 3/6 | 5/6 | 2ms | 102ms | 391ms |
+| list_folder_contents | 6 | 0/6 | 1/6 | 6/6 | 3ms | 90ms | 421ms |
+| list_reminders | 6 | 4/6 | 0/6 | 4/6 | 2ms | 124ms | 381ms |
+| manage_file | 6 | 0/6 | 6/6 | 5/6 | 3ms | 71ms | 400ms |
+| move_calendar_event | 5 | 2/5 | 5/5 | 5/5 | 3ms | 128ms | 413ms |
+| neg/browser_media_control | 1 | 1/1 | 1/1 | 0/1 | 3ms | 121ms | 321ms |
+| neg/cancel_calendar_event | 1 | 1/1 | 1/1 | 0/1 | 3ms | 78ms | 414ms |
+| neg/cancel_dictation | 1 | 1/1 | 1/1 | 0/1 | 3ms | 70ms | 825ms |
+| neg/confirm_no | 1 | 1/1 | 1/1 | 0/1 | 3ms | 125ms | 378ms |
+| neg/confirm_yes | 1 | 1/1 | 0/1 | 0/1 | 2ms | 101ms | 365ms |
+| neg/create_calendar_event | 1 | 1/1 | 1/1 | 0/1 | 4ms | 90ms | 444ms |
+| neg/delete_memory | 1 | 1/1 | 1/1 | 0/1 | 3ms | 92ms | 350ms |
+| neg/disable_voice | 1 | 1/1 | 1/1 | 0/1 | 3ms | 147ms | 341ms |
+| neg/enable_voice | 1 | 1/1 | 1/1 | 0/1 | 3ms | 127ms | 327ms |
+| neg/end_dictation | 1 | 1/1 | 1/1 | 0/1 | 3ms | 79ms | 426ms |
+| neg/end_focus_session | 1 | 1/1 | 0/1 | 0/1 | 3ms | 90ms | 377ms |
+| neg/focus_session_status | 1 | 1/1 | 1/1 | 0/1 | 23ms | 91ms | 400ms |
+| neg/get_battery | 1 | 1/1 | 1/1 | 0/1 | 3ms | 82ms | 401ms |
+| neg/get_cpu_ram | 1 | 0/1 | 1/1 | 0/1 | 2ms | 92ms | 419ms |
+| neg/get_date | 1 | 1/1 | 1/1 | 0/1 | 2ms | 136ms | 354ms |
+| neg/get_friday_status | 1 | 1/1 | 1/1 | 0/1 | 3ms | 76ms | 369ms |
+| neg/get_system_status | 1 | 0/1 | 1/1 | 0/1 | 1ms | 76ms | 430ms |
+| neg/get_time | 1 | 1/1 | 1/1 | 0/1 | 3ms | 187ms | 323ms |
+| neg/get_weather | 1 | 1/1 | 1/1 | 0/1 | 3ms | 123ms | 331ms |
+| neg/greet | 1 | 0/1 | 1/1 | 0/1 | 1ms | 80ms | 395ms |
+| neg/launch_app | 1 | 0/1 | 0/1 | 0/1 | 2ms | 63ms | 354ms |
+| neg/list_calendar_events | 1 | 1/1 | 1/1 | 0/1 | 3ms | 80ms | 389ms |
+| neg/list_folder_contents | 1 | 1/1 | 0/1 | 0/1 | 3ms | 206ms | 371ms |
+| neg/manage_file | 1 | 1/1 | 0/1 | 0/1 | 3ms | 109ms | 358ms |
+| neg/move_calendar_event | 1 | 1/1 | 1/1 | 0/1 | 3ms | 70ms | 404ms |
+| neg/open_browser_url | 1 | 0/1 | 1/1 | 0/1 | 2ms | 74ms | 396ms |
+| neg/open_file | 1 | 0/1 | 0/1 | 0/1 | 2ms | 72ms | 452ms |
+| neg/open_folder | 1 | 1/1 | 1/1 | 0/1 | 6ms | 122ms | 338ms |
+| neg/play_youtube | 1 | 0/1 | 1/1 | 0/1 | 1ms | 74ms | 426ms |
+| neg/play_youtube_music | 1 | 1/1 | 1/1 | 0/1 | 3ms | 78ms | 448ms |
+| neg/read_file | 1 | 1/1 | 1/1 | 0/1 | 3ms | 80ms | 365ms |
+| neg/read_latest_email | 1 | 1/1 | 1/1 | 0/1 | 3ms | 75ms | 429ms |
+| neg/read_notes | 1 | 1/1 | 1/1 | 0/1 | 3ms | 115ms | 333ms |
+| neg/save_note | 1 | 1/1 | 1/1 | 0/1 | 3ms | 130ms | 334ms |
+| neg/search_file | 1 | 1/1 | 1/1 | 0/1 | 3ms | 118ms | 330ms |
+| neg/search_google | 1 | 0/1 | 1/1 | 0/1 | 2ms | 122ms | 330ms |
+| neg/select_file_candidate | 1 | 0/1 | 1/1 | 0/1 | 2ms | 107ms | 319ms |
+| neg/set_reminder | 1 | 0/1 | 1/1 | 0/1 | 1ms | 78ms | 375ms |
+| neg/set_voice_mode | 1 | 1/1 | 1/1 | 0/1 | 3ms | 71ms | 371ms |
+| neg/set_volume | 1 | 0/1 | 1/1 | 0/1 | 1ms | 125ms | 310ms |
+| neg/show_memories | 1 | 1/1 | 1/1 | 0/1 | 3ms | 128ms | 326ms |
+| neg/shutdown_assistant | 1 | 1/1 | 0/1 | 0/1 | 3ms | 118ms | 316ms |
+| neg/start_dictation | 1 | 0/1 | 1/1 | 0/1 | 2ms | 76ms | 427ms |
+| neg/start_focus_session | 1 | 1/1 | 1/1 | 0/1 | 3ms | 77ms | 385ms |
+| neg/summarize_file | 1 | 1/1 | 0/1 | 0/1 | 3ms | 170ms | 352ms |
+| neg/summarize_inbox | 1 | 1/1 | 1/1 | 0/1 | 3ms | 121ms | 354ms |
+| neg/take_screenshot | 1 | 1/1 | 1/1 | 0/1 | 5ms | 79ms | 447ms |
+| open_browser_url | 6 | 0/6 | 6/6 | 6/6 | 2ms | 96ms | 399ms |
+| open_file | 6 | 5/6 | 6/6 | 6/6 | 2ms | 89ms | 400ms |
+| open_folder | 5 | 0/5 | 5/5 | 5/5 | 2ms | 73ms | 355ms |
+| play_youtube | 5 | 3/5 | 0/5 | 3/5 | 1ms | 125ms | 407ms |
+| play_youtube_music | 6 | 4/6 | 6/6 | 6/6 | 1ms | 94ms | 414ms |
+| read_file | 6 | 4/6 | 6/6 | 3/6 | 2ms | 98ms | 398ms |
+| read_latest_email | 6 | 0/6 | 4/6 | 4/6 | 3ms | 100ms | 403ms |
+| read_notes | 6 | 2/6 | 6/6 | 6/6 | 2ms | 70ms | 367ms |
+| save_note | 6 | 5/6 | 6/6 | 4/6 | 2ms | 97ms | 366ms |
+| search_file | 6 | 5/6 | 6/6 | 4/6 | 2ms | 98ms | 363ms |
+| search_google | 6 | 4/6 | 2/6 | 6/6 | 1ms | 100ms | 395ms |
+| select_file_candidate | 6 | 2/6 | 4/6 | 1/6 | 3ms | 93ms | 415ms |
+| set_reminder | 6 | 4/6 | 5/6 | 6/6 | 1ms | 82ms | 366ms |
+| set_voice_mode | 5 | 1/5 | 5/5 | 1/5 | 3ms | 133ms | 375ms |
+| set_volume | 6 | 6/6 | 6/6 | 6/6 | 1ms | 74ms | 353ms |
+| show_memories | 5 | 0/5 | 4/5 | 4/5 | 3ms | 134ms | 383ms |
+| shutdown_assistant | 5 | 5/5 | 5/5 | 5/5 | 2ms | 74ms | 356ms |
+| start_dictation | 5 | 2/5 | 5/5 | 5/5 | 2ms | 123ms | 375ms |
+| start_focus_session | 6 | 1/6 | 6/6 | 6/6 | 2ms | 132ms | 435ms |
+| summarize_file | 6 | 4/6 | 6/6 | 4/6 | 2ms | 84ms | 409ms |
+| summarize_inbox | 6 | 0/6 | 6/6 | 5/6 | 3ms | 113ms | 389ms |
+| take_screenshot | 5 | 4/5 | 4/5 | 5/5 | 1ms | 78ms | 377ms |
 
 ## Per-tool metrics — `current`
 
 | Tool | Support | TP | FP | FN | TN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
-| `llm_chat` | 25 | 24 | 28 | 1 | 187 | 0.462 | 0.960 | 0.623 |
-| `get_weather` | 9 | 8 | 0 | 1 | 231 | 1.000 | 0.889 | 0.941 |
-| `create_calendar_event` | 8 | 6 | 0 | 2 | 232 | 1.000 | 0.750 | 0.857 |
-| `get_time` | 8 | 7 | 0 | 1 | 232 | 1.000 | 0.875 | 0.933 |
-| `save_note` | 8 | 7 | 0 | 1 | 232 | 1.000 | 0.875 | 0.933 |
-| `set_reminder` | 8 | 6 | 0 | 2 | 232 | 1.000 | 0.750 | 0.857 |
-| `get_battery` | 7 | 6 | 0 | 1 | 233 | 1.000 | 0.857 | 0.923 |
-| `get_date` | 7 | 6 | 0 | 1 | 233 | 1.000 | 0.857 | 0.923 |
-| `launch_app` | 7 | 7 | 1 | 0 | 232 | 0.875 | 1.000 | 0.933 |
-| `set_volume` | 7 | 6 | 1 | 1 | 232 | 0.857 | 0.857 | 0.857 |
-| `get_friday_status` | 6 | 4 | 0 | 2 | 234 | 1.000 | 0.667 | 0.800 |
-| `list_calendar_events` | 6 | 5 | 0 | 1 | 234 | 1.000 | 0.833 | 0.909 |
-| `manage_file` | 6 | 6 | 0 | 0 | 234 | 1.000 | 1.000 | 1.000 |
-| `set_voice_mode` | 6 | 4 | 0 | 2 | 234 | 1.000 | 0.667 | 0.800 |
-| `take_screenshot` | 6 | 6 | 1 | 0 | 233 | 0.857 | 1.000 | 0.923 |
-| `cancel_calendar_event` | 5 | 5 | 0 | 0 | 235 | 1.000 | 1.000 | 1.000 |
-| `get_cpu_ram` | 5 | 5 | 0 | 0 | 235 | 1.000 | 1.000 | 1.000 |
-| `greet` | 5 | 5 | 0 | 0 | 235 | 1.000 | 1.000 | 1.000 |
-| `list_reminders` | 5 | 5 | 2 | 0 | 233 | 0.714 | 1.000 | 0.833 |
-| `show_capabilities` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `browser_media_control` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `disable_voice` | 4 | 3 | 1 | 1 | 235 | 0.750 | 0.750 | 0.750 |
-| `enable_voice` | 4 | 4 | 0 | 0 | 236 | 1.000 | 1.000 | 1.000 |
-| `get_system_status` | 4 | 3 | 0 | 1 | 236 | 1.000 | 0.750 | 0.857 |
-| `move_calendar_event` | 4 | 3 | 0 | 1 | 236 | 1.000 | 0.750 | 0.857 |
-| `read_notes` | 4 | 4 | 0 | 0 | 236 | 1.000 | 1.000 | 1.000 |
-| `show_memories` | 4 | 4 | 0 | 0 | 236 | 1.000 | 1.000 | 1.000 |
-| `start_focus_session` | 4 | 3 | 1 | 1 | 235 | 0.750 | 0.750 | 0.750 |
-| `confirm_no` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `confirm_yes` | 3 | 2 | 0 | 1 | 237 | 1.000 | 0.667 | 0.800 |
-| `delete_memory` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `end_dictation` | 3 | 3 | 1 | 0 | 236 | 0.750 | 1.000 | 0.857 |
-| `end_focus_session` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `focus_session_status` | 3 | 2 | 0 | 1 | 237 | 1.000 | 0.667 | 0.800 |
-| `list_folder_contents` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `play_youtube` | 3 | 2 | 0 | 1 | 237 | 1.000 | 0.667 | 0.800 |
-| `read_latest_email` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `search_file` | 3 | 3 | 2 | 0 | 235 | 0.600 | 1.000 | 0.750 |
-| `search_google` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `select_file_candidate` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `shutdown_assistant` | 3 | 2 | 0 | 1 | 237 | 1.000 | 0.667 | 0.800 |
-| `start_dictation` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `summarize_inbox` | 3 | 3 | 0 | 0 | 237 | 1.000 | 1.000 | 1.000 |
-| `cancel_dictation` | 2 | 2 | 0 | 0 | 238 | 1.000 | 1.000 | 1.000 |
-| `open_browser_url` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_file` | 2 | 2 | 3 | 0 | 235 | 0.400 | 1.000 | 0.571 |
-| `open_folder` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `play_youtube_music` | 2 | 2 | 0 | 0 | 238 | 1.000 | 1.000 | 1.000 |
-| `read_file` | 2 | 1 | 0 | 1 | 238 | 1.000 | 0.500 | 0.667 |
-| `summarize_file` | 2 | 2 | 0 | 0 | 238 | 1.000 | 1.000 | 1.000 |
+| `llm_chat` | 56 | 43 | 107 | 13 | 165 | 0.287 | 0.768 | 0.417 |
+| `browser_media_control` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `cancel_dictation` | 6 | 2 | 0 | 4 | 322 | 1.000 | 0.333 | 0.500 |
+| `confirm_no` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `confirm_yes` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `create_calendar_event` | 6 | 5 | 0 | 1 | 322 | 1.000 | 0.833 | 0.909 |
+| `delete_memory` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `disable_voice` | 6 | 3 | 0 | 3 | 322 | 1.000 | 0.500 | 0.667 |
+| `end_focus_session` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `get_friday_status` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `get_time` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `get_weather` | 6 | 3 | 0 | 3 | 322 | 1.000 | 0.500 | 0.667 |
+| `greet` | 6 | 4 | 14 | 2 | 308 | 0.222 | 0.667 | 0.333 |
+| `launch_app` | 6 | 5 | 17 | 1 | 305 | 0.227 | 0.833 | 0.357 |
+| `list_calendar_events` | 6 | 3 | 0 | 3 | 322 | 1.000 | 0.500 | 0.667 |
+| `list_folder_contents` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `list_reminders` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `manage_file` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `open_browser_url` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `open_file` | 6 | 5 | 9 | 1 | 313 | 0.357 | 0.833 | 0.500 |
+| `play_youtube_music` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `read_file` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `read_latest_email` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `read_notes` | 6 | 2 | 0 | 4 | 322 | 1.000 | 0.333 | 0.500 |
+| `save_note` | 6 | 5 | 0 | 1 | 322 | 1.000 | 0.833 | 0.909 |
+| `search_file` | 6 | 5 | 7 | 1 | 315 | 0.417 | 0.833 | 0.556 |
+| `search_google` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `select_file_candidate` | 6 | 2 | 0 | 4 | 322 | 1.000 | 0.333 | 0.500 |
+| `set_reminder` | 6 | 4 | 1 | 2 | 321 | 0.800 | 0.667 | 0.727 |
+| `set_volume` | 6 | 6 | 3 | 0 | 319 | 0.667 | 1.000 | 0.800 |
+| `start_focus_session` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `summarize_file` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `summarize_inbox` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `cancel_calendar_event` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `enable_voice` | 5 | 2 | 0 | 3 | 323 | 1.000 | 0.400 | 0.571 |
+| `end_dictation` | 5 | 3 | 0 | 2 | 323 | 1.000 | 0.600 | 0.750 |
+| `focus_session_status` | 5 | 3 | 0 | 2 | 323 | 1.000 | 0.600 | 0.750 |
+| `get_battery` | 5 | 2 | 0 | 3 | 323 | 1.000 | 0.400 | 0.571 |
+| `get_cpu_ram` | 5 | 3 | 0 | 2 | 323 | 1.000 | 0.600 | 0.750 |
+| `get_date` | 5 | 1 | 0 | 4 | 323 | 1.000 | 0.200 | 0.333 |
+| `get_system_status` | 5 | 3 | 0 | 2 | 323 | 1.000 | 0.600 | 0.750 |
+| `move_calendar_event` | 5 | 2 | 0 | 3 | 323 | 1.000 | 0.400 | 0.571 |
+| `open_folder` | 5 | 0 | 0 | 5 | 323 | 0.000 | 0.000 | 0.000 |
+| `play_youtube` | 5 | 3 | 3 | 2 | 320 | 0.500 | 0.600 | 0.545 |
+| `set_voice_mode` | 5 | 1 | 0 | 4 | 323 | 1.000 | 0.200 | 0.333 |
+| `show_memories` | 5 | 0 | 0 | 5 | 323 | 0.000 | 0.000 | 0.000 |
+| `shutdown_assistant` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `start_dictation` | 5 | 2 | 0 | 3 | 323 | 1.000 | 0.400 | 0.571 |
+| `take_screenshot` | 5 | 4 | 0 | 1 | 323 | 1.000 | 0.800 | 0.889 |
 
 ## Per-tool metrics — `gemma`
 
 | Tool | Support | TP | FP | FN | TN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
-| `llm_chat` | 25 | 0 | 0 | 25 | 215 | 0.000 | 0.000 | 0.000 |
-| `get_weather` | 9 | 0 | 0 | 9 | 231 | 0.000 | 0.000 | 0.000 |
-| `create_calendar_event` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_time` | 8 | 2 | 0 | 6 | 232 | 1.000 | 0.250 | 0.400 |
-| `save_note` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `set_reminder` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_battery` | 7 | 3 | 0 | 4 | 233 | 1.000 | 0.429 | 0.600 |
-| `get_date` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `launch_app` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `set_volume` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_friday_status` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `list_calendar_events` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `manage_file` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `set_voice_mode` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `take_screenshot` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `cancel_calendar_event` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `get_cpu_ram` | 5 | 1 | 0 | 4 | 235 | 1.000 | 0.200 | 0.333 |
-| `greet` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `list_reminders` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `show_capabilities` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `browser_media_control` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `disable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `enable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `get_system_status` | 4 | 4 | 206 | 0 | 30 | 0.019 | 1.000 | 0.037 |
-| `move_calendar_event` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `read_notes` | 4 | 1 | 0 | 3 | 236 | 1.000 | 0.250 | 0.400 |
-| `show_memories` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `start_focus_session` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `confirm_no` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `confirm_yes` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `delete_memory` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_focus_session` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `focus_session_status` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `list_folder_contents` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `play_youtube` | 3 | 1 | 0 | 2 | 237 | 1.000 | 0.333 | 0.500 |
-| `read_latest_email` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_file` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_google` | 3 | 1 | 0 | 2 | 237 | 1.000 | 0.333 | 0.500 |
-| `select_file_candidate` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `shutdown_assistant` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `start_dictation` | 3 | 1 | 0 | 2 | 237 | 1.000 | 0.333 | 0.500 |
-| `summarize_inbox` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `cancel_dictation` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_browser_url` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_folder` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `play_youtube_music` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `read_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `summarize_file` | 2 | 1 | 0 | 1 | 238 | 1.000 | 0.500 | 0.667 |
+| `llm_chat` | 56 | 47 | 42 | 9 | 230 | 0.528 | 0.839 | 0.648 |
+| `browser_media_control` | 6 | 5 | 0 | 1 | 322 | 1.000 | 0.833 | 0.909 |
+| `cancel_dictation` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `confirm_no` | 6 | 5 | 1 | 1 | 321 | 0.833 | 0.833 | 0.833 |
+| `confirm_yes` | 6 | 5 | 1 | 1 | 321 | 0.833 | 0.833 | 0.833 |
+| `create_calendar_event` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `delete_memory` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `disable_voice` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `end_focus_session` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `get_friday_status` | 6 | 0 | 0 | 6 | 322 | 0.000 | 0.000 | 0.000 |
+| `get_time` | 6 | 2 | 1 | 4 | 321 | 0.667 | 0.333 | 0.444 |
+| `get_weather` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `greet` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `launch_app` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `list_calendar_events` | 6 | 3 | 0 | 3 | 322 | 1.000 | 0.500 | 0.667 |
+| `list_folder_contents` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `list_reminders` | 6 | 0 | 2 | 6 | 320 | 0.000 | 0.000 | 0.000 |
+| `manage_file` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `open_browser_url` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `open_file` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `play_youtube_music` | 6 | 6 | 6 | 0 | 316 | 0.500 | 1.000 | 0.667 |
+| `read_file` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `read_latest_email` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `read_notes` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `save_note` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `search_file` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `search_google` | 6 | 2 | 0 | 4 | 322 | 1.000 | 0.333 | 0.500 |
+| `select_file_candidate` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `set_reminder` | 6 | 5 | 3 | 1 | 319 | 0.625 | 0.833 | 0.714 |
+| `set_volume` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `start_focus_session` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `summarize_file` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `summarize_inbox` | 6 | 6 | 4 | 0 | 318 | 0.600 | 1.000 | 0.750 |
+| `cancel_calendar_event` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `enable_voice` | 5 | 4 | 0 | 1 | 323 | 1.000 | 0.800 | 0.889 |
+| `end_dictation` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `focus_session_status` | 5 | 4 | 0 | 1 | 323 | 1.000 | 0.800 | 0.889 |
+| `get_battery` | 5 | 1 | 0 | 4 | 323 | 1.000 | 0.200 | 0.333 |
+| `get_cpu_ram` | 5 | 1 | 0 | 4 | 323 | 1.000 | 0.200 | 0.333 |
+| `get_date` | 5 | 2 | 1 | 3 | 322 | 0.667 | 0.400 | 0.500 |
+| `get_system_status` | 5 | 1 | 0 | 4 | 323 | 1.000 | 0.200 | 0.333 |
+| `move_calendar_event` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `open_folder` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `play_youtube` | 5 | 0 | 0 | 5 | 323 | 0.000 | 0.000 | 0.000 |
+| `set_voice_mode` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `show_memories` | 5 | 4 | 3 | 1 | 320 | 0.571 | 0.800 | 0.667 |
+| `shutdown_assistant` | 5 | 5 | 1 | 0 | 322 | 0.833 | 1.000 | 0.909 |
+| `start_dictation` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `take_screenshot` | 5 | 4 | 0 | 1 | 323 | 1.000 | 0.800 | 0.889 |
 
 ## Per-tool metrics — `fn-gemma`
 
 | Tool | Support | TP | FP | FN | TN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
-| `llm_chat` | 25 | 0 | 0 | 25 | 215 | 0.000 | 0.000 | 0.000 |
-| `get_weather` | 9 | 0 | 0 | 9 | 231 | 0.000 | 0.000 | 0.000 |
-| `create_calendar_event` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_time` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `save_note` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `set_reminder` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_battery` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_date` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `launch_app` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `set_volume` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_friday_status` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `list_calendar_events` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `manage_file` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `set_voice_mode` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `take_screenshot` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `cancel_calendar_event` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `get_cpu_ram` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `greet` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `list_reminders` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `show_capabilities` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `browser_media_control` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `disable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `enable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `get_system_status` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `move_calendar_event` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `read_notes` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `show_memories` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `start_focus_session` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `confirm_no` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `confirm_yes` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `delete_memory` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_focus_session` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `focus_session_status` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `list_folder_contents` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `play_youtube` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `read_latest_email` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_file` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_google` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `select_file_candidate` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `shutdown_assistant` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `start_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `summarize_inbox` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `cancel_dictation` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_browser_url` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_folder` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `play_youtube_music` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `read_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `summarize_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-
-## Per-tool metrics — `qwen-1.7b`
-
-| Tool | Support | TP | FP | FN | TN | Precision | Recall | F1 |
-|---|---|---|---|---|---|---|---|---|
-| `llm_chat` | 25 | 0 | 0 | 25 | 215 | 0.000 | 0.000 | 0.000 |
-| `get_weather` | 9 | 0 | 0 | 9 | 231 | 0.000 | 0.000 | 0.000 |
-| `create_calendar_event` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_time` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `save_note` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `set_reminder` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_battery` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_date` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `launch_app` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `set_volume` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_friday_status` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `list_calendar_events` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `manage_file` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `set_voice_mode` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `take_screenshot` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `cancel_calendar_event` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `get_cpu_ram` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `greet` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `list_reminders` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `show_capabilities` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `browser_media_control` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `disable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `enable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `get_system_status` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `move_calendar_event` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `read_notes` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `show_memories` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `start_focus_session` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `confirm_no` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `confirm_yes` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `delete_memory` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_focus_session` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `focus_session_status` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `list_folder_contents` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `play_youtube` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `read_latest_email` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_file` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_google` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `select_file_candidate` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `shutdown_assistant` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `start_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `summarize_inbox` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `cancel_dictation` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_browser_url` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_folder` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `play_youtube_music` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `read_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `summarize_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-
-## Per-tool metrics — `qwen-4b`
-
-| Tool | Support | TP | FP | FN | TN | Precision | Recall | F1 |
-|---|---|---|---|---|---|---|---|---|
-| `llm_chat` | 25 | 0 | 0 | 25 | 215 | 0.000 | 0.000 | 0.000 |
-| `get_weather` | 9 | 0 | 0 | 9 | 231 | 0.000 | 0.000 | 0.000 |
-| `create_calendar_event` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_time` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `save_note` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `set_reminder` | 8 | 0 | 0 | 8 | 232 | 0.000 | 0.000 | 0.000 |
-| `get_battery` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_date` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `launch_app` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `set_volume` | 7 | 0 | 0 | 7 | 233 | 0.000 | 0.000 | 0.000 |
-| `get_friday_status` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `list_calendar_events` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `manage_file` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `set_voice_mode` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `take_screenshot` | 6 | 0 | 0 | 6 | 234 | 0.000 | 0.000 | 0.000 |
-| `cancel_calendar_event` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `get_cpu_ram` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `greet` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `list_reminders` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `show_capabilities` | 5 | 0 | 0 | 5 | 235 | 0.000 | 0.000 | 0.000 |
-| `browser_media_control` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `disable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `enable_voice` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `get_system_status` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `move_calendar_event` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `read_notes` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `show_memories` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `start_focus_session` | 4 | 0 | 0 | 4 | 236 | 0.000 | 0.000 | 0.000 |
-| `confirm_no` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `confirm_yes` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `delete_memory` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `end_focus_session` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `focus_session_status` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `list_folder_contents` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `play_youtube` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `read_latest_email` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_file` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `search_google` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `select_file_candidate` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `shutdown_assistant` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `start_dictation` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `summarize_inbox` | 3 | 0 | 0 | 3 | 237 | 0.000 | 0.000 | 0.000 |
-| `cancel_dictation` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_browser_url` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `open_folder` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `play_youtube_music` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `read_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
-| `summarize_file` | 2 | 0 | 0 | 2 | 238 | 0.000 | 0.000 | 0.000 |
+| `llm_chat` | 56 | 0 | 0 | 56 | 272 | 0.000 | 0.000 | 0.000 |
+| `browser_media_control` | 6 | 5 | 4 | 1 | 318 | 0.556 | 0.833 | 0.667 |
+| `cancel_dictation` | 6 | 2 | 0 | 4 | 322 | 1.000 | 0.333 | 0.500 |
+| `confirm_no` | 6 | 5 | 2 | 1 | 320 | 0.714 | 0.833 | 0.769 |
+| `confirm_yes` | 6 | 5 | 3 | 1 | 319 | 0.625 | 0.833 | 0.714 |
+| `create_calendar_event` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `delete_memory` | 6 | 5 | 2 | 1 | 320 | 0.714 | 0.833 | 0.769 |
+| `disable_voice` | 6 | 4 | 2 | 2 | 320 | 0.667 | 0.667 | 0.667 |
+| `end_focus_session` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `get_friday_status` | 6 | 5 | 9 | 1 | 313 | 0.357 | 0.833 | 0.500 |
+| `get_time` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `get_weather` | 6 | 5 | 1 | 1 | 321 | 0.833 | 0.833 | 0.833 |
+| `greet` | 6 | 5 | 1 | 1 | 321 | 0.833 | 0.833 | 0.833 |
+| `launch_app` | 6 | 5 | 2 | 1 | 320 | 0.714 | 0.833 | 0.769 |
+| `list_calendar_events` | 6 | 5 | 0 | 1 | 322 | 1.000 | 0.833 | 0.909 |
+| `list_folder_contents` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `list_reminders` | 6 | 4 | 1 | 2 | 321 | 0.800 | 0.667 | 0.727 |
+| `manage_file` | 6 | 5 | 1 | 1 | 321 | 0.833 | 0.833 | 0.833 |
+| `open_browser_url` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `open_file` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `play_youtube_music` | 6 | 6 | 3 | 0 | 319 | 0.667 | 1.000 | 0.800 |
+| `read_file` | 6 | 3 | 3 | 3 | 319 | 0.500 | 0.500 | 0.500 |
+| `read_latest_email` | 6 | 4 | 2 | 2 | 320 | 0.667 | 0.667 | 0.667 |
+| `read_notes` | 6 | 6 | 0 | 0 | 322 | 1.000 | 1.000 | 1.000 |
+| `save_note` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `search_file` | 6 | 4 | 0 | 2 | 322 | 1.000 | 0.667 | 0.800 |
+| `search_google` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `select_file_candidate` | 6 | 1 | 0 | 5 | 322 | 1.000 | 0.167 | 0.286 |
+| `set_reminder` | 6 | 6 | 10 | 0 | 312 | 0.375 | 1.000 | 0.545 |
+| `set_volume` | 6 | 6 | 1 | 0 | 321 | 0.857 | 1.000 | 0.923 |
+| `start_focus_session` | 6 | 6 | 2 | 0 | 320 | 0.750 | 1.000 | 0.857 |
+| `summarize_file` | 6 | 4 | 1 | 2 | 321 | 0.800 | 0.667 | 0.727 |
+| `summarize_inbox` | 6 | 5 | 3 | 1 | 319 | 0.625 | 0.833 | 0.714 |
+| `cancel_calendar_event` | 5 | 5 | 3 | 0 | 320 | 0.625 | 1.000 | 0.769 |
+| `enable_voice` | 5 | 4 | 3 | 1 | 320 | 0.571 | 0.800 | 0.667 |
+| `end_dictation` | 5 | 4 | 2 | 1 | 321 | 0.667 | 0.800 | 0.727 |
+| `focus_session_status` | 5 | 5 | 6 | 0 | 317 | 0.455 | 1.000 | 0.625 |
+| `get_battery` | 5 | 5 | 1 | 0 | 322 | 0.833 | 1.000 | 0.909 |
+| `get_cpu_ram` | 5 | 5 | 1 | 0 | 322 | 0.833 | 1.000 | 0.909 |
+| `get_date` | 5 | 4 | 1 | 1 | 322 | 0.800 | 0.800 | 0.800 |
+| `get_system_status` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `move_calendar_event` | 5 | 5 | 1 | 0 | 322 | 0.833 | 1.000 | 0.909 |
+| `open_folder` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `play_youtube` | 5 | 3 | 0 | 2 | 323 | 1.000 | 0.600 | 0.750 |
+| `set_voice_mode` | 5 | 1 | 1 | 4 | 322 | 0.500 | 0.200 | 0.286 |
+| `show_memories` | 5 | 4 | 1 | 1 | 322 | 0.800 | 0.800 | 0.800 |
+| `shutdown_assistant` | 5 | 5 | 4 | 0 | 319 | 0.556 | 1.000 | 0.714 |
+| `start_dictation` | 5 | 5 | 0 | 0 | 323 | 1.000 | 1.000 | 1.000 |
+| `take_screenshot` | 5 | 5 | 1 | 0 | 322 | 0.833 | 1.000 | 0.909 |
 
 ## Per-case detail
 
-| # | Utterance | Expected | current | current ✓ | current ms | gemma | gemma ✓ | gemma ms | fn-gemma | fn-gemma ✓ | fn-gemma ms | qwen-1.7b | qwen-1.7b ✓ | qwen-1.7b ms | qwen-4b | qwen-4b ✓ | qwen-4b ms | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | `what time is it` | `get_time` | `get_time` | ✓ | 9 | `get_system_status` | ✗ | 4985 | `—` | ✗ | 4218 | `—` | ✗ | 21636 | `—` | ✗ | 41379 |  |
-| 2 | `tell me the time` | `get_time` | `get_time` | ✓ | 1 | `get_system_status` | ✗ | 445 | `—` | ✗ | 820 | `—` | ✗ | 3537 | `—` | ✗ | 7482 |  |
-| 3 | `what's the time` | `get_time` | `get_time` | ✓ | 1 | `get_system_status` | ✗ | 1401 | `—` | ✗ | 2005 | `—` | ✗ | 4209 | `—` | ✗ | 10187 |  |
-| 4 | `current time please` | `get_time` | `get_time` | ✓ | 1 | `get_system_status` | ✗ | 390 | `—` | ✗ | 617 | `—` | ✗ | 3731 | `—` | ✗ | 17033 |  |
-| 5 | `do you know what time it is` | `get_time` | `get_time` | ✓ | 2 | `get_system_status` | ✗ | 471 | `—` | ✗ | 530 | `—` | ✗ | 4223 | `—` | ✗ | 7682 |  |
-| 6 | `got the time` | `get_time` | `llm_chat` | ✗ | 10120 | `get_time` | ✓ | 878 | `—` | ✗ | 1016 | `—` | ✗ | 3554 | `—` | ✗ | 7542 |  |
-| 7 | `give me the time` | `get_time` | `get_time` | ✓ | 17 | `get_time` | ✓ | 361 | `—` | ✗ | 490 | `—` | ✗ | 3397 | `—` | ✗ | 7683 |  |
-| 8 | `Friday what time is it` | `get_time` | `get_time` | ✓ | 2 | `get_system_status` | ✗ | 802 | `—` | ✗ | 177 | `—` | ✗ | 3397 | `—` | ✗ | 8374 |  |
-| 9 | `set my time zone to UTC` | `llm_chat` | `llm_chat` | ✓ | 10 | `get_system_status` | ✗ | 395 | `—` | ✗ | 393 | `—` | ✗ | 3715 | `—` | ✗ | 7692 | Negative — bare 'time' |
-| 10 | `time to leave for dinner` | `llm_chat` | `llm_chat` | ✓ | 13 | `get_system_status` | ✗ | 359 | `—` | ✗ | 2015 | `—` | ✗ | 3808 | `—` | ✗ | 7551 | Negative — figurative |
-| 11 | `what's today's date` | `get_date` | `get_date` | ✓ | 3 | `get_system_status` | ✗ | 352 | `—` | ✗ | 3438 | `—` | ✗ | 5136 | `—` | ✗ | 8507 |  |
-| 12 | `today's date please` | `get_date` | `get_date` | ✓ | 2 | `get_system_status` | ✗ | 442 | `—` | ✗ | 167 | `—` | ✗ | 4216 | `—` | ✗ | 7520 |  |
-| 13 | `what is the date today` | `get_date` | `get_date` | ✓ | 3 | `get_system_status` | ✗ | 338 | `—` | ✗ | 752 | `—` | ✗ | 3632 | `—` | ✗ | 7592 |  |
-| 14 | `tell me today's date` | `get_date` | `get_date` | ✓ | 3 | `today` | ✗ | 309 | `—` | ✗ | 1547 | `—` | ✗ | 3934 | `—` | ✗ | 8130 |  |
-| 15 | `what day is it` | `get_date` | `get_date` | ✓ | 2 | `get_system_status` | ✗ | 430 | `—` | ✗ | 504 | `—` | ✗ | 6345 | `—` | ✗ | 8341 |  |
-| 16 | `current date` | `get_date` | `get_date` | ✓ | 2 | `get_system_status` | ✗ | 373 | `—` | ✗ | 1490 | `—` | ✗ | 3568 | `—` | ✗ | 8294 |  |
-| 17 | `what day of the week is it` | `get_date` | `llm_chat` | ✗ | 10 | `get_system_status` | ✗ | 479 | `—` | ✗ | 1340 | `—` | ✗ | 4063 | `—` | ✗ | 7976 |  |
-| 18 | `I have a date tonight` | `llm_chat` | `llm_chat` | ✓ | 12 | `get_system_status` | ✗ | 465 | `—` | ✗ | 418 | `—` | ✗ | 3903 | `—` | ✗ | 8105 | Negative — homonym |
-| 19 | `the deadline is the 15th` | `llm_chat` | `llm_chat` | ✓ | 22 | `get_system_status` | ✗ | 403 | `—` | ✗ | 169 | `—` | ✗ | 4150 | `—` | ✗ | 7970 | Negative — date as noun |
-| 20 | `battery status` | `get_battery` | `get_battery` | ✓ | 2 | `get_system_status` | ✗ | 321 | `—` | ✗ | 578 | `—` | ✗ | 3928 | `—` | ✗ | 7369 |  |
-| 21 | `how's my battery` | `get_battery` | `get_battery` | ✓ | 2 | `get_system_status` | ✗ | 1770 | `—` | ✗ | 255 | `—` | ✗ | 3824 | `—` | ✗ | 7693 |  |
-| 22 | `what's my battery percentage` | `get_battery` | `get_battery` | ✓ | 2 | `get_system_status` | ✗ | 431 | `—` | ✗ | 654 | `—` | ✗ | 5233 | `—` | ✗ | 7549 |  |
-| 23 | `is my laptop charging` | `get_battery` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 1125 | `—` | ✗ | 703 | `—` | ✗ | 3969 | `—` | ✗ | 7280 |  |
-| 24 | `how much battery do I have left` | `get_battery` | `get_battery` | ✓ | 3 | `get_battery` | ✓ | 512 | `—` | ✗ | 675 | `—` | ✗ | 3734 | `—` | ✗ | 8555 |  |
-| 25 | `battery level please` | `get_battery` | `get_battery` | ✓ | 2 | `get_battery` | ✓ | 354 | `—` | ✗ | 948 | `—` | ✗ | 3593 | `—` | ✗ | 12061 |  |
-| 26 | `show me the battery` | `get_battery` | `get_battery` | ✓ | 10 | `get_battery` | ✓ | 294 | `—` | ✗ | 146 | `—` | ✗ | 3676 | `—` | ✗ | 8472 |  |
-| 27 | `the battery in my car died` | `llm_chat` | `llm_chat` | ✓ | 13 | `get_system_status` | ✗ | 437 | `—` | ✗ | 558 | `—` | ✗ | 4180 | `—` | ✗ | 7595 | Negative — figurative |
-| 28 | `I bought a new battery yesterday` | `llm_chat` | `llm_chat` | ✓ | 14 | `get_system_status` | ✗ | 707 | `—` | ✗ | 197 | `—` | ✗ | 4247 | `—` | ✗ | 7741 | Negative — narrative |
-| 29 | `cpu usage` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 2 | `get_system_status` | ✗ | 363 | `—` | ✗ | 149 | `—` | ✗ | 3737 | `—` | ✗ | 7552 |  |
-| 30 | `show me ram usage` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 2 | `get_cpu_ram` | ✓ | 1036 | `—` | ✗ | 115 | `—` | ✗ | 4227 | `—` | ✗ | 7490 |  |
-| 31 | `how much memory am I using` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 11 | `get_system_status` | ✗ | 428 | `—` | ✗ | 537 | `—` | ✗ | 3927 | `—` | ✗ | 7647 |  |
-| 32 | `system performance` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 32 | `get_system_status` | ✗ | 348 | `—` | ✗ | 310 | `—` | ✗ | 5806 | `—` | ✗ | 8007 |  |
-| 33 | `cpu load` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 2 | `get_system_status` | ✗ | 630 | `—` | ✗ | 850 | `—` | ✗ | 5567 | `—` | ✗ | 10974 |  |
-| 34 | `my computer's performance has dropped` | `llm_chat` | `llm_chat` | ✓ | 12 | `get_system_status` | ✗ | 318 | `—` | ✗ | 152 | `—` | ✗ | 4719 | `—` | ✗ | 9434 | Negative |
-| 35 | `I forgot what I had for memory yesterday` | `llm_chat` | `llm_chat` | ✓ | 11 | `get_system_status` | ✗ | 710 | `—` | ✗ | 935 | `—` | ✗ | 3832 | `—` | ✗ | 8796 | Negative — figurative memory |
-| 36 | `system status` | `get_system_status` | `get_system_status` | ✓ | 2 | `get_system_status` | ✓ | 1038 | `—` | ✗ | 269 | `—` | ✗ | 3729 | `—` | ✗ | 9386 |  |
-| 37 | `system health` | `get_system_status` | `get_system_status` | ✓ | 2 | `get_system_status` | ✓ | 397 | `—` | ✗ | 145 | `—` | ✗ | 3983 | `—` | ✗ | 7862 |  |
-| 38 | `give me a system overview` | `get_system_status` | `get_system_status` | ✓ | 11 | `get_system_status` | ✓ | 438 | `—` | ✗ | 131 | `—` | ✗ | 3811 | `—` | ✗ | 9591 |  |
-| 39 | `how is the machine doing` | `get_system_status` | `llm_chat` | ✗ | 13 | `get_system_status` | ✓ | 441 | `—` | ✗ | 334 | `—` | ✗ | 4273 | `—` | ✗ | 8139 |  |
-| 40 | `friday status` | `get_friday_status` | `get_friday_status` | ✓ | 2 | `get_system_status` | ✗ | 1039 | `—` | ✗ | 280 | `—` | ✗ | 4003 | `—` | ✗ | 8389 |  |
-| 41 | `are you ready friday` | `get_friday_status` | `get_friday_status` | ✓ | 2 | `get_system_status` | ✗ | 916 | `—` | ✗ | 307 | `—` | ✗ | 4230 | `—` | ✗ | 7850 |  |
-| 42 | `are you online` | `get_friday_status` | `llm_chat` | ✗ | 12 | `get_system_status` | ✗ | 509 | `—` | ✗ | 1723 | `—` | ✗ | 3575 | `—` | ✗ | 8933 |  |
-| 43 | `check friday` | `get_friday_status` | `get_friday_status` | ✓ | 2 | `get_system_status` | ✗ | 328 | `—` | ✗ | 844 | `—` | ✗ | 3973 | `—` | ✗ | 8050 |  |
-| 44 | `your status` | `get_friday_status` | `get_friday_status` | ✓ | 2 | `get_system_status` | ✗ | 476 | `—` | ✗ | 573 | `—` | ✗ | 3633 | `—` | ✗ | 8911 |  |
-| 45 | `is everything loaded` | `get_friday_status` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 369 | `—` | ✗ | 138 | `—` | ✗ | 3557 | `—` | ✗ | 8444 |  |
-| 46 | `what's the weather in Mumbai` | `get_weather` | `get_weather` | ✓ | 3 | `get_system_status` | ✗ | 354 | `—` | ✗ | 619 | `—` | ✗ | 3817 | `—` | ✗ | 8905 |  |
-| 47 | `weather in Bangalore` | `get_weather` | `get_weather` | ✓ | 2 | `get_system_status` | ✗ | 709 | `—` | ✗ | 169 | `—` | ✗ | 3785 | `—` | ✗ | 8851 |  |
-| 48 | `how's the weather today` | `get_weather` | `get_weather` | ✓ | 2 | `get_system_status` | ✗ | 506 | `—` | ✗ | 1102 | `—` | ✗ | 8479 | `—` | ✗ | 7846 |  |
-| 49 | `is it going to rain tomorrow` | `get_weather` | `llm_chat` | ✗ | 27 | `get_system_status` | ✗ | 469 | `—` | ✗ | 433 | `—` | ✗ | 3733 | `—` | ✗ | 8252 |  |
-| 50 | `what's the temperature outside` | `get_weather` | `get_weather` | ✓ | 3 | `get_system_status` | ✗ | 372 | `—` | ✗ | 224 | `—` | ✗ | 4080 | `—` | ✗ | 8314 |  |
-| 51 | `forecast for Delhi tomorrow` | `get_weather` | `get_weather` | ✓ | 3 | `get_system_status` | ✗ | 634 | `—` | ✗ | 675 | `—` | ✗ | 4890 | `—` | ✗ | 7607 |  |
-| 52 | `is it sunny in New York` | `get_weather` | `get_weather` | ✓ | 11 | `get_system_status` | ✗ | 304 | `—` | ✗ | 1228 | `—` | ✗ | 4682 | `—` | ✗ | 10052 |  |
-| 53 | `what's the wheather like` | `get_weather` | `get_weather` | ✓ | 3 | `get_system_status` | ✗ | 433 | `—` | ✗ | 381 | `—` | ✗ | 4086 | `—` | ✗ | 8321 | STT typo |
-| 54 | `weather forecast please` | `get_weather` | `get_weather` | ✓ | 10 | `get_system_status` | ✗ | 318 | `—` | ✗ | 646 | `—` | ✗ | 3648 | `—` | ✗ | 8356 |  |
-| 55 | `open calculator` | `launch_app` | `launch_app` | ✓ | 4 | `calculator` | ✗ | 292 | `—` | ✗ | 808 | `—` | ✗ | 3496 | `—` | ✗ | 9815 |  |
-| 56 | `launch firefox` | `launch_app` | `launch_app` | ✓ | 3 | `firefox` | ✗ | 804 | `—` | ✗ | 126 | `—` | ✗ | 3886 | `—` | ✗ | 7564 |  |
-| 57 | `start the terminal` | `launch_app` | `launch_app` | ✓ | 9 | `get_system_status` | ✗ | 402 | `—` | ✗ | 138 | `—` | ✗ | 3542 | `—` | ✗ | 7565 |  |
-| 58 | `bring up the file manager` | `launch_app` | `launch_app` | ✓ | 2 | `get_system_status` | ✗ | 408 | `—` | ✗ | 505 | `—` | ✗ | 4506 | `—` | ✗ | 7782 |  |
-| 59 | `open vscode for me` | `launch_app` | `launch_app` | ✓ | 3 | `vscode` | ✗ | 1109 | `—` | ✗ | 377 | `—` | ✗ | 3683 | `—` | ✗ | 8097 |  |
-| 60 | `launch chromium` | `launch_app` | `launch_app` | ✓ | 1 | `chromium` | ✗ | 286 | `—` | ✗ | 119 | `—` | ✗ | 3933 | `—` | ✗ | 7903 |  |
-| 61 | `open spotify and discord` | `launch_app` | `launch_app` | ✓ | 2 | `spotify` | ✗ | 488 | `—` | ✗ | 139 | `—` | ✗ | 3636 | `—` | ✗ | 8575 | Multi-app |
-| 62 | `I deleted my screenshot folder` | `llm_chat` | `llm_chat` | ✓ | 9 | `get_system_status` | ✗ | 519 | `—` | ✗ | 2212 | `—` | ✗ | 3681 | `—` | ✗ | 8265 | Negative |
-| 63 | `take a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 2 | `get_system_status` | ✗ | 841 | `—` | ✗ | 713 | `—` | ✗ | 5510 | `—` | ✗ | 7884 |  |
-| 64 | `capture the screen` | `take_screenshot` | `take_screenshot` | ✓ | 7 | `get_system_status` | ✗ | 441 | `—` | ✗ | 262 | `—` | ✗ | 3731 | `—` | ✗ | 8433 |  |
-| 65 | `screenshot please` | `take_screenshot` | `take_screenshot` | ✓ | 2 | `get_system_status` | ✗ | 467 | `—` | ✗ | 152 | `—` | ✗ | 4069 | `—` | ✗ | 8890 |  |
-| 66 | `grab a screen capture` | `take_screenshot` | `take_screenshot` | ✓ | 2 | `get_system_status` | ✗ | 443 | `—` | ✗ | 139 | `—` | ✗ | 4475 | `—` | ✗ | 8515 |  |
-| 67 | `snap a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 2 | `get_system_status` | ✗ | 644 | `—` | ✗ | 1029 | `—` | ✗ | 3591 | `—` | ✗ | 7764 |  |
-| 68 | `take a picture of my screen` | `take_screenshot` | `take_screenshot` | ✓ | 8 | `get_system_status` | ✗ | 502 | `—` | ✗ | 891 | `—` | ✗ | 3926 | `—` | ✗ | 8664 |  |
-| 69 | `I lost the screenshot I took earlier` | `llm_chat` | `take_screenshot` | ✗ | 11 | `get_system_status` | ✗ | 1350 | `—` | ✗ | 156 | `—` | ✗ | 4625 | `—` | ✗ | 15735 | Negative |
-| 70 | `set volume to 50` | `set_volume` | `set_volume` | ✓ | 3 | `get_system_status` | ✗ | 377 | `—` | ✗ | 149 | `—` | ✗ | 3663 | `—` | ✗ | 7535 |  |
-| 71 | `turn the volume up` | `set_volume` | `set_volume` | ✓ | 3 | `get_system_status` | ✗ | 470 | `name` | ✗ | 167 | `—` | ✗ | 3760 | `—` | ✗ | 8694 |  |
-| 72 | `mute` | `set_volume` | `set_volume` | ✓ | 2 | `get_system_status` | ✗ | 340 | `—` | ✗ | 152 | `—` | ✗ | 3865 | `—` | ✗ | 7431 |  |
-| 73 | `unmute` | `set_volume` | `set_volume` | ✓ | 2 | `get_system_status` | ✗ | 445 | `—` | ✗ | 813 | `—` | ✗ | 3836 | `—` | ✗ | 7505 |  |
-| 74 | `lower the volume` | `set_volume` | `set_volume` | ✓ | 2 | `get_system_status` | ✗ | 1300 | `—` | ✗ | 116 | `—` | ✗ | 4626 | `—` | ✗ | 7561 |  |
-| 75 | `increase volume by 10` | `set_volume` | `set_volume` | ✓ | 2 | `get_system_status` | ✗ | 1297 | `—` | ✗ | 142 | `—` | ✗ | 5749 | `—` | ✗ | 7720 |  |
-| 76 | `make it louder` | `set_volume` | `llm_chat` | ✗ | 10 | `get_system_status` | ✗ | 481 | `—` | ✗ | 1400 | `—` | ✗ | 3783 | `—` | ✗ | 7425 |  |
-| 77 | `raise the question with the team` | `llm_chat` | `llm_chat` | ✓ | 8 | `get_system_status` | ✗ | 454 | `—` | ✗ | 118 | `—` | ✗ | 3815 | `—` | ✗ | 7555 | Negative |
-| 78 | `set voice mode to manual` | `set_voice_mode` | `set_voice_mode` | ✓ | 2 | `get_system_status` | ✗ | 1025 | `—` | ✗ | 162 | `—` | ✗ | 4288 | `—` | ✗ | 7548 |  |
-| 79 | `set voice to manual` | `set_voice_mode` | `set_voice_mode` | ✓ | 2 | `get_system_status` | ✗ | 372 | `—` | ✗ | 118 | `—` | ✗ | 4573 | `—` | ✗ | 8115 | Issue 2 — 'mode' dropped |
-| 80 | `switch voice on demand` | `set_voice_mode` | `set_voice_mode` | ✓ | 2 | `get_system_status` | ✗ | 436 | `—` | ✗ | 2171 | `—` | ✗ | 3406 | `—` | ✗ | 7347 | Issue 2 |
-| 81 | `change voice mode to persistent` | `set_voice_mode` | `set_voice_mode` | ✓ | 2 | `get_system_status` | ✗ | 740 | `—` | ✗ | 179 | `—` | ✗ | 4289 | `—` | ✗ | 7774 |  |
-| 82 | `use wake word mode` | `set_voice_mode` | `llm_chat` | ✗ | 8 | `wake word mode` | ✗ | 378 | `—` | ✗ | 150 | `—` | ✗ | 5073 | `—` | ✗ | 7743 |  |
-| 83 | `turn off the voice mode` | `set_voice_mode` | `disable_voice` | ✗ | 2 | `get_system_status` | ✗ | 595 | `—` | ✗ | 202 | `—` | ✗ | 3688 | `—` | ✗ | 7508 |  |
-| 84 | `enable voice` | `enable_voice` | `enable_voice` | ✓ | 2 | `get_system_status` | ✗ | 348 | `—` | ✗ | 190 | `—` | ✗ | 4826 | `—` | ✗ | 7262 |  |
-| 85 | `turn the microphone on` | `enable_voice` | `enable_voice` | ✓ | 6 | `get_system_status` | ✗ | 483 | `—` | ✗ | 248 | `—` | ✗ | 4017 | `—` | ✗ | 7570 |  |
-| 86 | `start listening` | `enable_voice` | `enable_voice` | ✓ | 3 | `get_system_status` | ✗ | 351 | `—` | ✗ | 1295 | `—` | ✗ | 3816 | `—` | ✗ | 7572 |  |
-| 87 | `Friday wake up` | `enable_voice` | `enable_voice` | ✓ | 2 | `get_system_status` | ✗ | 606 | `—` | ✗ | 162 | `—` | ✗ | 3589 | `—` | ✗ | 7383 |  |
-| 88 | `disable voice` | `disable_voice` | `disable_voice` | ✓ | 2 | `get_system_status` | ✗ | 331 | `—` | ✗ | 3466 | `—` | ✗ | 4598 | `—` | ✗ | 7397 |  |
-| 89 | `turn the microphone off` | `disable_voice` | `disable_voice` | ✓ | 7 | `get_system_status` | ✗ | 377 | `—` | ✗ | 399 | `—` | ✗ | 3822 | `—` | ✗ | 7357 |  |
-| 90 | `stop listening` | `disable_voice` | `disable_voice` | ✓ | 2 | `get_system_status` | ✗ | 327 | `—` | ✗ | 623 | `—` | ✗ | 4041 | `—` | ✗ | 7491 |  |
-| 91 | `mute the mic` | `disable_voice` | `set_volume` | ✗ | 1 | `get_system_status` | ✗ | 440 | `—` | ✗ | 2081 | `—` | ✗ | 4112 | `—` | ✗ | 7371 |  |
-| 92 | `remind me to drink water in 15 minutes` | `set_reminder` | `set_reminder` | ✓ | 4 | `get_system_status` | ✗ | 420 | `—` | ✗ | 656 | `—` | ✗ | 4007 | `—` | ✗ | 7804 |  |
-| 93 | `set a reminder for 5 pm` | `set_reminder` | `set_reminder` | ✓ | 1 | `get_system_status` | ✗ | 416 | `—` | ✗ | 405 | `—` | ✗ | 4038 | `—` | ✗ | 8850 |  |
-| 94 | `remind me to call mom at 4pm` | `set_reminder` | `set_reminder` | ✓ | 1 | `get_system_status` | ✗ | 325 | `—` | ✗ | 841 | `—` | ✗ | 5261 | `—` | ✗ | 8367 |  |
-| 95 | `remind me about the gym` | `set_reminder` | `set_reminder` | ✓ | 1 | `get_system_status` | ✗ | 3128 | `—` | ✗ | 371 | `—` | ✗ | 3730 | `—` | ✗ | 7774 |  |
-| 96 | `set a 10 minute reminder` | `set_reminder` | `list_reminders` | ✗ | 8 | `get_system_status` | ✗ | 399 | `—` | ✗ | 195 | `—` | ✗ | 4378 | `—` | ✗ | 8169 |  |
-| 97 | `remind me to take medicine at 9 every night` | `set_reminder` | `set_reminder` | ✓ | 2 | `get_system_status` | ✗ | 502 | `—` | ✗ | 647 | `—` | ✗ | 3935 | `—` | ✗ | 7764 |  |
-| 98 | `remind me` | `set_reminder` | `set_reminder` | ✓ | 1 | `get_system_status` | ✗ | 372 | `—` | ✗ | 383 | `—` | ✗ | 4131 | `—` | ✗ | 7186 |  |
-| 99 | `set up a reminer to stretch` | `set_reminder` | `list_reminders` | ✗ | 7 | `get_system_status` | ✗ | 445 | `—` | ✗ | 532 | `—` | ✗ | 3930 | `—` | ✗ | 7845 | STT typo |
-| 100 | `list my reminders` | `list_reminders` | `list_reminders` | ✓ | 2 | `get_system_status` | ✗ | 1345 | `—` | ✗ | 2729 | `—` | ✗ | 3893 | `—` | ✗ | 7398 | Issue 7 |
-| 101 | `what are my reminders` | `list_reminders` | `list_reminders` | ✓ | 2 | `get_system_status` | ✗ | 435 | `—` | ✗ | 705 | `—` | ✗ | 3854 | `—` | ✗ | 7529 |  |
-| 102 | `show me my reminders` | `list_reminders` | `list_reminders` | ✓ | 7 | `get_system_status` | ✗ | 328 | `—` | ✗ | 755 | `—` | ✗ | 4942 | `—` | ✗ | 7578 |  |
-| 103 | `upcoming reminders` | `list_reminders` | `list_reminders` | ✓ | 2 | `get_system_status` | ✗ | 450 | `—` | ✗ | 504 | `—` | ✗ | 4317 | `—` | ✗ | 7333 |  |
-| 104 | `what reminders do I have` | `list_reminders` | `list_reminders` | ✓ | 2 | `get_system_status` | ✗ | 482 | `—` | ✗ | 568 | `—` | ✗ | 4510 | `—` | ✗ | 7473 |  |
-| 105 | `what's on my calendar` | `list_calendar_events` | `list_calendar_events` | ✓ | 2 | `get_system_status` | ✗ | 405 | `—` | ✗ | 990 | `—` | ✗ | 5274 | `—` | ✗ | 7560 | Issue 7 |
-| 106 | `list calendar events` | `list_calendar_events` | `list_calendar_events` | ✓ | 1 | `get_system_status` | ✗ | 381 | `—` | ✗ | 941 | `—` | ✗ | 4364 | `—` | ✗ | 7601 |  |
-| 107 | `show me my agenda` | `list_calendar_events` | `list_calendar_events` | ✓ | 7 | `get_system_status` | ✗ | 364 | `—` | ✗ | 600 | `—` | ✗ | 3904 | `—` | ✗ | 7486 |  |
-| 108 | `what's my schedule today` | `list_calendar_events` | `list_calendar_events` | ✓ | 9 | `get_system_status` | ✗ | 343 | `—` | ✗ | 1479 | `—` | ✗ | 4664 | `—` | ✗ | 7626 |  |
-| 109 | `any meetings today` | `list_calendar_events` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 307 | `—` | ✗ | 270 | `—` | ✗ | 5167 | `—` | ✗ | 8407 |  |
-| 110 | `upcoming events` | `list_calendar_events` | `list_calendar_events` | ✓ | 2 | `get_system_status` | ✗ | 423 | `—` | ✗ | 191 | `—` | ✗ | 3834 | `—` | ✗ | 7466 |  |
-| 111 | `schedule a meeting in 15 minutes` | `create_calendar_event` | `create_calendar_event` | ✓ | 2 | `get_system_status` | ✗ | 388 | `—` | ✗ | 1053 | `—` | ✗ | 4000 | `—` | ✗ | 7596 | Issue 11 — title=Meeting |
-| 112 | `add a calendar event Lunch tomorrow at noon` | `create_calendar_event` | `create_calendar_event` | ✓ | 2 | `get_system_status` | ✗ | 434 | `—` | ✗ | 395 | `—` | ✗ | 4091 | `—` | ✗ | 7712 |  |
-| 113 | `create a calendar event titled Q4 review at 3pm` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 396 | `—` | ✗ | 304 | `—` | ✗ | 4216 | `—` | ✗ | 8692 |  |
-| 114 | `create a calender evnet` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 488 | `—` | ✗ | 197 | `—` | ✗ | 3772 | `—` | ✗ | 8858 | Issue 8 — STT typo |
-| 115 | `book a dentist appointment for Friday at 3pm` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 1043 | `—` | ✗ | 466 | `—` | ✗ | 4037 | `—` | ✗ | 7740 |  |
-| 116 | `put a meeting on the calendar tomorrow at 10am` | `create_calendar_event` | `llm_chat` | ✗ | 9 | `get_system_status` | ✗ | 470 | `—` | ✗ | 345 | `—` | ✗ | 5364 | `—` | ✗ | 8071 |  |
-| 117 | `schedule a 1 on 1 with Sam` | `create_calendar_event` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 607 | `—` | ✗ | 795 | `—` | ✗ | 3719 | `—` | ✗ | 7812 |  |
-| 118 | `set up an event for next Monday` | `create_calendar_event` | `create_calendar_event` | ✓ | 2 | `get_system_status` | ✗ | 486 | `—` | ✗ | 176 | `—` | ✗ | 3720 | `—` | ✗ | 7757 |  |
-| 119 | `move my 3pm to 4pm` | `move_calendar_event` | `move_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 379 | `—` | ✗ | 159 | `—` | ✗ | 3871 | `—` | ✗ | 7615 |  |
-| 120 | `reschedule the standup to 11am` | `move_calendar_event` | `move_calendar_event` | ✓ | 2 | `get_system_status` | ✗ | 477 | `—` | ✗ | 584 | `—` | ✗ | 4079 | `—` | ✗ | 8381 |  |
-| 121 | `shift the dentist to next week` | `move_calendar_event` | `llm_chat` | ✗ | 10 | `get_system_status` | ✗ | 408 | `—` | ✗ | 173 | `—` | ✗ | 4696 | `—` | ✗ | 7798 |  |
-| 122 | `push the gym block back an hour` | `move_calendar_event` | `move_calendar_event` | ✓ | 2 | `get_system_status` | ✗ | 678 | `—` | ✗ | 308 | `—` | ✗ | 4555 | `—` | ✗ | 7806 |  |
-| 123 | `cancel the next event` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 410 | `—` | ✗ | 162 | `—` | ✗ | 4328 | `—` | ✗ | 7494 |  |
-| 124 | `cancel the dentist appointment` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 484 | `—` | ✗ | 1964 | `—` | ✗ | 3532 | `—` | ✗ | 8113 |  |
-| 125 | `delete the 3pm meeting` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 356 | `—` | ✗ | 666 | `—` | ✗ | 4208 | `—` | ✗ | 7572 |  |
-| 126 | `remove tomorrow's standup` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 390 | `—` | ✗ | 223 | `—` | ✗ | 3752 | `—` | ✗ | 8124 |  |
-| 127 | `drop the gym block` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `get_system_status` | ✗ | 395 | `—` | ✗ | 502 | `—` | ✗ | 4086 | `—` | ✗ | 7772 |  |
-| 128 | `save note milk eggs bread` | `save_note` | `end_dictation` | ✗ | 1 | `get_system_status` | ✗ | 417 | `—` | ✗ | 828 | `—` | ✗ | 4578 | `—` | ✗ | 7683 |  |
-| 129 | `make a quick note that I owe Sam 20 dollars` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 470 | `—` | ✗ | 474 | `—` | ✗ | 4478 | `—` | ✗ | 8065 |  |
-| 130 | `note this down: ship the PR by Friday` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 443 | `—` | ✗ | 2994 | `—` | ✗ | 4090 | `—` | ✗ | 7946 |  |
-| 131 | `remember that I prefer dark mode` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 490 | `—` | ✗ | 652 | `—` | ✗ | 4107 | `—` | ✗ | 7900 |  |
-| 132 | `jot down: pick up dry cleaning` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 366 | `—` | ✗ | 667 | `—` | ✗ | 3866 | `—` | ✗ | 7713 |  |
-| 133 | `add to my notes: read the new RFC` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 424 | `—` | ✗ | 462 | `—` | ✗ | 3601 | `—` | ✗ | 7608 |  |
-| 134 | `save a note about the meeting` | `save_note` | `save_note` | ✓ | 3 | `get_system_status` | ✗ | 365 | `—` | ✗ | 840 | `—` | ✗ | 4374 | `—` | ✗ | 9385 |  |
-| 135 | `read my notes` | `read_notes` | `read_notes` | ✓ | 1 | `read_notes` | ✓ | 455 | `—` | ✗ | 694 | `—` | ✗ | 5364 | `—` | ✗ | 8743 |  |
-| 136 | `show me my notes` | `read_notes` | `read_notes` | ✓ | 11 | `get_system_status` | ✗ | 321 | `—` | ✗ | 133 | `—` | ✗ | 4668 | `—` | ✗ | 8968 |  |
-| 137 | `list my notes` | `read_notes` | `read_notes` | ✓ | 2 | `get_system_status` | ✗ | 355 | `—` | ✗ | 563 | `—` | ✗ | 4949 | `—` | ✗ | 7653 |  |
-| 138 | `what notes do I have` | `read_notes` | `read_notes` | ✓ | 10 | `get_system_status` | ✗ | 354 | `—` | ✗ | 907 | `—` | ✗ | 5682 | `—` | ✗ | 7656 |  |
-| 139 | `create a file` | `manage_file` | `manage_file` | ✓ | 3 | `get_system_status` | ✗ | 484 | `—` | ✗ | 1274 | `—` | ✗ | 4249 | `—` | ✗ | 7413 |  |
-| 140 | `create a file named ideas.md` | `manage_file` | `manage_file` | ✓ | 3 | `get_system_status` | ✗ | 362 | `—` | ✗ | 170 | `—` | ✗ | 4127 | `—` | ✗ | 7758 |  |
-| 141 | `make a new file called todo.txt` | `manage_file` | `manage_file` | ✓ | 3 | `get_system_status` | ✗ | 403 | `—` | ✗ | 429 | `—` | ✗ | 4226 | `—` | ✗ | 9175 |  |
-| 142 | `save that to a file called reverse.py` | `manage_file` | `manage_file` | ✓ | 3 | `reverse.py` | ✗ | 1465 | `—` | ✗ | 141 | `—` | ✗ | 4329 | `—` | ✗ | 7843 | Issue 10 |
-| 143 | `write the answer to notes.md` | `manage_file` | `manage_file` | ✓ | 3 | `get_system_status` | ✗ | 412 | `—` | ✗ | 190 | `—` | ✗ | 4779 | `—` | ✗ | 7947 |  |
-| 144 | `append second line to scratch.md` | `manage_file` | `manage_file` | ✓ | 3 | `get_system_status` | ✗ | 307 | `—` | ✗ | 163 | `—` | ✗ | 3957 | `—` | ✗ | 7833 | Issue 5 |
-| 145 | `open the README file` | `open_file` | `open_file` | ✓ | 2 | `get_system_status` | ✗ | 402 | `—` | ✗ | 131 | `—` | ✗ | 3752 | `—` | ✗ | 8012 |  |
-| 146 | `open notes.md` | `open_file` | `open_file` | ✓ | 2 | `notes.md` | ✗ | 197 | `—` | ✗ | 213 | `—` | ✗ | 4967 | `—` | ✗ | 7743 |  |
-| 147 | `read me the latest report` | `read_file` | `read_file` | ✓ | 1 | `get_system_status` | ✗ | 413 | `—` | ✗ | 232 | `—` | ✗ | 3601 | `—` | ✗ | 7841 |  |
-| 148 | `show the contents of config.yaml` | `read_file` | `llm_chat` | ✗ | 11 | `config.yaml` | ✗ | 315 | `—` | ✗ | 137 | `—` | ✗ | 4377 | `—` | ✗ | 8015 |  |
-| 149 | `summarize that file for me` | `summarize_file` | `summarize_file` | ✓ | 2 | `summarize_file` | ✓ | 347 | `—` | ✗ | 158 | `—` | ✗ | 3853 | `—` | ✗ | 8239 |  |
-| 150 | `give me a summary of the report` | `summarize_file` | `summarize_file` | ✓ | 2 | `get_system_status` | ✗ | 324 | `—` | ✗ | 325 | `—` | ✗ | 3710 | `—` | ✗ | 8093 |  |
-| 151 | `find the resume pdf` | `search_file` | `search_file` | ✓ | 8 | `get_system_status` | ✗ | 338 | `—` | ✗ | 791 | `—` | ✗ | 3634 | `—` | ✗ | 8584 |  |
-| 152 | `search for budget xlsx` | `search_file` | `search_file` | ✓ | 8 | `get_system_status` | ✗ | 379 | `—` | ✗ | 150 | `—` | ✗ | 3946 | `—` | ✗ | 7750 |  |
-| 153 | `locate my driver's license image` | `search_file` | `search_file` | ✓ | 9 | `get_system_status` | ✗ | 350 | `—` | ✗ | 1165 | `—` | ✗ | 7075 | `—` | ✗ | 8055 |  |
-| 154 | `what's in my Downloads folder` | `list_folder_contents` | `llm_chat` | ✗ | 9 | `get_system_status` | ✗ | 510 | `—` | ✗ | 542 | `—` | ✗ | 4262 | `—` | ✗ | 7852 |  |
-| 155 | `list the desktop` | `list_folder_contents` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 302 | `—` | ✗ | 151 | `—` | ✗ | 3634 | `—` | ✗ | 7794 |  |
-| 156 | `show me the documents folder` | `list_folder_contents` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 343 | `—` | ✗ | 154 | `—` | ✗ | 3834 | `—` | ✗ | 8193 |  |
-| 157 | `open the downloads folder` | `open_folder` | `open_file` | ✗ | 2 | `get_system_status` | ✗ | 394 | `—` | ✗ | 743 | `—` | ✗ | 4018 | `—` | ✗ | 8677 |  |
-| 158 | `open my projects folder` | `open_folder` | `open_file` | ✗ | 2 | `get_system_status` | ✗ | 414 | `—` | ✗ | 842 | `—` | ✗ | 3560 | `—` | ✗ | 7325 |  |
-| 159 | `play sahiba on youtube` | `play_youtube` | `play_youtube` | ✓ | 1 | `play sahiba on youtube` | ✗ | 353 | `—` | ✗ | 140 | `—` | ✗ | 3654 | `—` | ✗ | 7627 |  |
-| 160 | `play despacito on youtube` | `play_youtube` | `play_youtube` | ✓ | 1 | `play_youtube` | ✓ | 548 | `—` | ✗ | 185 | `—` | ✗ | 5981 | `—` | ✗ | 7551 |  |
-| 161 | `pull up that song on youtube` | `play_youtube` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 466 | `—` | ✗ | 133 | `—` | ✗ | 3727 | `—` | ✗ | 8289 |  |
-| 162 | `play sahiba on youtube music` | `play_youtube_music` | `play_youtube_music` | ✓ | 2 | `play sahiba on youtube music` | ✗ | 332 | `—` | ✗ | 175 | `—` | ✗ | 4233 | `—` | ✗ | 8012 |  |
-| 163 | `play lofi on youtube music` | `play_youtube_music` | `play_youtube_music` | ✓ | 1 | `—` | ✗ | 1415 | `—` | ✗ | 153 | `—` | ✗ | 4031 | `—` | ✗ | 7770 |  |
-| 164 | `google capital of france` | `search_google` | `search_google` | ✓ | 1 | `search_google` | ✓ | 439 | `—` | ✗ | 134 | `—` | ✗ | 3712 | `—` | ✗ | 9074 |  |
-| 165 | `search google for python typing` | `search_google` | `search_google` | ✓ | 1 | `get_system_status` | ✗ | 339 | `—` | ✗ | 161 | `—` | ✗ | 4271 | `—` | ✗ | 7902 |  |
-| 166 | `look up the weather on google` | `search_google` | `search_google` | ✓ | 1 | `get_system_status` | ✗ | 1434 | `—` | ✗ | 612 | `—` | ✗ | 3772 | `—` | ✗ | 8236 |  |
-| 167 | `open github.com` | `open_browser_url` | `open_file` | ✗ | 2 | `get_system_status` | ✗ | 374 | `—` | ✗ | 266 | `—` | ✗ | 4038 | `—` | ✗ | 11004 |  |
-| 168 | `go to nytimes.com` | `open_browser_url` | `llm_chat` | ✗ | 9 | `get_system_status` | ✗ | 428 | `—` | ✗ | 132 | `—` | ✗ | 3619 | `—` | ✗ | 7842 |  |
-| 169 | `pause` | `browser_media_control` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 436 | `—` | ✗ | 301 | `—` | ✗ | 4155 | `—` | ✗ | 8107 |  |
-| 170 | `resume the video` | `browser_media_control` | `llm_chat` | ✗ | 10 | `get_system_status` | ✗ | 652 | `—` | ✗ | 195 | `—` | ✗ | 5314 | `—` | ✗ | 7747 |  |
-| 171 | `skip 30 seconds forward` | `browser_media_control` | `search_file` | ✗ | 7 | `get_system_status` | ✗ | 327 | `—` | ✗ | 122 | `—` | ✗ | 9722 | `—` | ✗ | 8564 |  |
-| 172 | `next track` | `browser_media_control` | `search_file` | ✗ | 2 | `get_system_status` | ✗ | 383 | `—` | ✗ | 161 | `—` | ✗ | 10065 | `—` | ✗ | 7689 |  |
-| 173 | `next year is my promotion` | `llm_chat` | `llm_chat` | ✓ | 9 | `get_system_status` | ✗ | 676 | `—` | ✗ | 186 | `—` | ✗ | 8181 | `—` | ✗ | 8472 | Issue 9 — must NOT hijack |
-| 174 | `remember that I work as a backend engineer at Acme` | `save_note` | `save_note` | ✓ | 2 | `get_system_status` | ✗ | 415 | `—` | ✗ | 844 | `—` | ✗ | 9400 | `—` | ✗ | 7985 | Issue 9 |
-| 175 | `read my latest email` | `read_latest_email` | `read_latest_email` | ✓ | 1 | `get_system_status` | ✗ | 862 | `—` | ✗ | 628 | `—` | ✗ | 13193 | `—` | ✗ | 7888 |  |
-| 176 | `what's the newest email in my inbox` | `read_latest_email` | `read_latest_email` | ✓ | 7 | `get_system_status` | ✗ | 440 | `—` | ✗ | 1910 | `—` | ✗ | 10800 | `—` | ✗ | 7581 |  |
-| 177 | `read the most recent email` | `read_latest_email` | `read_latest_email` | ✓ | 8 | `get_system_status` | ✗ | 636 | `—` | ✗ | 2689 | `—` | ✗ | 3677 | `—` | ✗ | 7892 |  |
-| 178 | `summarize my inbox` | `summarize_inbox` | `summarize_inbox` | ✓ | 2 | `summarize_email` | ✗ | 1399 | `—` | ✗ | 154 | `—` | ✗ | 4270 | `—` | ✗ | 8029 |  |
-| 179 | `give me an inbox summary` | `summarize_inbox` | `summarize_inbox` | ✓ | 2 | `get_system_status` | ✗ | 326 | `—` | ✗ | 155 | `—` | ✗ | 4235 | `—` | ✗ | 8366 |  |
-| 180 | `summarize all my unread emails` | `summarize_inbox` | `summarize_inbox` | ✓ | 7 | `summarize_email` | ✗ | 343 | `—` | ✗ | 180 | `—` | ✗ | 3675 | `—` | ✗ | 8255 |  |
-| 181 | `start a focus session` | `start_focus_session` | `start_focus_session` | ✓ | 3 | `get_system_status` | ✗ | 351 | `—` | ✗ | 118 | `—` | ✗ | 3641 | `—` | ✗ | 7808 |  |
-| 182 | `begin a pomodoro` | `start_focus_session` | `start_focus_session` | ✓ | 2 | `get_system_status` | ✗ | 545 | `—` | ✗ | 208 | `—` | ✗ | 3939 | `—` | ✗ | 7672 |  |
-| 183 | `focus mode on` | `start_focus_session` | `start_focus_session` | ✓ | 1 | `get_system_status` | ✗ | 431 | `—` | ✗ | 119 | `—` | ✗ | 3913 | `—` | ✗ | 8249 |  |
-| 184 | `start a 25 minute focus block` | `start_focus_session` | `launch_app` | ✗ | 3 | `get_system_status` | ✗ | 669 | `—` | ✗ | 200 | `—` | ✗ | 4018 | `—` | ✗ | 7580 |  |
-| 185 | `end focus` | `end_focus_session` | `end_focus_session` | ✓ | 1 | `get_system_status` | ✗ | 643 | `—` | ✗ | 132 | `—` | ✗ | 5135 | `—` | ✗ | 7651 |  |
-| 186 | `stop the focus session` | `end_focus_session` | `end_focus_session` | ✓ | 7 | `get_system_status` | ✗ | 412 | `—` | ✗ | 414 | `—` | ✗ | 3423 | `—` | ✗ | 7383 |  |
-| 187 | `exit focus mode` | `end_focus_session` | `end_focus_session` | ✓ | 2 | `get_system_status` | ✗ | 525 | `—` | ✗ | 937 | `—` | ✗ | 3465 | `—` | ✗ | 8110 |  |
-| 188 | `how much focus is left` | `focus_session_status` | `focus_session_status` | ✓ | 1 | `get_system_status` | ✗ | 324 | `—` | ✗ | 682 | `—` | ✗ | 3504 | `—` | ✗ | 7533 |  |
-| 189 | `time left in focus` | `focus_session_status` | `focus_session_status` | ✓ | 7 | `get_system_status` | ✗ | 436 | `—` | ✗ | 896 | `—` | ✗ | 3485 | `—` | ✗ | 7632 |  |
-| 190 | `am I in focus mode` | `focus_session_status` | `start_focus_session` | ✗ | 2 | `get_system_status` | ✗ | 1264 | `—` | ✗ | 1175 | `—` | ✗ | 3554 | `—` | ✗ | 8128 |  |
-| 191 | `take a memo` | `start_dictation` | `start_dictation` | ✓ | 1 | `get_system_status` | ✗ | 322 | `—` | ✗ | 131 | `—` | ✗ | 3418 | `—` | ✗ | 7890 |  |
-| 192 | `start dictation` | `start_dictation` | `start_dictation` | ✓ | 2 | `start_dictation` | ✓ | 401 | `—` | ✗ | 148 | `—` | ✗ | 3451 | `—` | ✗ | 7937 |  |
-| 193 | `begin a journal entry` | `start_dictation` | `start_dictation` | ✓ | 1 | `get_system_status` | ✗ | 349 | `—` | ✗ | 139 | `—` | ✗ | 3462 | `—` | ✗ | 7817 |  |
-| 194 | `Friday end memo` | `end_dictation` | `end_dictation` | ✓ | 1 | `get_system_status` | ✗ | 434 | `—` | ✗ | 201 | `—` | ✗ | 4152 | `—` | ✗ | 8445 |  |
-| 195 | `stop dictation` | `end_dictation` | `end_dictation` | ✓ | 2 | `get_system_status` | ✗ | 542 | `—` | ✗ | 1114 | `—` | ✗ | 4268 | `—` | ✗ | 7465 |  |
-| 196 | `finish the memo` | `end_dictation` | `end_dictation` | ✓ | 2 | `get_system_status` | ✗ | 1716 | `—` | ✗ | 137 | `—` | ✗ | 3449 | `—` | ✗ | 7519 |  |
-| 197 | `cancel memo` | `cancel_dictation` | `cancel_dictation` | ✓ | 2 | `get_system_status` | ✗ | 1607 | `—` | ✗ | 134 | `—` | ✗ | 3449 | `—` | ✗ | 7448 |  |
-| 198 | `discard the dictation` | `cancel_dictation` | `cancel_dictation` | ✓ | 1 | `get_system_status` | ✗ | 2316 | `—` | ✗ | 151 | `—` | ✗ | 3962 | `—` | ✗ | 7994 |  |
-| 199 | `what do you remember about me` | `show_memories` | `show_memories` | ✓ | 1 | `get_system_status` | ✗ | 446 | `—` | ✗ | 878 | `—` | ✗ | 3526 | `—` | ✗ | 7929 |  |
-| 200 | `what do you know about me` | `show_memories` | `show_memories` | ✓ | 1 | `get_system_status` | ✗ | 300 | `—` | ✗ | 723 | `—` | ✗ | 3875 | `—` | ✗ | 7889 |  |
-| 201 | `show me my memories` | `show_memories` | `show_memories` | ✓ | 1 | `get_system_status` | ✗ | 400 | `—` | ✗ | 1138 | `—` | ✗ | 3481 | `—` | ✗ | 7908 |  |
-| 202 | `what are my preferences` | `show_memories` | `show_memories` | ✓ | 1 | `get_system_status` | ✗ | 704 | `—` | ✗ | 1055 | `—` | ✗ | 3734 | `—` | ✗ | 7459 |  |
-| 203 | `forget what I told you` | `delete_memory` | `delete_memory` | ✓ | 1 | `get_system_status` | ✗ | 461 | `—` | ✗ | 351 | `—` | ✗ | 3863 | `—` | ✗ | 7706 |  |
-| 204 | `delete that memory` | `delete_memory` | `delete_memory` | ✓ | 1 | `get_system_status` | ✗ | 363 | `—` | ✗ | 391 | `—` | ✗ | 3524 | `—` | ✗ | 7444 |  |
-| 205 | `stop remembering my address` | `delete_memory` | `delete_memory` | ✓ | 2 | `get_system_status` | ✗ | 500 | `—` | ✗ | 737 | `—` | ✗ | 3542 | `—` | ✗ | 7574 |  |
-| 206 | `what can you do` | `show_capabilities` | `llm_chat` | ✗ | 8 | `get_system_status` | ✗ | 491 | `—` | ✗ | 161 | `—` | ✗ | 3536 | `—` | ✗ | 7447 |  |
-| 207 | `list your tools` | `show_capabilities` | `llm_chat` | ✗ | 21 | `get_system_status` | ✗ | 530 | `—` | ✗ | 152 | `—` | ✗ | 4060 | `—` | ✗ | 7737 |  |
-| 208 | `what features do you have` | `show_capabilities` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 447 | `—` | ✗ | 671 | `—` | ✗ | 4666 | `—` | ✗ | 7601 |  |
-| 209 | `show me your commands` | `show_capabilities` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 969 | `—` | ✗ | 510 | `—` | ✗ | 3729 | `—` | ✗ | 7507 |  |
-| 210 | `tell me what you can do` | `show_capabilities` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 394 | `—` | ✗ | 154 | `—` | ✗ | 3735 | `—` | ✗ | 7663 |  |
-| 211 | `help me understand quantum entanglement` | `llm_chat` | `llm_chat` | ✓ | 15 | `get_system_status` | ✗ | 446 | `—` | ✗ | 196 | `—` | ✗ | 4071 | `—` | ✗ | 7627 | T-19.7 — must NOT show capabilities |
-| 212 | `goodbye friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 3 | `get_system_status` | ✗ | 672 | `—` | ✗ | 229 | `—` | ✗ | 3371 | `—` | ✗ | 7338 |  |
-| 213 | `bye` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 3 | `get_system_status` | ✗ | 843 | `—` | ✗ | 141 | `—` | ✗ | 3366 | `—` | ✗ | 7408 |  |
-| 214 | `shut down` | `shutdown_assistant` | `llm_chat` | ✗ | 17 | `get_system_status` | ✗ | 1337 | `—` | ✗ | 139 | `—` | ✗ | 3656 | `—` | ✗ | 8658 |  |
-| 215 | `yes` | `confirm_yes` | `confirm_yes` | ✓ | 3 | `get_system_status` | ✗ | 793 | `—` | ✗ | 533 | `—` | ✗ | 3710 | `—` | ✗ | 7712 |  |
-| 216 | `yeah do it` | `confirm_yes` | `confirm_yes` | ✓ | 11 | `get_system_status` | ✗ | 432 | `—` | ✗ | 104 | `—` | ✗ | 4259 | `—` | ✗ | 7735 |  |
-| 217 | `sure go ahead` | `confirm_yes` | `llm_chat` | ✗ | 13 | `get_system_status` | ✗ | 1086 | `—` | ✗ | 139 | `—` | ✗ | 3428 | `—` | ✗ | 8322 |  |
-| 218 | `no` | `confirm_no` | `confirm_no` | ✓ | 3 | `get_system_status` | ✗ | 379 | `—` | ✗ | 699 | `—` | ✗ | 3905 | `—` | ✗ | 7529 |  |
-| 219 | `nope` | `confirm_no` | `confirm_no` | ✓ | 3 | `get_system_status` | ✗ | 392 | `—` | ✗ | 114 | `—` | ✗ | 3486 | `—` | ✗ | 7445 |  |
-| 220 | `cancel` | `confirm_no` | `confirm_no` | ✓ | 3 | `get_system_status` | ✗ | 761 | `—` | ✗ | 140 | `—` | ✗ | 3415 | `—` | ✗ | 7505 |  |
-| 221 | `the first one` | `select_file_candidate` | `select_file_candidate` | ✓ | 2 | `get_system_status` | ✗ | 437 | `—` | ✗ | 158 | `—` | ✗ | 3755 | `—` | ✗ | 7507 |  |
-| 222 | `the second one` | `select_file_candidate` | `select_file_candidate` | ✓ | 3 | `get_system_status` | ✗ | 355 | `—` | ✗ | 138 | `—` | ✗ | 3449 | `—` | ✗ | 7275 |  |
-| 223 | `the pdf one` | `select_file_candidate` | `select_file_candidate` | ✓ | 2 | `pdf` | ✗ | 380 | `—` | ✗ | 807 | `—` | ✗ | 3611 | `—` | ✗ | 7691 |  |
-| 224 | `hello` | `greet` | `greet` | ✓ | 2 | `get_system_status` | ✗ | 362 | `—` | ✗ | 442 | `—` | ✗ | 3956 | `—` | ✗ | 7148 |  |
-| 225 | `hi there` | `greet` | `greet` | ✓ | 1 | `get_system_status` | ✗ | 338 | `—` | ✗ | 685 | `—` | ✗ | 3557 | `—` | ✗ | 7383 |  |
-| 226 | `hey friday` | `greet` | `greet` | ✓ | 1 | `get_system_status` | ✗ | 422 | `—` | ✗ | 646 | `—` | ✗ | 5534 | `—` | ✗ | 7650 |  |
-| 227 | `good morning` | `greet` | `greet` | ✓ | 1 | `get_system_status` | ✗ | 1018 | `—` | ✗ | 156 | `—` | ✗ | 3918 | `—` | ✗ | 7375 |  |
-| 228 | `good evening friday` | `greet` | `greet` | ✓ | 1 | `get_system_status` | ✗ | 571 | `—` | ✗ | 200 | `—` | ✗ | 3502 | `—` | ✗ | 7588 |  |
-| 229 | `tell me a story` | `llm_chat` | `llm_chat` | ✓ | 9 | `get_system_status` | ✗ | 712 | `—` | ✗ | 420 | `—` | ✗ | 4667 | `—` | ✗ | 9555 |  |
-| 230 | `explain how photosynthesis works` | `llm_chat` | `llm_chat` | ✓ | 10 | `—` | ✗ | 888 | `—` | ✗ | 185 | `—` | ✗ | 4363 | `—` | ✗ | 7955 |  |
-| 231 | `why is the sky blue` | `llm_chat` | `llm_chat` | ✓ | 8 | `get_system_status` | ✗ | 472 | `—` | ✗ | 354 | `—` | ✗ | 3589 | `—` | ✗ | 7978 |  |
-| 232 | `what's the meaning of life` | `llm_chat` | `llm_chat` | ✓ | 9 | `get_system_status` | ✗ | 742 | `—` | ✗ | 702 | `—` | ✗ | 3960 | `—` | ✗ | 8186 |  |
-| 233 | `I'm feeling tired today` | `llm_chat` | `llm_chat` | ✓ | 9 | `get_system_status` | ✗ | 645 | `—` | ✗ | 406 | `—` | ✗ | 5088 | `—` | ✗ | 7737 |  |
-| 234 | `do you think AI will replace jobs` | `llm_chat` | `llm_chat` | ✓ | 12 | `get_system_status` | ✗ | 788 | `—` | ✗ | 1083 | `—` | ✗ | 4760 | `—` | ✗ | 8060 |  |
-| 235 | `give me a joke` | `llm_chat` | `llm_chat` | ✓ | 13 | `get_system_status` | ✗ | 471 | `—` | ✗ | 886 | `—` | ✗ | 4573 | `—` | ✗ | 7831 |  |
-| 236 | `what should I have for dinner` | `llm_chat` | `llm_chat` | ✓ | 13 | `get_system_status` | ✗ | 492 | `—` | ✗ | 573 | `—` | ✗ | 3596 | `—` | ✗ | 7764 |  |
-| 237 | `I am bored` | `llm_chat` | `llm_chat` | ✓ | 12 | `get_system_status` | ✗ | 332 | `—` | ✗ | 150 | `—` | ✗ | 3541 | `—` | ✗ | 8448 |  |
-| 238 | `tell me about general relativity` | `llm_chat` | `llm_chat` | ✓ | 13 | `get_system_status` | ✗ | 1007 | `—` | ✗ | 142 | `—` | ✗ | 4885 | `—` | ✗ | 8039 |  |
-| 239 | `how do I learn rust` | `llm_chat` | `llm_chat` | ✓ | 12 | `learn_rust` | ✗ | 1112 | `—` | ✗ | 792 | `—` | ✗ | 3563 | `—` | ✗ | 8260 |  |
-| 240 | `write a haiku` | `llm_chat` | `llm_chat` | ✓ | 20 | `write_haiku` | ✗ | 678 | `—` | ✗ | 185 | `—` | ✗ | 4246 | `—` | ✗ | 7896 |  |
+| # | Utterance | Expected | current | current ✓ | current ms | gemma | gemma ✓ | gemma ms | fn-gemma | fn-gemma ✓ | fn-gemma ms | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `real quick - what you've learned about me` | `show_memories` | `llm_chat` | ✗ | 14 | `show_memories` | ✓ | 406 | `show_memories` | ✓ | 4120 | synth/query |
+| 2 | `uh hey, the temperature in tokyo` | `get_weather` | `get_weather` | ✓ | 2 | `get_weather` | ✓ | 71 | `get_weather` | ✓ | 400 | synth/query |
+| 3 | `real quick, mute the audio` | `set_volume` | `set_volume` | ✓ | 2 | `set_volume` | ✓ | 72 | `set_volume` | ✓ | 372 | synth/command |
+| 4 | `any chance you could end the work session` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 97 | `end_focus_session` | ✓ | 466 | synth/command |
+| 5 | `do me a favor and forget what i just said` | `delete_memory` | `llm_chat` | ✗ | 3 | `delete_memory` | ✓ | 87 | `confirm_no` | ✗ | 392 | synth/command |
+| 6 | `i need you to switch to on demand listening` | `set_voice_mode` | `llm_chat` | ✗ | 4 | `set_voice_mode` | ✓ | 97 | `focus_session_status` | ✗ | 411 | synth/command |
+| 7 | `let's push that call to next week` | `move_calendar_event` | `llm_chat` | ✗ | 3 | `move_calendar_event` | ✓ | 108 | `move_calendar_event` | ✓ | 460 | synth/command |
+| 8 | `this milk is past its date` | `llm_chat` | `llm_chat` | ✓ | 2 | `llm_chat` | ✓ | 136 | `get_date` | ✗ | 354 | registry/hard_negative |
+| 9 | `how about you open that text file` | `open_file` | `open_file` | ✓ | 1 | `open_file` | ✓ | 69 | `open_file` | ✓ | 398 | synth/command |
+| 10 | `actually, tldr this file` | `summarize_file` | `llm_chat` | ✗ | 3 | `summarize_file` | ✓ | 83 | `read_file` | ✗ | 370 | synth/command |
+| 11 | `let's open the projects directory` | `open_folder` | `launch_app` | ✗ | 3 | `open_folder` | ✓ | 66 | `open_folder` | ✓ | 339 | synth/command |
+| 12 | `any chance you could cancel my meeting at three` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 26 | `cancel_calendar_event` | ✓ | 93 | `cancel_calendar_event` | ✓ | 418 | synth/command |
+| 13 | `any chance you could share the one called report` | `select_file_candidate` | `llm_chat` | ✗ | 3 | `select_file_candidate` | ✓ | 98 | `get_friday_status` | ✗ | 396 | synth/query |
+| 14 | `real quick, copy the report to desktop` | `manage_file` | `llm_chat` | ✗ | 3 | `manage_file` | ✓ | 77 | `manage_file` | ✓ | 377 | synth/command |
+| 15 | `any chance you could share my inbox` | `summarize_inbox` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✓ | 97 | `summarize_inbox` | ✓ | 416 | synth/query |
+| 16 | `give me an unpopular opinion` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 74 | `—` | ✗ | 192 | chitchat/seed |
+| 17 | `mind telling me current time` | `get_time` | `get_time` | ✓ | 1 | `get_time` | ✓ | 65 | `get_time` | ✓ | 390 | synth/query |
+| 18 | `mind telling me system status` | `get_system_status` | `get_system_status` | ✓ | 1 | `llm_chat` | ✗ | 72 | `get_system_status` | ✓ | 389 | synth/query |
+| 19 | `would you exit friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 29 | `shutdown_assistant` | ✓ | 70 | `shutdown_assistant` | ✓ | 356 | synth/command |
+| 20 | `real quick, open the spreadsheet from yesterday` | `open_file` | `launch_app` | ✗ | 3 | `open_file` | ✓ | 76 | `open_file` | ✓ | 418 | synth/command |
+| 21 | `real quick - my pomodoro timer` | `focus_session_status` | `llm_chat` | ✗ | 3 | `set_reminder` | ✗ | 66 | `focus_session_status` | ✓ | 410 | synth/query |
+| 22 | `mind telling me the one called report` | `select_file_candidate` | `llm_chat` | ✗ | 3 | `select_file_candidate` | ✓ | 90 | `get_friday_status` | ✗ | 420 | synth/query |
+| 23 | `i need you to end this pomodoro` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 99 | `end_focus_session` | ✓ | 407 | synth/command |
+| 24 | `see you on friday` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 76 | `shutdown_assistant` | ✗ | 369 | registry/hard_negative |
+| 25 | `i'd love to know system status` | `get_system_status` | `get_system_status` | ✓ | 1 | `get_system_status` | ✓ | 85 | `get_system_status` | ✓ | 437 | synth/query |
+| 26 | `i need you to read that document aloud` | `read_file` | `llm_chat` | ✗ | 3 | `read_file` | ✓ | 68 | `read_latest_email` | ✗ | 408 | synth/command |
+| 27 | `let's open that text file` | `open_file` | `open_file` | ✓ | 2 | `open_file` | ✓ | 66 | `open_file` | ✓ | 402 | synth/command |
+| 28 | `i need you to drop that preference` | `delete_memory` | `llm_chat` | ✗ | 3 | `delete_memory` | ✓ | 66 | `delete_memory` | ✓ | 384 | synth/command |
+| 29 | `actually, google how to fix a leaky faucet` | `search_google` | `search_google` | ✓ | 1 | `search_google` | ✓ | 75 | `search_google` | ✓ | 447 | synth/command |
+| 30 | `i need you to open the anthropic website` | `open_browser_url` | `open_file` | ✗ | 2 | `open_browser_url` | ✓ | 96 | `open_browser_url` | ✓ | 461 | synth/command |
+| 31 | `actually, my last unread email` | `read_latest_email` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✗ | 95 | `summarize_inbox` | ✗ | 399 | synth/query |
+| 32 | `how about you start listening` | `enable_voice` | `launch_app` | ✗ | 2 | `enable_voice` | ✓ | 101 | `enable_voice` | ✓ | 388 | synth/command |
+| 33 | `status quo is fine` | `llm_chat` | `llm_chat` | ✓ | 23 | `llm_chat` | ✓ | 91 | `get_friday_status` | ✗ | 400 | registry/hard_negative |
+| 34 | `set in my ways` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 71 | `set_reminder` | ✗ | 371 | registry/hard_negative |
+| 35 | `do me a favor and copy the report to desktop` | `manage_file` | `llm_chat` | ✗ | 3 | `manage_file` | ✓ | 73 | `manage_file` | ✓ | 430 | synth/command |
+| 36 | `i need you to remind me to take the laundry out` | `set_reminder` | `set_reminder` | ✓ | 1 | `set_reminder` | ✓ | 70 | `set_reminder` | ✓ | 364 | synth/command |
+| 37 | `i love a good screen door in summer` | `llm_chat` | `llm_chat` | ✓ | 5 | `llm_chat` | ✓ | 79 | `browser_media_control` | ✗ | 447 | registry/hard_negative |
+| 38 | `actually, play the new kendrick album` | `play_youtube_music` | `play_youtube_music` | ✓ | 1 | `play_youtube_music` | ✓ | 91 | `play_youtube_music` | ✓ | 393 | synth/command |
+| 39 | `well hello` | `greet` | `greet` | ✓ | 1 | `greet` | ✓ | 39 | `greet` | ✓ | 306 | synth/greet |
+| 40 | `real quick, play that funny cat video` | `play_youtube` | `play_youtube` | ✓ | 1 | `play_youtube_music` | ✗ | 91 | `play_youtube` | ✓ | 407 | synth/command |
+| 41 | `let's find a file called report` | `search_file` | `search_file` | ✓ | 1 | `search_file` | ✓ | 67 | `open_file` | ✗ | 381 | synth/command |
+| 42 | `any advice for a quiet evening` | `llm_chat` | `llm_chat` | ✓ | 2 | `llm_chat` | ✓ | 82 | `set_reminder` | ✗ | 380 | chitchat/seed |
+| 43 | `any chance you could start a work session` | `start_focus_session` | `launch_app` | ✗ | 2 | `start_focus_session` | ✓ | 92 | `start_focus_session` | ✓ | 411 | synth/command |
+| 44 | `actually, open the anthropic website` | `open_browser_url` | `open_file` | ✗ | 2 | `open_browser_url` | ✓ | 97 | `open_browser_url` | ✓ | 420 | synth/command |
+| 45 | `real quick, read the contents of notes.txt` | `read_file` | `read_file` | ✓ | 2 | `read_file` | ✓ | 84 | `—` | ✗ | 863 | synth/command |
+| 46 | `do me a favor and begin a deep work block` | `start_focus_session` | `llm_chat` | ✗ | 3 | `start_focus_session` | ✓ | 94 | `start_focus_session` | ✓ | 459 | synth/command |
+| 47 | `cancel that thought` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 70 | `cancel_calendar_event` | ✗ | 825 | registry/hard_negative |
+| 48 | `let's tldr this file` | `summarize_file` | `llm_chat` | ✗ | 3 | `summarize_file` | ✓ | 81 | `read_file` | ✗ | 429 | synth/command |
+| 49 | `uh hey, close your ears` | `disable_voice` | `greet` | ✗ | 1 | `disable_voice` | ✓ | 74 | `shutdown_assistant` | ✗ | 361 | synth/query |
+| 50 | `i need you to go ahead` | `confirm_yes` | `llm_chat` | ✗ | 3 | `confirm_yes` | ✓ | 63 | `confirm_yes` | ✓ | 406 | synth/command |
+| 51 | `would you mind sharing the gmail backlog` | `summarize_inbox` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✓ | 97 | `summarize_file` | ✗ | 383 | synth/query |
+| 52 | `any chance you could share the weather today` | `get_weather` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 78 | `get_weather` | ✓ | 371 | synth/query |
+| 53 | `i need you to summarize this pdf` | `summarize_file` | `summarize_file` | ✓ | 2 | `summarize_file` | ✓ | 86 | `summarize_file` | ✓ | 451 | synth/command |
+| 54 | `forget me not flowers` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 92 | `delete_memory` | ✗ | 350 | registry/hard_negative |
+| 55 | `got a sec - what's on my desktop` | `list_folder_contents` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 88 | `list_folder_contents` | ✓ | 428 | synth/query |
+| 56 | `got a sec - the charge` | `get_battery` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 90 | `get_battery` | ✓ | 338 | synth/query |
+| 57 | `memory of last summer` | `llm_chat` | `search_file` | ✗ | 2 | `llm_chat` | ✓ | 92 | `get_friday_status` | ✗ | 419 | registry/hard_negative |
+| 58 | `marital status update` | `llm_chat` | `search_file` | ✗ | 1 | `llm_chat` | ✓ | 76 | `get_friday_status` | ✗ | 430 | registry/hard_negative |
+| 59 | `let's add a dentist appointment friday` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `create_calendar_event` | ✓ | 98 | `create_calendar_event` | ✓ | 395 | synth/command |
+| 60 | `mind telling me what reminders i have` | `list_reminders` | `list_reminders` | ✓ | 1 | `llm_chat` | ✗ | 82 | `get_reminders` | ✗ | 397 | synth/query |
+| 61 | `real quick, exit friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 2 | `shutdown_assistant` | ✓ | 67 | `shutdown_assistant` | ✓ | 361 | synth/command |
+| 62 | `real quick, turn the volume up` | `set_volume` | `set_volume` | ✓ | 1 | `set_volume` | ✓ | 75 | `set_volume` | ✓ | 334 | synth/command |
+| 63 | `do me a favor and google how to fix a leaky faucet` | `search_google` | `search_google` | ✓ | 1 | `search_google` | ✓ | 69 | `search_google` | ✓ | 409 | synth/command |
+| 64 | `uh hey, will it rain tomorrow` | `get_weather` | `greet` | ✗ | 1 | `llm_chat` | ✗ | 82 | `get_weather` | ✓ | 355 | synth/query |
+| 65 | `real quick, google the price of bitcoin` | `search_google` | `search_google` | ✓ | 1 | `llm_chat` | ✗ | 76 | `search_google` | ✓ | 421 | synth/command |
+| 66 | `do me a favor and start vscode` | `launch_app` | `launch_app` | ✓ | 2 | `launch_app` | ✓ | 72 | `launch_app` | ✓ | 367 | synth/command |
+| 67 | `any chance you could share computer status` | `get_system_status` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 82 | `get_system_status` | ✓ | 433 | synth/query |
+| 68 | `let's take a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 1 | `take_screenshot` | ✓ | 78 | `take_screenshot` | ✓ | 377 | synth/command |
+| 69 | `any chance you could move lunch to tuesday` | `move_calendar_event` | `llm_chat` | ✗ | 3 | `move_calendar_event` | ✓ | 128 | `move_calendar_event` | ✓ | 413 | synth/command |
+| 70 | `play me like a fiddle` | `llm_chat` | `play_youtube` | ✗ | 1 | `llm_chat` | ✓ | 74 | `play_youtube_music` | ✗ | 426 | registry/hard_negative |
+| 71 | `any chance you could turn the volume down` | `set_volume` | `set_volume` | ✓ | 1 | `set_volume` | ✓ | 74 | `set_volume` | ✓ | 377 | synth/command |
+| 72 | `got a sec - friday's state` | `get_friday_status` | `llm_chat` | ✗ | 3 | `get_date` | ✗ | 67 | `get_friday_status` | ✓ | 419 | synth/query |
+| 73 | `alright yeah` | `confirm_yes` | `llm_chat` | ✗ | 6 | `llm_chat` | ✗ | 70 | `confirm_yes` | ✓ | 494 | synth/confirm |
+| 74 | `how about you turn off voice input` | `disable_voice` | `disable_voice` | ✓ | 2 | `disable_voice` | ✓ | 65 | `disable_voice` | ✓ | 357 | synth/command |
+| 75 | `the end justifies the means` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 79 | `end_focus_session` | ✗ | 426 | registry/hard_negative |
+| 76 | `actually, what's on my calendar` | `list_calendar_events` | `list_calendar_events` | ✓ | 1 | `list_calendar_events` | ✓ | 90 | `list_calendar_events` | ✓ | 425 | synth/query |
+| 77 | `how about you add a dentist appointment friday` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `create_calendar_event` | ✓ | 92 | `create_calendar_event` | ✓ | 425 | synth/command |
+| 78 | `let's stop dictation` | `end_dictation` | `end_dictation` | ✓ | 1 | `end_dictation` | ✓ | 85 | `end_dictation` | ✓ | 430 | synth/command |
+| 79 | `the end of the workday` | `llm_chat` | `llm_chat` | ✓ | 3 | `end_focus_session` | ✗ | 90 | `shutdown_assistant` | ✗ | 377 | registry/hard_negative |
+| 80 | `real quick, snap a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 1 | `llm_chat` | ✗ | 78 | `take_screenshot` | ✓ | 396 | synth/command |
+| 81 | `do me a favor and open chrome` | `launch_app` | `launch_app` | ✓ | 2 | `launch_app` | ✓ | 109 | `launch_app` | ✓ | 375 | synth/command |
+| 82 | `let's go ahead` | `confirm_yes` | `llm_chat` | ✗ | 3 | `confirm_yes` | ✓ | 65 | `confirm_no` | ✗ | 363 | synth/command |
+| 83 | `any chance you could share battery level` | `get_battery` | `get_battery` | ✓ | 1 | `llm_chat` | ✗ | 78 | `get_battery` | ✓ | 448 | synth/query |
+| 84 | `i can read you like a book` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 80 | `read_file` | ✗ | 365 | registry/hard_negative |
+| 85 | `would you mind sharing how is the system` | `get_system_status` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 85 | `get_system_status` | ✓ | 438 | synth/query |
+| 86 | `let's end transcribing` | `end_dictation` | `llm_chat` | ✗ | 3 | `end_dictation` | ✓ | 81 | `end_focus_session` | ✗ | 406 | synth/command |
+| 87 | `let's open my documents folder` | `open_folder` | `open_file` | ✗ | 1 | `open_folder` | ✓ | 65 | `open_folder` | ✓ | 351 | synth/command |
+| 88 | `would you delete the draft` | `manage_file` | `llm_chat` | ✗ | 3 | `manage_file` | ✓ | 68 | `delete_memory` | ✗ | 423 | synth/command |
+| 89 | `how about you read that document aloud` | `read_file` | `read_file` | ✓ | 2 | `read_file` | ✓ | 70 | `read_latest_email` | ✗ | 402 | synth/command |
+| 90 | `actually, delete the draft` | `manage_file` | `llm_chat` | ✗ | 2 | `manage_file` | ✓ | 63 | `manage_file` | ✓ | 394 | synth/command |
+| 91 | `uh hey, the newest email` | `read_latest_email` | `greet` | ✗ | 1 | `read_latest_email` | ✓ | 93 | `read_latest_email` | ✓ | 395 | synth/query |
+| 92 | `let's turn on the mic` | `enable_voice` | `enable_voice` | ✓ | 2 | `enable_voice` | ✓ | 73 | `enable_voice` | ✓ | 362 | synth/command |
+| 93 | `any chance you could open your ears` | `enable_voice` | `launch_app` | ✗ | 2 | `enable_voice` | ✓ | 69 | `enable_voice` | ✓ | 435 | synth/command |
+| 94 | `would you end this pomodoro` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 128 | `end_focus_session` | ✓ | 404 | synth/command |
+| 95 | `uh hey, my inbox` | `summarize_inbox` | `greet` | ✗ | 1 | `summarize_inbox` | ✓ | 89 | `summarize_inbox` | ✓ | 411 | synth/query |
+| 96 | `the suspect was charged with battery` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 82 | `get_battery` | ✗ | 401 | registry/hard_negative |
+| 97 | `real quick, drop what i was dictating` | `cancel_dictation` | `llm_chat` | ✗ | 3 | `cancel_dictation` | ✓ | 82 | `end_dictation` | ✗ | 403 | synth/command |
+| 98 | `yeah do it` | `confirm_yes` | `confirm_yes` | ✓ | 2 | `confirm_yes` | ✓ | 66 | `confirm_yes` | ✓ | 421 | synth/confirm |
+| 99 | `hi was the highest grossing film` | `llm_chat` | `greet` | ✗ | 1 | `llm_chat` | ✓ | 80 | `get_cpu_ram` | ✗ | 395 | registry/hard_negative |
+| 100 | `uh hey, the contents of documents` | `list_folder_contents` | `greet` | ✗ | 1 | `summarize_file` | ✗ | 78 | `list_folder_contents` | ✓ | 413 | synth/query |
+| 101 | `real quick, give me a summary of that doc` | `summarize_file` | `summarize_file` | ✓ | 2 | `summarize_file` | ✓ | 84 | `summarize_file` | ✓ | 400 | synth/command |
+| 102 | `would you fire up obs` | `launch_app` | `llm_chat` | ✗ | 3 | `launch_app` | ✓ | 68 | `launch_app` | ✓ | 389 | synth/command |
+| 103 | `any chance you could end the dictation now` | `end_dictation` | `end_dictation` | ✓ | 1 | `end_dictation` | ✓ | 85 | `end_dictation` | ✓ | 443 | synth/command |
+| 104 | `i need you to play the deep focus playlist` | `play_youtube_music` | `play_youtube_music` | ✓ | 1 | `play_youtube_music` | ✓ | 93 | `play_youtube_music` | ✓ | 399 | synth/command |
+| 105 | `any chance you could summarize this pdf` | `summarize_file` | `summarize_file` | ✓ | 2 | `summarize_file` | ✓ | 81 | `summarize_file` | ✓ | 417 | synth/command |
+| 106 | `would you mind sharing what mode you're in` | `get_friday_status` | `llm_chat` | ✗ | 3 | `show_memories` | ✗ | 147 | `focus_session_status` | ✗ | 428 | synth/query |
+| 107 | `do me a favor and open that folder` | `open_folder` | `launch_app` | ✗ | 2 | `open_folder` | ✓ | 73 | `open_folder` | ✓ | 396 | synth/command |
+| 108 | `any chance you could play jazz piano` | `play_youtube_music` | `play_youtube` | ✗ | 1 | `play_youtube_music` | ✓ | 88 | `play_youtube_music` | ✓ | 430 | synth/command |
+| 109 | `i hate email chains` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 75 | `summarize_inbox` | ✗ | 429 | registry/hard_negative |
+| 110 | `actually, processor load` | `get_cpu_ram` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 77 | `get_cpu_ram` | ✓ | 458 | synth/query |
+| 111 | `real quick, add a dentist appointment friday` | `create_calendar_event` | `create_calendar_event` | ✓ | 7 | `create_calendar_event` | ✓ | 86 | `create_calendar_event` | ✓ | 400 | synth/command |
+| 112 | `real quick - ram usage` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 1 | `llm_chat` | ✗ | 81 | `get_cpu_ram` | ✓ | 427 | synth/query |
+| 113 | `i need you to set an alarm for nine am` | `set_reminder` | `llm_chat` | ✗ | 3 | `set_reminder` | ✓ | 72 | `set_reminder` | ✓ | 368 | synth/command |
+| 114 | `would you make a quick note about the demo` | `save_note` | `save_note` | ✓ | 2 | `save_note` | ✓ | 78 | `save_note` | ✓ | 371 | synth/command |
+| 115 | `would you mute the mic for a bit` | `disable_voice` | `set_volume` | ✗ | 2 | `disable_voice` | ✓ | 85 | `disable_voice` | ✓ | 433 | synth/command |
+| 116 | `real quick - the first one` | `select_file_candidate` | `select_file_candidate` | ✓ | 2 | `llm_chat` | ✗ | 79 | `confirm_yes` | ✗ | 362 | synth/query |
+| 117 | `i need you to cancel` | `confirm_no` | `llm_chat` | ✗ | 3 | `confirm_no` | ✓ | 76 | `cancel_calendar_event` | ✗ | 510 | synth/command |
+| 118 | `actually, reschedule the meeting to four pm` | `move_calendar_event` | `move_calendar_event` | ✓ | 1 | `move_calendar_event` | ✓ | 137 | `move_calendar_event` | ✓ | 400 | synth/command |
+| 119 | `do me a favor and play lofi study beats` | `play_youtube` | `llm_chat` | ✗ | 3 | `play_youtube_music` | ✗ | 105 | `play_youtube_music` | ✗ | 447 | synth/command |
+| 120 | `actually, what you've learned about me` | `show_memories` | `llm_chat` | ✗ | 3 | `show_memories` | ✓ | 89 | `show_memories` | ✓ | 394 | synth/query |
+| 121 | `any chance you could open chrome` | `launch_app` | `launch_app` | ✓ | 2 | `launch_app` | ✓ | 69 | `launch_app` | ✓ | 375 | synth/command |
+| 122 | `let's save a note that the wifi password is changed` | `save_note` | `save_note` | ✓ | 2 | `save_note` | ✓ | 75 | `save_note` | ✓ | 415 | synth/command |
+| 123 | `i'm overscheduled this month` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 80 | `set_reminder` | ✗ | 389 | registry/hard_negative |
+| 124 | `would you mind sharing system status` | `get_system_status` | `get_system_status` | ✓ | 1 | `llm_chat` | ✗ | 81 | `get_system_status` | ✓ | 428 | synth/query |
+| 125 | `do me a favor and save a note saying call the plumber` | `save_note` | `llm_chat` | ✗ | 3 | `save_note` | ✓ | 73 | `save_note` | ✓ | 365 | synth/command |
+| 126 | `how about you cancel my meeting at three` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `cancel_calendar_event` | ✓ | 98 | `cancel_calendar_event` | ✓ | 394 | synth/command |
+| 127 | `i need to create some space in my life` | `llm_chat` | `llm_chat` | ✓ | 4 | `llm_chat` | ✓ | 90 | `create_calendar_event` | ✗ | 444 | registry/hard_negative |
+| 128 | `would you mind sharing what time it is` | `get_time` | `get_time` | ✓ | 1 | `llm_chat` | ✗ | 110 | `get_time` | ✓ | 391 | synth/query |
+| 129 | `any chance you could forget what i just said` | `delete_memory` | `llm_chat` | ✗ | 3 | `delete_memory` | ✓ | 99 | `delete_memory` | ✓ | 392 | synth/command |
+| 130 | `i need you to shut down friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 2 | `shutdown_assistant` | ✓ | 74 | `shutdown_assistant` | ✓ | 356 | synth/command |
+| 131 | `real quick, find files named invoice` | `search_file` | `search_file` | ✓ | 1 | `search_file` | ✓ | 65 | `list_folder_contents` | ✗ | 420 | synth/command |
+| 132 | `do me a favor and pause the music` | `browser_media_control` | `llm_chat` | ✗ | 3 | `browser_media_control` | ✓ | 103 | `start_focus_session` | ✗ | 745 | synth/command |
+| 133 | `launch a missile in halo` | `llm_chat` | `launch_app` | ✗ | 2 | `launch_app` | ✗ | 63 | `launch_app` | ✗ | 354 | registry/hard_negative |
+| 134 | `mind telling me the notes from yesterday` | `read_notes` | `llm_chat` | ✗ | 3 | `read_notes` | ✓ | 70 | `read_notes` | ✓ | 431 | synth/query |
+| 135 | `mind telling me my alarms` | `list_reminders` | `llm_chat` | ✗ | 3 | `set_reminder` | ✗ | 61 | `set_reminder` | ✗ | 347 | synth/query |
+| 136 | `you remind me of someone` | `llm_chat` | `set_reminder` | ✗ | 1 | `llm_chat` | ✓ | 78 | `set_reminder` | ✗ | 375 | registry/hard_negative |
+| 137 | `share a thought worth thinking about` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 84 | `share` | ✗ | 332 | chitchat/seed |
+| 138 | `real quick, switch to on demand listening` | `set_voice_mode` | `llm_chat` | ✗ | 3 | `set_voice_mode` | ✓ | 100 | `focus_session_status` | ✗ | 435 | synth/command |
+| 139 | `uh hey, files in this folder` | `list_folder_contents` | `greet` | ✗ | 1 | `list_folder_contents` | ✓ | 92 | `list_folder_contents` | ✓ | 453 | synth/query |
+| 140 | `start a fire in the pit` | `llm_chat` | `launch_app` | ✗ | 2 | `llm_chat` | ✓ | 76 | `start_focus_session` | ✗ | 427 | registry/hard_negative |
+| 141 | `tell me what you'd do if you were human` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 133 | `get_friday_status` | ✗ | 455 | chitchat/seed |
+| 142 | `lose focus` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 77 | `focus_session_status` | ✗ | 385 | registry/hard_negative |
+| 143 | `okay no` | `confirm_no` | `llm_chat` | ✗ | 2 | `confirm_no` | ✓ | 65 | `confirm_no` | ✓ | 500 | synth/confirm |
+| 144 | `would you turn the volume up` | `set_volume` | `set_volume` | ✓ | 1 | `set_volume` | ✓ | 68 | `set_volume` | ✓ | 406 | synth/command |
+| 145 | `what's the one thing worth remembering today` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 90 | `get_memories` | ✗ | 429 | chitchat/seed |
+| 146 | `well hey` | `greet` | `greet` | ✓ | 5 | `greet` | ✓ | 41 | `greet` | ✓ | 366 | synth/greet |
+| 147 | `would you open github.com` | `open_browser_url` | `open_file` | ✗ | 2 | `open_browser_url` | ✓ | 90 | `open_browser_url` | ✓ | 418 | synth/command |
+| 148 | `actually, turn off voice input` | `disable_voice` | `disable_voice` | ✓ | 2 | `disable_voice` | ✓ | 72 | `disable_voice` | ✓ | 380 | synth/command |
+| 149 | `the movers come monday` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 70 | `gather_friday_args` | ✗ | 404 | registry/hard_negative |
+| 150 | `would you mind sharing upcoming meetings` | `list_calendar_events` | `llm_chat` | ✗ | 3 | `list_reminders` | ✗ | 84 | `list_calendar_events` | ✓ | 395 | synth/query |
+| 151 | `open the meeting with introductions` | `llm_chat` | `open_file` | ✗ | 2 | `open_file` | ✗ | 72 | `open_file` | ✗ | 452 | registry/hard_negative |
+| 152 | `uh hey, the notes from yesterday` | `read_notes` | `greet` | ✗ | 1 | `read_notes` | ✓ | 68 | `read_notes` | ✓ | 371 | synth/query |
+| 153 | `i need you to open discord` | `launch_app` | `launch_app` | ✓ | 2 | `launch_app` | ✓ | 75 | `open_browser_url` | ✗ | 450 | synth/command |
+| 154 | `what's a fun fact you like` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 128 | `show_memories` | ✗ | 414 | chitchat/seed |
+| 155 | `any chance you could share upcoming meetings` | `list_calendar_events` | `llm_chat` | ✗ | 3 | `list_reminders` | ✗ | 85 | `list_calendar_events` | ✓ | 454 | synth/query |
+| 156 | `let's move that to downloads` | `manage_file` | `llm_chat` | ✗ | 3 | `manage_file` | ✓ | 69 | `manage_file` | ✓ | 406 | synth/command |
+| 157 | `i'd love to know the most recent message` | `read_latest_email` | `llm_chat` | ✗ | 3 | `read_latest_email` | ✓ | 99 | `read_latest_email` | ✓ | 420 | synth/query |
+| 158 | `uh hey, my notes` | `read_notes` | `greet` | ✗ | 1 | `read_notes` | ✓ | 69 | `read_notes` | ✓ | 422 | synth/query |
+| 159 | `any chance you could give me a summary of that doc` | `summarize_file` | `summarize_file` | ✓ | 2 | `summarize_file` | ✓ | 91 | `summarize_file` | ✓ | 400 | synth/command |
+| 160 | `i'd love to know the contents of documents` | `list_folder_contents` | `llm_chat` | ✗ | 3 | `show_memories` | ✗ | 88 | `list_folder_contents` | ✓ | 439 | synth/query |
+| 161 | `cancel culture is real` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 78 | `cancel_calendar_event` | ✗ | 414 | registry/hard_negative |
+| 162 | `i need you to set voice mode to wake word` | `set_voice_mode` | `set_voice_mode` | ✓ | 2 | `set_voice_mode` | ✓ | 133 | `enable_voice` | ✗ | 375 | synth/command |
+| 163 | `would you mind sharing the forecast for the weekend` | `get_weather` | `get_weather` | ✓ | 2 | `llm_chat` | ✗ | 85 | `get_friday_status` | ✗ | 473 | synth/query |
+| 164 | `real quick - my unread emails` | `summarize_inbox` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✓ | 128 | `summarize_inbox` | ✓ | 394 | synth/query |
+| 165 | `any chance you could share the charge` | `get_battery` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 88 | `get_battery` | ✓ | 397 | synth/query |
+| 166 | `real quick, play the new kendrick album` | `play_youtube_music` | `play_youtube_music` | ✓ | 1 | `play_youtube_music` | ✓ | 106 | `play_youtube_music` | ✓ | 407 | synth/command |
+| 167 | `would you end the deep work block` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 89 | `end_focus_session` | ✓ | 429 | synth/command |
+| 168 | `actually, the time` | `get_time` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 77 | `get_time` | ✓ | 358 | synth/query |
+| 169 | `what's on your mind today` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 75 | `list_reminders` | ✗ | 382 | chitchat/seed |
+| 170 | `let's start dictating` | `start_dictation` | `launch_app` | ✗ | 2 | `start_dictation` | ✓ | 82 | `start_dictation` | ✓ | 404 | synth/command |
+| 171 | `would you mind sharing the notes from yesterday` | `read_notes` | `llm_chat` | ✗ | 3 | `read_notes` | ✓ | 69 | `read_notes` | ✓ | 363 | synth/query |
+| 172 | `i need you to enable the microphone` | `enable_voice` | `enable_voice` | ✓ | 2 | `enable_voice` | ✓ | 72 | `enable_voice` | ✓ | 380 | synth/command |
+| 173 | `how about you play the new kendrick album` | `play_youtube_music` | `play_youtube_music` | ✓ | 1 | `play_youtube_music` | ✓ | 94 | `play_youtube_music` | ✓ | 477 | synth/command |
+| 174 | `would you start dictating` | `start_dictation` | `launch_app` | ✗ | 2 | `start_dictation` | ✓ | 87 | `start_dictation` | ✓ | 376 | synth/command |
+| 175 | `actually, open my documents folder` | `open_folder` | `open_file` | ✗ | 2 | `open_folder` | ✓ | 73 | `open_folder` | ✓ | 401 | synth/command |
+| 176 | `how about you start a pomodoro` | `start_focus_session` | `start_focus_session` | ✓ | 2 | `start_focus_session` | ✓ | 121 | `start_focus_session` | ✓ | 722 | synth/command |
+| 177 | `do me a favor and launch spotify` | `launch_app` | `launch_app` | ✓ | 5 | `launch_app` | ✓ | 72 | `launch_app` | ✓ | 438 | synth/command |
+| 178 | `would you snap a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 1 | `take_screenshot` | ✓ | 74 | `take_screenshot` | ✓ | 382 | synth/command |
+| 179 | `do me a favor and move my dentist appointment to friday` | `move_calendar_event` | `move_calendar_event` | ✓ | 1 | `move_calendar_event` | ✓ | 95 | `move_calendar_event` | ✓ | 456 | synth/command |
+| 180 | `i'd love to know today's date` | `get_date` | `get_date` | ✓ | 1 | `get_date` | ✓ | 76 | `get_date` | ✓ | 391 | synth/query |
+| 181 | `open your mind to it` | `llm_chat` | `open_file` | ✗ | 2 | `llm_chat` | ✓ | 74 | `open_browser_url` | ✗ | 396 | registry/hard_negative |
+| 182 | `would you mind sharing the clock` | `get_time` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 77 | `get_time` | ✓ | 426 | synth/query |
+| 183 | `let's remind me about the deadline tomorrow` | `set_reminder` | `set_reminder` | ✓ | 1 | `set_reminder` | ✓ | 73 | `set_reminder` | ✓ | 391 | synth/command |
+| 184 | `face the music` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 78 | `browser_media_control` | ✗ | 448 | registry/hard_negative |
+| 185 | `any chance you could share the third file` | `select_file_candidate` | `llm_chat` | ✗ | 3 | `select_file_candidate` | ✓ | 96 | `select_file_candidate` | ✓ | 409 | synth/query |
+| 186 | `real quick - the newest email` | `read_latest_email` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✗ | 101 | `read_latest_email` | ✓ | 419 | synth/query |
+| 187 | `i need you to play some taylor swift` | `play_youtube_music` | `play_youtube` | ✗ | 1 | `play_youtube_music` | ✓ | 101 | `play_youtube_music` | ✓ | 421 | synth/command |
+| 188 | `let's cancel this transcription` | `cancel_dictation` | `llm_chat` | ✗ | 3 | `cancel_dictation` | ✓ | 120 | `cancel_Transcription` | ✗ | 363 | synth/command |
+| 189 | `got a sec - the first one` | `select_file_candidate` | `select_file_candidate` | ✓ | 3 | `llm_chat` | ✗ | 80 | `take_screenshot` | ✗ | 426 | synth/query |
+| 190 | `real quick, forget the fact about my dog` | `delete_memory` | `llm_chat` | ✗ | 3 | `delete_memory` | ✓ | 77 | `delete_memory` | ✓ | 390 | synth/command |
+| 191 | `uh hey, what you remember about me` | `show_memories` | `greet` | ✗ | 1 | `show_memories` | ✓ | 85 | `greet` | ✗ | 363 | synth/query |
+| 192 | `actually, cancel this transcription` | `cancel_dictation` | `llm_chat` | ✗ | 3 | `cancel_dictation` | ✓ | 80 | `cancel_Transcription` | ✗ | 386 | synth/command |
+| 193 | `would you grab the screen` | `take_screenshot` | `llm_chat` | ✗ | 3 | `take_screenshot` | ✓ | 63 | `take_screenshot` | ✓ | 374 | synth/command |
+| 194 | `i'd love to know current time` | `get_time` | `get_time` | ✓ | 1 | `get_time` | ✓ | 75 | `get_time` | ✓ | 425 | synth/query |
+| 195 | `let's pause the music` | `browser_media_control` | `llm_chat` | ✗ | 3 | `browser_media_control` | ✓ | 90 | `browser_media_control` | ✓ | 420 | synth/command |
+| 196 | `i need you to end the focus session` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 95 | `end_focus_session` | ✓ | 443 | synth/command |
+| 197 | `real quick, schedule a meeting tomorrow at three` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `create_calendar_event` | ✓ | 119 | `create_calendar_event` | ✓ | 431 | synth/command |
+| 198 | `real quick, open the anthropic website` | `open_browser_url` | `open_file` | ✗ | 2 | `open_browser_url` | ✓ | 87 | `open_browser_url` | ✓ | 381 | synth/command |
+| 199 | `would you play the obama farewell speech` | `play_youtube` | `play_youtube` | ✓ | 1 | `play_youtube_music` | ✗ | 125 | `play_youtube` | ✓ | 408 | synth/command |
+| 200 | `would you set an alarm for nine am` | `set_reminder` | `llm_chat` | ✗ | 3 | `set_reminder` | ✓ | 91 | `set_reminder` | ✓ | 390 | synth/command |
+| 201 | `real quick - close your ears` | `disable_voice` | `llm_chat` | ✗ | 3 | `disable_voice` | ✓ | 63 | `close_browser_media_control` | ✗ | 447 | synth/query |
+| 202 | `would you cancel the dentist appointment` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 1 | `cancel_calendar_event` | ✓ | 105 | `cancel_calendar_event` | ✓ | 441 | synth/command |
+| 203 | `i'd love to know how much focus time is left` | `focus_session_status` | `focus_session_status` | ✓ | 1 | `focus_session_status` | ✓ | 118 | `focus_session_status` | ✓ | 423 | synth/query |
+| 204 | `i'd love to know battery level` | `get_battery` | `get_battery` | ✓ | 1 | `get_battery` | ✓ | 94 | `get_battery` | ✓ | 407 | synth/query |
+| 205 | `real quick, play the latest mkbhd review` | `play_youtube` | `play_youtube` | ✓ | 1 | `play_youtube_music` | ✗ | 153 | `play_youtube_music` | ✗ | 389 | synth/command |
+| 206 | `i'd love to know the one called report` | `select_file_candidate` | `llm_chat` | ✗ | 3 | `select_file_candidate` | ✓ | 140 | `get_friday_status` | ✗ | 430 | synth/query |
+| 207 | `any chance you could share my latest email` | `read_latest_email` | `llm_chat` | ✗ | 3 | `read_latest_email` | ✓ | 168 | `read_latest_email` | ✓ | 408 | synth/query |
+| 208 | `real quick - the day of the week` | `get_date` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 173 | `get_weather` | ✗ | 409 | synth/query |
+| 209 | `uh hey, don't` | `confirm_no` | `greet` | ✗ | 1 | `confirm_no` | ✓ | 91 | `confirm_no` | ✓ | 365 | synth/query |
+| 210 | `inbox zero is a myth` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 121 | `disable_voice` | ✗ | 354 | registry/hard_negative |
+| 211 | `real quick, quit friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 2 | `shutdown_assistant` | ✓ | 102 | `shutdown_assistant` | ✓ | 386 | synth/command |
+| 212 | `real quick - the forecast for the weekend` | `get_weather` | `get_weather` | ✓ | 2 | `llm_chat` | ✗ | 125 | `get_weather` | ✓ | 353 | synth/query |
+| 213 | `sure thing no` | `confirm_no` | `llm_chat` | ✗ | 3 | `confirm_no` | ✓ | 112 | `confirm_no` | ✓ | 334 | synth/confirm |
+| 214 | `actually, cancel the dictation and discard` | `cancel_dictation` | `cancel_dictation` | ✓ | 1 | `cancel_dictation` | ✓ | 140 | `cancel_dictation` | ✓ | 398 | synth/command |
+| 215 | `well howdy` | `greet` | `llm_chat` | ✗ | 6 | `greet` | ✓ | 66 | `greet` | ✓ | 295 | synth/greet |
+| 216 | `sure thing sure` | `confirm_yes` | `llm_chat` | ✗ | 2 | `confirm_yes` | ✓ | 137 | `confirm_yes` | ✓ | 315 | synth/confirm |
+| 217 | `any chance you could exit friday` | `shutdown_assistant` | `shutdown_assistant` | ✓ | 1 | `shutdown_assistant` | ✓ | 109 | `shutdown_assistant` | ✓ | 344 | synth/command |
+| 218 | `she said yes to the proposal` | `llm_chat` | `llm_chat` | ✓ | 2 | `confirm_yes` | ✗ | 101 | `confirm_yes` | ✗ | 365 | registry/hard_negative |
+| 219 | `would you mind sharing the date` | `get_date` | `llm_chat` | ✗ | 2 | `llm_chat` | ✗ | 130 | `get_date` | ✓ | 333 | synth/query |
+| 220 | `let's cancel the dictation and discard` | `cancel_dictation` | `cancel_dictation` | ✓ | 1 | `cancel_dictation` | ✓ | 135 | `cancel_dictation` | ✓ | 372 | synth/command |
+| 221 | `let's skip this track` | `browser_media_control` | `llm_chat` | ✗ | 3 | `browser_media_control` | ✓ | 131 | `browser_media_control` | ✓ | 358 | synth/command |
+| 222 | `how about you start a work session` | `start_focus_session` | `launch_app` | ✗ | 2 | `start_focus_session` | ✓ | 155 | `start_focus_session` | ✓ | 790 | synth/command |
+| 223 | `in summary the team did well` | `llm_chat` | `llm_chat` | ✓ | 3 | `summarize_inbox` | ✗ | 170 | `get_friday_status` | ✗ | 352 | registry/hard_negative |
+| 224 | `any chance you could delete that memory` | `delete_memory` | `delete_memory` | ✓ | 1 | `delete_memory` | ✓ | 160 | `delete_memory` | ✓ | 391 | synth/command |
+| 225 | `any wisdom to drop on me` | `llm_chat` | `llm_chat` | ✓ | 3 | `delete_memory` | ✗ | 123 | `set_reminder` | ✗ | 333 | chitchat/seed |
+| 226 | `move on already` | `llm_chat` | `llm_chat` | ✓ | 3 | `confirm_no` | ✗ | 109 | `move_calendar_event` | ✗ | 358 | registry/hard_negative |
+| 227 | `real quick, start listening` | `enable_voice` | `launch_app` | ✗ | 2 | `llm_chat` | ✗ | 125 | `—` | ✗ | 798 | synth/command |
+| 228 | `any chance you could share what you remember about me` | `show_memories` | `llm_chat` | ✗ | 3 | `show_memories` | ✓ | 152 | `show_memories` | ✓ | 383 | synth/query |
+| 229 | `do me a favor and cancel my meeting at three` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 2 | `cancel_calendar_event` | ✓ | 158 | `cancel_calendar_event` | ✓ | 448 | synth/command |
+| 230 | `i'd love to know my preferences` | `show_memories` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 134 | `show_memories` | ✓ | 375 | synth/query |
+| 231 | `i have a long todo list` | `llm_chat` | `llm_chat` | ✓ | 3 | `summarize_inbox` | ✗ | 206 | `list_folder_contents` | ✗ | 371 | registry/hard_negative |
+| 232 | `actually, my unread emails` | `summarize_inbox` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✓ | 155 | `summarize_inbox` | ✓ | 355 | synth/query |
+| 233 | `got a sec - your status` | `get_friday_status` | `get_friday_status` | ✓ | 1 | `get_time` | ✗ | 117 | `get_friday_status` | ✓ | 368 | synth/query |
+| 234 | `actually, find a file called report` | `search_file` | `search_file` | ✓ | 1 | `search_file` | ✓ | 122 | `search_file` | ✓ | 386 | synth/command |
+| 235 | `how about you schedule lunch with sara monday` | `create_calendar_event` | `llm_chat` | ✗ | 3 | `create_calendar_event` | ✓ | 143 | `create_calendar_event` | ✓ | 366 | synth/command |
+| 236 | `okay nope` | `confirm_no` | `llm_chat` | ✗ | 3 | `confirm_no` | ✓ | 95 | `confirm_no` | ✓ | 335 | synth/confirm |
+| 237 | `any chance you could cancel the dentist appointment` | `cancel_calendar_event` | `cancel_calendar_event` | ✓ | 2 | `cancel_calendar_event` | ✓ | 151 | `cancel_calendar_event` | ✓ | 374 | synth/command |
+| 238 | `what a time to be alive` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 187 | `get_time` | ✗ | 323 | registry/hard_negative |
+| 239 | `do me a favor and start a work session` | `start_focus_session` | `launch_app` | ✗ | 3 | `start_focus_session` | ✓ | 160 | `start_focus_session` | ✓ | 392 | synth/command |
+| 240 | `would you search for the best ramen near me` | `search_google` | `search_file` | ✗ | 3 | `search_file` | ✗ | 128 | `search_google` | ✓ | 342 | synth/command |
+| 241 | `do me a favor and start taking dictation` | `start_dictation` | `launch_app` | ✗ | 2 | `start_dictation` | ✓ | 130 | `start_dictation` | ✓ | 359 | synth/command |
+| 242 | `any chance you could share what reminders i have` | `list_reminders` | `list_reminders` | ✓ | 2 | `llm_chat` | ✗ | 142 | `list_reminders` | ✓ | 389 | synth/query |
+| 243 | `would you mind sharing my notes` | `read_notes` | `read_notes` | ✓ | 2 | `read_notes` | ✓ | 120 | `read_notes` | ✓ | 323 | synth/query |
+| 244 | `let's copy the report to desktop` | `manage_file` | `llm_chat` | ✗ | 3 | `manage_file` | ✓ | 122 | `manage_file` | ✓ | 325 | synth/command |
+| 245 | `uh hey, the most recent message` | `read_latest_email` | `greet` | ✗ | 1 | `read_latest_email` | ✓ | 192 | `summarize_inbox` | ✗ | 369 | synth/query |
+| 246 | `i need you to play that` | `browser_media_control` | `llm_chat` | ✗ | 3 | `play_youtube_music` | ✗ | 151 | `browser_media_control` | ✓ | 375 | synth/command |
+| 247 | `any chance you could switch to persistent listening` | `set_voice_mode` | `llm_chat` | ✗ | 3 | `set_voice_mode` | ✓ | 167 | `focus_session_status` | ✗ | 363 | synth/command |
+| 248 | `uh hey, my pending alerts` | `list_reminders` | `greet` | ✗ | 5 | `get_reminder` | ✗ | 118 | `list_reminders` | ✓ | 388 | synth/query |
+| 249 | `real quick, start a work session` | `start_focus_session` | `launch_app` | ✗ | 2 | `start_focus_session` | ✓ | 142 | `start_focus_session` | ✓ | 375 | synth/command |
+| 250 | `any chance you could share your status` | `get_friday_status` | `get_friday_status` | ✓ | 1 | `llm_chat` | ✗ | 144 | `get_friday_status` | ✓ | 379 | synth/query |
+| 251 | `how about you switch to manual mode` | `set_voice_mode` | `llm_chat` | ✗ | 3 | `set_voice_mode` | ✓ | 169 | `set_voice_mode` | ✓ | 351 | synth/command |
+| 252 | `well hi` | `greet` | `greet` | ✓ | 1 | `greet` | ✓ | 96 | `greet` | ✓ | 294 | synth/greet |
+| 253 | `i'm searching for meaning` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 118 | `search_google` | ✗ | 330 | registry/hard_negative |
+| 254 | `enabler is a strong word` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 127 | `enable_voice` | ✗ | 327 | registry/hard_negative |
+| 255 | `would you mind sharing my inbox` | `summarize_inbox` | `llm_chat` | ✗ | 3 | `summarize_inbox` | ✓ | 160 | `summarize_inbox` | ✓ | 384 | synth/query |
+| 256 | `uh hey, what's on my calendar` | `list_calendar_events` | `list_calendar_events` | ✓ | 1 | `list_calendar_events` | ✓ | 158 | `list_calendar_events` | ✓ | 387 | synth/query |
+| 257 | `the factory is shutting down next year` | `llm_chat` | `llm_chat` | ✓ | 3 | `shutdown_assistant` | ✗ | 118 | `shutdown_assistant` | ✗ | 316 | registry/hard_negative |
+| 258 | `how about you go ahead` | `confirm_yes` | `llm_chat` | ✗ | 3 | `confirm_yes` | ✓ | 114 | `confirm_yes` | ✓ | 320 | synth/command |
+| 259 | `do me a favor and remind me about the deadline tomorrow` | `set_reminder` | `set_reminder` | ✓ | 1 | `llm_chat` | ✗ | 211 | `set_reminder` | ✓ | 365 | synth/command |
+| 260 | `search me i don't know` | `llm_chat` | `search_file` | ✗ | 2 | `llm_chat` | ✓ | 122 | `search_google` | ✗ | 330 | registry/hard_negative |
+| 261 | `any chance you could open my email tab` | `open_browser_url` | `launch_app` | ✗ | 2 | `open_browser_url` | ✓ | 144 | `open_browser_url` | ✓ | 372 | synth/command |
+| 262 | `real quick - current time` | `get_time` | `get_time` | ✓ | 1 | `llm_chat` | ✗ | 118 | `get_time` | ✓ | 373 | synth/query |
+| 263 | `do me a favor and turn the volume down` | `set_volume` | `set_volume` | ✓ | 1 | `set_volume` | ✓ | 129 | `set_volume` | ✓ | 334 | synth/command |
+| 264 | `actually, schedule a meeting tomorrow at three` | `create_calendar_event` | `create_calendar_event` | ✓ | 1 | `create_calendar_event` | ✓ | 158 | `create_calendar_event` | ✓ | 358 | synth/command |
+| 265 | `would you mind sharing your status` | `get_friday_status` | `get_friday_status` | ✓ | 1 | `llm_chat` | ✗ | 138 | `get_friday_status` | ✓ | 405 | synth/query |
+| 266 | `let's look for the budget spreadsheet` | `search_file` | `llm_chat` | ✗ | 3 | `search_file` | ✓ | 204 | `search_file` | ✓ | 327 | synth/command |
+| 267 | `any chance you could share my notes` | `read_notes` | `read_notes` | ✓ | 2 | `read_notes` | ✓ | 103 | `read_notes` | ✓ | 328 | synth/query |
+| 268 | `mind telling me the contents of documents` | `list_folder_contents` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 148 | `list_folder_contents` | ✓ | 397 | synth/query |
+| 269 | `i need you to take a screenshot` | `take_screenshot` | `take_screenshot` | ✓ | 1 | `take_screenshot` | ✓ | 141 | `take_screenshot` | ✓ | 314 | synth/command |
+| 270 | `no man is an island` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 125 | `browser_media_control` | ✗ | 378 | registry/hard_negative |
+| 271 | `how about you search for the best ramen near me` | `search_google` | `search_file` | ✗ | 2 | `search_file` | ✗ | 125 | `search_google` | ✓ | 347 | synth/command |
+| 272 | `would you open hacker news` | `open_browser_url` | `launch_app` | ✗ | 2 | `open_browser_url` | ✓ | 158 | `open_browser_url` | ✓ | 356 | synth/command |
+| 273 | `real quick, google how to fix a leaky faucet` | `search_google` | `search_google` | ✓ | 1 | `llm_chat` | ✗ | 194 | `search_google` | ✓ | 382 | synth/command |
+| 274 | `next time will be better` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 121 | `set_reminder` | ✗ | 321 | registry/hard_negative |
+| 275 | `do me a favor and play that funny cat video` | `play_youtube` | `llm_chat` | ✗ | 3 | `play_youtube_music` | ✗ | 150 | `play_youtube` | ✓ | 338 | synth/command |
+| 276 | `uh hey, my pomodoro timer` | `focus_session_status` | `greet` | ✗ | 1 | `focus_session_status` | ✓ | 143 | `focus_session_status` | ✓ | 391 | synth/query |
+| 277 | `how about you set volume to max` | `set_volume` | `set_volume` | ✓ | 2 | `set_volume` | ✓ | 111 | `set_volume` | ✓ | 319 | synth/command |
+| 278 | `actually, read what's in this file` | `read_file` | `read_file` | ✓ | 2 | `read_file` | ✓ | 112 | `read_file` | ✓ | 341 | synth/command |
+| 279 | `got a sec - cpu usage` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 1 | `get_cpu_ram` | ✓ | 146 | `get_cpu_ram` | ✓ | 375 | synth/query |
+| 280 | `how about you open the resume pdf` | `open_file` | `open_file` | ✓ | 2 | `open_file` | ✓ | 123 | `open_file` | ✓ | 344 | synth/command |
+| 281 | `would you mind sharing what's on my desktop` | `list_folder_contents` | `llm_chat` | ✗ | 3 | `show_memories` | ✗ | 145 | `list_folder_contents` | ✓ | 370 | synth/query |
+| 282 | `let's mute the tab` | `browser_media_control` | `set_volume` | ✗ | 1 | `browser_media_control` | ✓ | 144 | `browser_media_control` | ✓ | 419 | synth/command |
+| 283 | `i need you to make a quick note about the demo` | `save_note` | `save_note` | ✓ | 1 | `save_note` | ✓ | 118 | `create_calendar_event` | ✗ | 368 | synth/command |
+| 284 | `real quick - the charge` | `get_battery` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 123 | `get_battery` | ✓ | 327 | synth/query |
+| 285 | `real quick - my schedule today` | `list_calendar_events` | `llm_chat` | ✗ | 6 | `llm_chat` | ✗ | 114 | `focus_session_status` | ✗ | 384 | synth/query |
+| 286 | `let's stop taking dictation` | `end_dictation` | `llm_chat` | ✗ | 3 | `end_dictation` | ✓ | 137 | `end_dictation` | ✓ | 351 | synth/command |
+| 287 | `the trade volume tripled` | `llm_chat` | `set_volume` | ✗ | 1 | `llm_chat` | ✓ | 125 | `set_volume` | ✗ | 310 | registry/hard_negative |
+| 288 | `got a sec - what reminders i have` | `list_reminders` | `list_reminders` | ✓ | 2 | `set_reminder` | ✗ | 153 | `list_reminders` | ✓ | 346 | synth/query |
+| 289 | `oh, yo` | `greet` | `llm_chat` | ✗ | 2 | `greet` | ✓ | 70 | `confirm_yes` | ✗ | 351 | synth/greet |
+| 290 | `let's read the contents of notes.txt` | `read_file` | `llm_chat` | ✗ | 3 | `read_file` | ✓ | 117 | `read_file` | ✓ | 394 | synth/command |
+| 291 | `musical notes are fun` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 115 | `set_reminder` | ✗ | 333 | registry/hard_negative |
+| 292 | `i'd love to know what's on my calendar` | `list_calendar_events` | `list_calendar_events` | ✓ | 1 | `list_calendar_events` | ✓ | 156 | `list_calendar_events` | ✓ | 376 | synth/query |
+| 293 | `real quick - how much focus time is left` | `focus_session_status` | `focus_session_status` | ✓ | 1 | `focus_session_status` | ✓ | 154 | `focus_session_status` | ✓ | 443 | synth/query |
+| 294 | `any chance you could remind me about the deadline tomorrow` | `set_reminder` | `set_reminder` | ✓ | 1 | `set_reminder` | ✓ | 117 | `set_reminder` | ✓ | 337 | synth/command |
+| 295 | `actually, end the work session` | `end_focus_session` | `llm_chat` | ✗ | 3 | `end_focus_session` | ✓ | 156 | `end_focus_session` | ✓ | 383 | synth/command |
+| 296 | `actually, your status` | `get_friday_status` | `get_friday_status` | ✓ | 1 | `llm_chat` | ✗ | 163 | `get_friday_status` | ✓ | 345 | synth/query |
+| 297 | `mind telling me processor load` | `get_cpu_ram` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 133 | `get_cpu_ram` | ✓ | 351 | synth/query |
+| 298 | `actually, will it rain tomorrow` | `get_weather` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 117 | `get_weather` | ✓ | 337 | synth/query |
+| 299 | `would you search for my resume` | `search_file` | `search_file` | ✓ | 3 | `search_file` | ✓ | 107 | `search_file` | ✓ | 346 | synth/command |
+| 300 | `how about you open my notes file` | `open_file` | `open_file` | ✓ | 2 | `open_file` | ✓ | 101 | `open_file` | ✓ | 330 | synth/command |
+| 301 | `real quick, save a note saying call the plumber` | `save_note` | `save_note` | ✓ | 2 | `save_note` | ✓ | 118 | `save_note` | ✓ | 351 | synth/command |
+| 302 | `got a sec - the date` | `get_date` | `llm_chat` | ✗ | 3 | `get_date` | ✓ | 109 | `get_date` | ✓ | 335 | synth/query |
+| 303 | `actually, the date` | `get_date` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 125 | `get_date` | ✓ | 325 | synth/query |
+| 304 | `i need you to push that call to next week` | `move_calendar_event` | `llm_chat` | ✗ | 3 | `move_calendar_event` | ✓ | 228 | `move_calendar_event` | ✓ | 383 | synth/command |
+| 305 | `would you start dictation` | `start_dictation` | `start_dictation` | ✓ | 2 | `start_dictation` | ✓ | 126 | `start_dictation` | ✓ | 375 | synth/command |
+| 306 | `make some good memories this trip` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 128 | `set_reminder` | ✗ | 326 | registry/hard_negative |
+| 307 | `let's read what's in this file` | `read_file` | `read_file` | ✓ | 2 | `read_file` | ✓ | 111 | `read_file` | ✓ | 375 | synth/command |
+| 308 | `would you drop what i was dictating` | `cancel_dictation` | `llm_chat` | ✗ | 3 | `cancel_dictation` | ✓ | 120 | `end_dictation` | ✗ | 348 | synth/command |
+| 309 | `do me a favor and jot down this idea` | `save_note` | `save_note` | ✓ | 2 | `save_note` | ✓ | 116 | `set_reminder` | ✗ | 335 | synth/command |
+| 310 | `real quick, open my notes file` | `open_file` | `open_file` | ✓ | 1 | `open_file` | ✓ | 122 | `open_file` | ✓ | 445 | synth/command |
+| 311 | `let's disable the microphone` | `disable_voice` | `disable_voice` | ✓ | 2 | `disable_voice` | ✓ | 169 | `disable_voice` | ✓ | 312 | synth/command |
+| 312 | `how about you skip this track` | `browser_media_control` | `llm_chat` | ✗ | 3 | `browser_media_control` | ✓ | 138 | `browser_media_control` | ✓ | 388 | synth/command |
+| 313 | `mind telling me how much focus time is left` | `focus_session_status` | `focus_session_status` | ✓ | 1 | `focus_session_status` | ✓ | 166 | `focus_session_status` | ✓ | 384 | synth/query |
+| 314 | `real quick, drop that preference` | `delete_memory` | `llm_chat` | ✗ | 3 | `delete_memory` | ✓ | 103 | `delete_memory` | ✓ | 321 | synth/command |
+| 315 | `would you open that folder` | `open_folder` | `open_file` | ✗ | 2 | `open_folder` | ✓ | 103 | `open_folder` | ✓ | 355 | synth/command |
+| 316 | `first come first served` | `llm_chat` | `search_file` | ✗ | 2 | `llm_chat` | ✓ | 107 | `launch_app` | ✗ | 319 | registry/hard_negative |
+| 317 | `i need you to stop dictation` | `end_dictation` | `end_dictation` | ✓ | 1 | `end_dictation` | ✓ | 133 | `end_dictation` | ✓ | 372 | synth/command |
+| 318 | `any chance you could share my reminders` | `list_reminders` | `list_reminders` | ✓ | 2 | `share_reminders` | ✗ | 130 | `list_reminders` | ✓ | 374 | synth/query |
+| 319 | `actually, ram usage` | `get_cpu_ram` | `get_cpu_ram` | ✓ | 1 | `llm_chat` | ✗ | 199 | `get_cpu_ram` | ✓ | 360 | synth/query |
+| 320 | `actually, find files named invoice` | `search_file` | `search_file` | ✓ | 2 | `search_file` | ✓ | 88 | `search_file` | ✓ | 327 | synth/command |
+| 321 | `make me laugh real quick` | `llm_chat` | `search_file` | ✗ | 2 | `llm_chat` | ✓ | 119 | `set_voice_mode` | ✗ | 428 | chitchat/seed |
+| 322 | `the folder chair broke` | `llm_chat` | `llm_chat` | ✓ | 6 | `llm_chat` | ✓ | 122 | `browser_media_control` | ✗ | 338 | registry/hard_negative |
+| 323 | `she saved me a lot of trouble` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 130 | `manage_file` | ✗ | 334 | registry/hard_negative |
+| 324 | `oh, hello` | `greet` | `greet` | ✓ | 1 | `greet` | ✓ | 70 | `greet` | ✓ | 285 | synth/greet |
+| 325 | `let's start dictation` | `start_dictation` | `start_dictation` | ✓ | 2 | `start_dictation` | ✓ | 123 | `start_dictation` | ✓ | 367 | synth/command |
+| 326 | `she's been disabled by the injury` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 147 | `disable_voice` | ✗ | 341 | registry/hard_negative |
+| 327 | `real quick - don't` | `confirm_no` | `llm_chat` | ✗ | 3 | `llm_chat` | ✗ | 193 | `confirm_no` | ✓ | 344 | synth/query |
+| 328 | `in any weather i'll be there` | `llm_chat` | `llm_chat` | ✓ | 3 | `llm_chat` | ✓ | 123 | `enable_voice` | ✗ | 331 | registry/hard_negative |

@@ -762,6 +762,11 @@ class WorkflowOrchestrator:
             self.register(ResearchPlannerWorkflow(app))
         except Exception as exc:  # pragma: no cover
             logger.warning("[workflow] Could not load reasoning workflows: %s", exc)
+        try:
+            from modules.onboarding.workflow import OnboardingWorkflow  # noqa: PLC0415
+            self.register(OnboardingWorkflow(app))
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[workflow] Could not load onboarding workflow: %s", exc)
 
     def register(self, workflow):
         self.workflows[workflow.name] = workflow

@@ -54,3 +54,5 @@ logs/*.log
 logs/
 #env
 .env
+
+scratch/*

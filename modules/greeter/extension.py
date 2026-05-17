@@ -5,6 +5,16 @@ from core.extensions.protocol import Extension, ExtensionContext
 from core.extensions.decorators import capability
 from core.logger import logger
 
+from modules.onboarding.extension import (
+    is_completed as onboarding_is_completed,
+    read_profile as read_user_profile,
+)
+from modules.onboarding.workflow import (
+    WORKFLOW_NAME as ONBOARDING_WORKFLOW_NAME,
+    first_question as onboarding_first_question,
+    initial_state as onboarding_initial_state,
+)
+
 _SHUTDOWN_PHRASES = frozenset({
     "goodbye", "bye", "good bye", "goobye", "goodby", "exit", "quit",
     "exit program", "close assistant", "switch off", "see you", "see ya",
@@ -133,12 +143,13 @@ class GreeterExtension(Extension):
     def handle_greeting(self):
         """Pick a natural, varied greeting."""
         time_greeting = self._get_time_of_day_greeting()
+        term = self._address_term()
         jarvis_flair = [
-            f"{time_greeting}, sir. How can I assist you today?",
-            "At your service, sir. What's on the agenda?",
-            "Always a pleasure to see you, sir. Ready for commands.",
-            "Online and ready, sir. What can I do for you?",
-            "Systems are green. How may I help you today, sir?"
+            f"{time_greeting}, {term}. How can I assist you today?",
+            f"At your service, {term}. What's on the agenda?",
+            f"Always a pleasure to see you, {term}. Ready for commands.",
+            f"Online and ready, {term}. What can I do for you?",
+            f"Systems are green. How may I help you today, {term}?",
         ]
         return random.choice(jarvis_flair)
 
@@ -152,12 +163,13 @@ class GreeterExtension(Extension):
     )
     def handle_resume_session(self):
         context_store = self.ctx.get_service("context_store")
+        term = self._address_term()
         if not context_store:
-            return "Back in action, sir. What can I do for you?"
+            return f"Back in action, {term}. What can I do for you?"
 
         facts = {f["key"]: f["value"] for f in context_store.get_facts_by_namespace("system")}
         if facts.get("has_pending_session") != "true":
-            return "Ready for anything, sir. What can I do for you today?"
+            return f"Ready for anything, {term}. What can I do for you today?"
 
         summary = facts.get("last_session_summary", "")
         context_store.store_fact("has_pending_session", "", namespace="system")
@@ -178,9 +190,9 @@ class GreeterExtension(Extension):
                         break
             if last_user:
                 topic = (last_user[:70] + "…") if len(last_user) > 70 else last_user
-                return f"Picking up where we left off, sir. You were asking: \"{topic}\". Go ahead."
+                return f"Picking up where we left off, {term}. You were asking: \"{topic}\". Go ahead."
 
-        return "Back on track, sir. What would you like to do?"
+        return f"Back on track, {term}. What would you like to do?"
 
     @capability(
         name="start_fresh_session",
@@ -199,11 +211,12 @@ class GreeterExtension(Extension):
                 context_store.store_fact("last_session_summary", "", namespace="system")
             context_store.store_fact("resumed_session_context", "", namespace="system")
 
+        term = self._address_term()
         fresh_phrases = [
-            "Of course, sir. Fresh start — how can I help you today?",
-            "Understood, sir. Starting clean. What's on your mind?",
-            "Sure thing, sir. New session. What can I do for you?",
-            "Right, sir. Clean slate. Go ahead.",
+            f"Of course, {term}. Fresh start — how can I help you today?",
+            f"Understood, {term}. Starting clean. What's on your mind?",
+            f"Sure thing, {term}. New session. What can I do for you?",
+            f"Right, {term}. Clean slate. Go ahead.",
         ]
         return random.choice(fresh_phrases)
 
@@ -218,7 +231,7 @@ class GreeterExtension(Extension):
     )
     def handle_help(self):
         registry = self.ctx.registry
-        
+
         descriptors = [
             descriptor
             for descriptor in registry.list_capabilities()
@@ -228,7 +241,7 @@ class GreeterExtension(Extension):
             return self._fallback_help()
 
         names = {descriptor.name for descriptor in descriptors}
-        lines = ["Here's what I can do right now, sir:"]
+        lines = [f"Here's what I can do right now, {self._address_term()}:"]
 
         for category in HELP_CATEGORY_SPECS:
             phrases = []
@@ -262,10 +275,29 @@ class GreeterExtension(Extension):
     # --- Standard Optional Extension Hooks ---
 
     def handle_startup(self):
-        """Vocal greeting when the app first loads."""
-        greeting = f"{self._get_time_of_day_greeting()}, sir. FRIDAY is online and ready."
+        """Vocal greeting when the app first loads.
 
+        First-run path: if no `user_profile.name` is stored and onboarding
+        hasn't been marked completed, kick off the OnboardingWorkflow by
+        writing its initial state and returning the first question as the
+        spoken greeting. The next user turn lands in `OnboardingWorkflow`
+        via `WorkflowOrchestrator.continue_active`.
+        """
         context_store = self.ctx.get_service("context_store")
+
+        # First-run onboarding takes priority over any other startup path.
+        if self._should_start_onboarding(context_store):
+            if self._begin_onboarding():
+                question = onboarding_first_question()
+                logger.info("[greeter] First-run onboarding triggered: %s", question)
+                return question
+            # If we couldn't begin (no memory/session), fall through to the
+            # normal greeting — at worst the user sees "sir" and can answer
+            # questions later via update_user_profile.
+
+        term = self._address_term()
+        greeting = f"{self._get_time_of_day_greeting()}, {term}. FRIDAY is online and ready."
+
         if context_store:
             try:
                 facts = {f["key"]: f["value"] for f in context_store.get_facts_by_namespace("system")}
@@ -281,10 +313,13 @@ class GreeterExtension(Extension):
 
                 if next_greeting and has_pending and summary_is_valid:
                     greeting = next_greeting.replace("{time_greeting}", self._get_time_of_day_greeting())
+                    # Replace any literal "sir" in stored greetings with the user's name.
+                    if term != "sir":
+                        greeting = greeting.replace(", sir.", f", {term}.").replace(", sir,", f", {term},")
                     context_store.store_fact("next_startup_greeting", "", namespace="system")
                 elif has_pending and summary_is_valid:
                     # LLM greeting didn't finish in time — use plain fallback
-                    greeting = f"{self._get_time_of_day_greeting()}, sir. Want to pick up where we left off?"
+                    greeting = f"{self._get_time_of_day_greeting()}, {term}. Want to pick up where we left off?"
                     context_store.store_fact("next_startup_greeting", "", namespace="system")
                 else:
                     # No valid pending session — clear any stale flags
@@ -305,23 +340,25 @@ class GreeterExtension(Extension):
 
     def get_pause_phrase(self):
         """Vocal feedback when pausing (reactor click)."""
+        term = self._address_term()
         pause_phrases = [
-            "I am going offline, sir.",
+            f"I am going offline, {term}.",
             "Suspending current protocols.",
-            "Standing by, sir.",
+            f"Standing by, {term}.",
             "Going into hibernation mode.",
-            "Powering down interaction layers."
+            "Powering down interaction layers.",
         ]
         return random.choice(pause_phrases)
 
     def get_unpause_phrase(self):
         """Vocal feedback when unpausing (reactor click)."""
+        term = self._address_term()
         unpause_phrases = [
-            "Back online, sir.",
+            f"Back online, {term}.",
             "At your service once again.",
             "Systems reactivated.",
-            "Ready and waiting, sir.",
-            "Protocols restored. How can I help?"
+            f"Ready and waiting, {term}.",
+            "Protocols restored. How can I help?",
         ]
         return random.choice(unpause_phrases)
 
@@ -329,12 +366,54 @@ class GreeterExtension(Extension):
 
     def _fallback_help(self):
         return (
-            "Here's what I can do, sir:\n"
+            f"Here's what I can do, {self._address_term()}:\n"
             "• Launch apps and control the system.\n"
             "• Search, open, read, and summarize files.\n"
             "• Set reminders, save notes, and answer general questions.\n"
             "• Interrupt me by saying 'Friday stop' or asking your next question while I'm speaking."
         )
+
+    # --- Onboarding / profile helpers ---
+
+    def _address_term(self) -> str:
+        """How FRIDAY should address the user — name when known, else 'sir'."""
+        store = self.ctx.get_service("context_store")
+        if store is None:
+            return "sir"
+        profile = read_user_profile(store)
+        name = (profile.get("name") or "").strip()
+        return name or "sir"
+
+    def _should_start_onboarding(self, context_store) -> bool:
+        """First-run trigger: no name on file AND onboarding never completed."""
+        if context_store is None:
+            return False
+        if onboarding_is_completed(context_store):
+            return False
+        profile = read_user_profile(context_store)
+        return not (profile.get("name") or "").strip()
+
+    def _begin_onboarding(self) -> bool:
+        """Persist the initial OnboardingWorkflow state so the next user turn
+        is routed to it by `WorkflowOrchestrator.continue_active`. Returns
+        True on success.
+        """
+        memory = self.ctx.get_service("memory_service") or self.ctx.get_service("context_store")
+        session_id = self.ctx.get_service("session_id")
+        if memory is None or not session_id:
+            logger.warning(
+                "[greeter] Cannot start onboarding — memory=%s session_id=%s",
+                bool(memory), bool(session_id),
+            )
+            return False
+        try:
+            memory.save_workflow_state(
+                session_id, ONBOARDING_WORKFLOW_NAME, onboarding_initial_state(),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("[greeter] Failed to seed onboarding workflow: %s", exc)
+            return False
 
     def _format_examples(self, examples):
         cleaned = [f"'{example}'" for example in examples if example]

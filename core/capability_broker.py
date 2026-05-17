@@ -91,10 +91,6 @@ class CapabilityBroker:
         action_plan = self._plan_actions(cleaned_text)
         if action_plan:
             steps = [self._action_to_step(action, cleaned_text) for action in action_plan]
-            online = None if self._consent_preapproved else self._first_online_confirmation_needed(steps, cleaned_text)
-            if online:
-                self._record_route_duration(route_start)
-                return self._build_online_proposal(online, cleaned_text, turn_id, style_hint)
             self._record_route_duration(route_start)
             return ToolPlan(
                 turn_id=turn_id,
@@ -109,10 +105,6 @@ class CapabilityBroker:
         best_route = self._find_best_route(cleaned_text, min_score=80)
         if best_route and best_route["spec"]["name"] != "llm_chat":
             step = self._route_to_step(best_route, cleaned_text, {})
-            descriptor = self.app.capability_registry.get_descriptor(step.capability_name)
-            if not self._consent_preapproved and self.app.consent_service.evaluate(step.capability_name, descriptor, cleaned_text).needs_confirmation:
-                self._record_route_duration(route_start)
-                return self._build_online_proposal(step, cleaned_text, turn_id, style_hint)
             self._record_route_duration(route_start)
             return ToolPlan(
                 turn_id=turn_id,
@@ -122,23 +114,6 @@ class CapabilityBroker:
                 estimated_latency=self._estimated_latency([step]),
                 final_style=style_hint,
             )
-
-        # --- 5. Online/current-info detection ---
-        if self.app.consent_service.is_current_info_request(cleaned_text) and not self._consent_preapproved:
-            online_capabilities = self.app.capability_registry.list_capabilities(connectivity="online")
-            if online_capabilities and not self.app.consent_service.is_explicit_online_request(cleaned_text):
-                self._memory().set_pending_online(
-                    self.app.session_id,
-                    {"tool_name": "", "args": {}, "text": cleaned_text, "ack": ""},
-                )
-                self._record_route_duration(route_start)
-                return ToolPlan(
-                    turn_id=turn_id,
-                    mode="clarify",
-                    reply="I can check that with an online skill if you want. Say yes and I'll go online for this request.",
-                    requires_confirmation=True,
-                    final_style=style_hint,
-                )
 
         # --- 6. LLM planner fallback ---
         if self._should_use_planner(cleaned_text):
@@ -270,9 +245,21 @@ class CapabilityBroker:
             return None
         if not pending:
             return None
-        self._memory().log_online_permission(self.app.session_id, pending.get("tool_name", ""), "approved", reason="user_confirmation")
         tool_name = pending.get("tool_name", "")
         descriptor = self.app.capability_registry.get_descriptor(tool_name) if tool_name else None
+        # Port #3: voice-approval safety gate — destructive actions cannot be
+        # approved by voice to prevent misheard "yes" from triggering harm.
+        gate = self.app.consent_service.gate_voice_approval(
+            tool_name, descriptor, stt_confidence=1.0
+        )
+        if gate.needs_confirmation:
+            return ToolPlan(
+                turn_id=turn_id,
+                mode="clarify",
+                reply=gate.prompt,
+                final_style=style_hint,
+            )
+        self._memory().log_online_permission(self.app.session_id, tool_name, "approved", reason="user_confirmation")
         if descriptor is not None:
             self._memory().clear_pending_online(self.app.session_id)
             return ToolPlan(

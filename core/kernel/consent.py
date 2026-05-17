@@ -76,6 +76,50 @@ _IMPLICIT_ONLINE_TOOLS: frozenset[str] = frozenset({
 
 
 # ---------------------------------------------------------------------------
+# Port #3 — ImpactTier + voice-approval gating (mirrors jarvis authority.ts)
+# ---------------------------------------------------------------------------
+
+class ImpactTier(Enum):
+    READ = "read"
+    WRITE = "write"
+    EXTERNAL = "external"
+    DESTRUCTIVE = "destructive"
+
+
+# Maps side_effect_level values and tool name fragments → ImpactTier.
+# Destructive tier: never resolve by voice — requires deliberate re-type.
+_IMPACT_MAP: dict[str, ImpactTier] = {
+    "read": ImpactTier.READ,
+    "write": ImpactTier.WRITE,
+    "external": ImpactTier.EXTERNAL,
+    "destructive": ImpactTier.DESTRUCTIVE,
+}
+
+# Keywords in tool names that escalate to DESTRUCTIVE regardless of side_effect_level.
+_DESTRUCTIVE_TOOL_KEYWORDS: tuple[str, ...] = (
+    "delete", "remove", "wipe", "format", "drop", "destroy",
+    "execute", "run_command", "shell", "terminate", "kill",
+    "install", "uninstall", "send_email", "send_message",
+    "make_payment", "payment",
+)
+
+
+def _tool_impact_tier(tool_name: str, descriptor=None) -> ImpactTier:
+    name_lower = (tool_name or "").lower()
+    for kw in _DESTRUCTIVE_TOOL_KEYWORDS:
+        if kw in name_lower:
+            return ImpactTier.DESTRUCTIVE
+    if descriptor is not None:
+        sel = str(getattr(descriptor, "side_effect_level", "read") or "read").lower()
+        return _IMPACT_MAP.get(sel, ImpactTier.READ)
+    return ImpactTier.READ
+
+
+# Minimum STT confidence to allow voice-approval of non-destructive actions.
+_MIN_VOICE_CONFIDENCE: float = 0.85
+
+
+# ---------------------------------------------------------------------------
 # Result type
 # ---------------------------------------------------------------------------
 
@@ -135,31 +179,12 @@ class ConsentService:
         descriptor: "CapabilityDescriptor | None",
         user_text: str,
     ) -> ConsentResult:
-        """Return a ConsentResult for executing `tool_name` given `user_text`."""
-        if descriptor is None or descriptor.connectivity != "online":
-            return ConsentResult.allow()
+        """Return a ConsentResult for executing `tool_name` given `user_text`.
 
-        if tool_name in _IMPLICIT_ONLINE_TOOLS:
-            return ConsentResult.allow()
-
-        if descriptor.permission_mode == "always_ok":
-            # Capability owner has explicitly opted out of consent prompts —
-            # don't let a global config override re-enable them.
-            return ConsentResult.allow()
-
-        mode = self._online_permission_mode(descriptor.permission_mode)
-
-        if mode == "always":
-            return ConsentResult.allow()
-        if mode == "never":
-            return ConsentResult.deny()
-
-        # ask_first — skip dialog if the user already signalled intent
-        if self.is_explicit_online_request(user_text):
-            return ConsentResult.allow()
-
-        label = tool_name.replace("_", " ")
-        return ConsentResult.ask(prompt=f"Go online for {label}? Say yes or no.")
+        Online consent is globally disabled — always allow. Keeping the
+        method signature intact so callers don't need to change.
+        """
+        return ConsentResult.allow()
 
     # ------------------------------------------------------------------
     # Text classification helpers (public — used by CapabilityBroker etc.)
@@ -184,6 +209,45 @@ class ConsentService:
     def is_negative_confirmation(self, text: str) -> bool:
         normalized = (text or "").strip().lower().strip(" .!?")
         return any(re.search(p, normalized) for p in NEGATIVE_CONFIRMATION_PATTERNS)
+
+    # ------------------------------------------------------------------
+    # Port #3 — Voice-approval gate (mirrors jarvis gateVoiceApprovalResolution)
+    # ------------------------------------------------------------------
+
+    def gate_voice_approval(
+        self,
+        tool_name: str,
+        descriptor=None,
+        stt_confidence: float = 1.0,
+    ) -> "ConsentResult":
+        """Decide whether a voice 'yes' may resolve a pending approval.
+
+        Destructive impacts are *never* resolved by voice — the user must
+        type the confirmation explicitly. Non-destructive actions require
+        STT confidence ≥ _MIN_VOICE_CONFIDENCE to guard against mishearing.
+
+        Returns ConsentResult.allow() or ConsentResult.ask(clarification).
+        """
+        tier = _tool_impact_tier(tool_name, descriptor)
+        if tier == ImpactTier.DESTRUCTIVE:
+            return ConsentResult.ask(
+                prompt=(
+                    f"'{tool_name}' is a high-impact action and cannot be approved by voice. "
+                    "Please type 'yes' or 'confirm' to proceed."
+                )
+            )
+        if stt_confidence < _MIN_VOICE_CONFIDENCE:
+            return ConsentResult.ask(
+                prompt=(
+                    "I wasn't confident I heard you correctly. "
+                    "Please say 'yes' clearly or type it to confirm."
+                )
+            )
+        return ConsentResult.allow()
+
+    def impact_tier(self, tool_name: str, descriptor=None) -> ImpactTier:
+        """Return the ImpactTier for a tool without making an approval decision."""
+        return _tool_impact_tier(tool_name, descriptor)
 
     # ------------------------------------------------------------------
     # Internal

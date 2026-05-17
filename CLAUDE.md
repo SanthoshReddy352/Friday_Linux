@@ -44,7 +44,31 @@ FRIDAY is a local-first, cross-platform AI assistant (Linux + Windows). It uses 
 3. Add a regression guard to §17 if the test is must-not-break.
 4. Update `tests/` (automated suite) in the same change when the behavior can be unit-tested.
 
+**Every test you write MUST include a `**Verify:**` block** with at least one runnable command:
+- Routing / response tests → `grep -i "phrase" logs/friday.log | tail -5`
+- DB side-effects → `sqlite3 data/friday.db "SELECT ... ORDER BY id DESC LIMIT 3;"`
+- File creation → `ls -la ~/path && cat ~/path`
+- Config changes → `python -c "from core.config import ConfigManager; c=ConfigManager(); c.load(); print(c.get('key'))"`
+- Pure visual / audio → `**Verify:** Visual check — [what to look for].`
+Never write a test whose only pass criterion is "FRIDAY responds correctly".
+
 Do **not** update the old `docs/manual_testing_guide.md` — it is archived for historical reference only.
+
+## Response & Plan Logging
+
+**After every query response**, save the exchange to `responses/` in the project root:
+- Folder: `responses/`
+- Filename: `YYYY-MM-DD_HH-MM-SS.md` (date/time the query was received)
+- File must contain:
+  - `## Prompt` — the exact user message
+  - `## Response` — the full response/work produced
+
+**In plan mode**, additionally save the plan to `plan/` in the project root:
+- Folder: `plan/`
+- Filename: `YYYY-MM-DD_HH-MM-SS_plan.md` (same timestamp as the query)
+- File must contain the complete plan as produced by ExitPlanMode
+
+Both folders must exist; create them if absent. These files are logs — never modify a saved file after writing it.
 
 ## Platform Notes
 

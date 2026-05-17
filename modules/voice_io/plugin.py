@@ -135,6 +135,10 @@ class VoiceIOPlugin(FridayPlugin):
         logger.info("VoiceIOPlugin loaded.")
 
     def handle_speak(self, text):
+        if getattr(self.app, 'telegram_turn_active', False):
+            return
+        if getattr(self.app, 'tts_muted', False):
+            return
         if not text:
             return
         clean_text = sanitize_for_speech(text)

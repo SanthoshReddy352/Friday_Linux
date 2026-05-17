@@ -69,6 +69,16 @@ class MemoryService:
             except Exception as exc:
                 logger.debug("[mem0] Retrieval failed (non-fatal): %s", exc)
 
+        # Port #9: inject typed knowledge-graph entities relevant to the query
+        if query:
+            try:
+                from core.memory.graph import GraphRecall  # noqa: PLC0415
+                fragment = GraphRecall(self).build_fragment(query)
+                if fragment:
+                    bundle["knowledge_graph"] = fragment
+            except Exception as exc:
+                logger.debug("[graph] recall failed (non-fatal): %s", exc)
+
         return bundle
 
     def record_turn(
@@ -211,6 +221,186 @@ class MemoryService:
             sensitivity=sensitivity,
             metadata=metadata,
         )
+
+    # ------------------------------------------------------------------
+    # Port #2 — Commitments facade
+    # ------------------------------------------------------------------
+
+    def record_commitment(
+        self,
+        what: str,
+        session_id: str = "",
+        when_due: str = "",
+        priority: str = "medium",
+        retry_policy: str = "none",
+        assigned_to: str = "friday",
+    ) -> str:
+        return self._store.record_commitment(
+            what,
+            session_id=session_id or "",
+            when_due=when_due,
+            priority=priority,
+            retry_policy=retry_policy,
+            assigned_to=assigned_to,
+        )
+
+    def complete_commitment(self, commitment_id: str, result: str = "") -> bool:
+        return self._store.complete_commitment(commitment_id, result=result)
+
+    def fail_commitment(self, commitment_id: str, result: str = "") -> bool:
+        return self._store.fail_commitment(commitment_id, result=result)
+
+    def cancel_commitment(self, commitment_id: str) -> bool:
+        return self._store.cancel_commitment(commitment_id)
+
+    def list_pending_commitments(self, session_id: str = "", limit: int = 20) -> list:
+        return self._store.list_pending_commitments(session_id=session_id, limit=limit)
+
+    def list_all_commitments(self, session_id: str = "", limit: int = 50) -> list:
+        return self._store.list_all_commitments(session_id=session_id, limit=limit)
+
+    def get_commitment(self, commitment_id: str) -> dict | None:
+        return self._store.get_commitment(commitment_id)
+
+    # ------------------------------------------------------------------
+    # Port #3 — Audit trail facade
+    # ------------------------------------------------------------------
+
+    def log_audit_event(
+        self,
+        tool_name: str,
+        ok: bool,
+        args_summary: str = "",
+        output_summary: str = "",
+        exec_ms: int = 0,
+        session_id: str = "",
+        agent_id: str = "friday",
+        authority_decision: str = "allowed",
+    ) -> None:
+        try:
+            self._store.log_audit_event(
+                tool_name=tool_name,
+                ok=ok,
+                args_summary=args_summary,
+                output_summary=output_summary,
+                exec_ms=exec_ms,
+                session_id=session_id,
+                agent_id=agent_id,
+                authority_decision=authority_decision,
+            )
+        except Exception as exc:
+            logger.debug("[audit] log failed (non-fatal): %s", exc)
+
+    def query_audit_events(
+        self, tool_name: str = "", limit: int = 50, session_id: str = ""
+    ) -> list:
+        try:
+            return self._store.query_audit_events(
+                tool_name=tool_name, limit=limit, session_id=session_id
+            )
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Port #9 — Knowledge graph facade
+    # ------------------------------------------------------------------
+
+    def upsert_entity(
+        self,
+        name: str,
+        entity_type: str = "concept",
+        properties: dict | None = None,
+        session_id: str = "",
+    ) -> str:
+        return self._store.upsert_entity(
+            name, entity_type=entity_type, properties=properties, session_id=session_id
+        )
+
+    def add_entity_fact(
+        self,
+        subject_id: str,
+        predicate: str,
+        obj: str,
+        confidence: float = 0.7,
+        source: str = "",
+    ) -> str:
+        return self._store.add_entity_fact(
+            subject_id, predicate, obj, confidence=confidence, source=source
+        )
+
+    def add_entity_relationship(
+        self, from_id: str, to_id: str, rel_type: str = "related_to", properties: dict | None = None
+    ) -> str:
+        return self._store.add_entity_relationship(
+            from_id, to_id, rel_type=rel_type, properties=properties
+        )
+
+    def query_entity_facts(self, subject_id: str) -> list:
+        return self._store.query_entity_facts(subject_id)
+
+    def find_entities(self, name_fragment: str = "", entity_type: str = "") -> list:
+        return self._store.find_entities(name_fragment=name_fragment, entity_type=entity_type)
+
+    # ------------------------------------------------------------------
+    # Port #7 — Goals facade
+    # ------------------------------------------------------------------
+
+    def create_goal(
+        self,
+        title: str,
+        description: str = "",
+        level: str = "task",
+        parent_id: str = "",
+        time_horizon: str = "weekly",
+        tags: list | None = None,
+        session_id: str = "",
+    ) -> str:
+        return self._store.create_goal(
+            title,
+            description=description,
+            level=level,
+            parent_id=parent_id,
+            time_horizon=time_horizon,
+            tags=tags,
+            session_id=session_id,
+        )
+
+    def update_goal_score(self, goal_id: str, score: float, note: str = "") -> bool:
+        return self._store.update_goal_score(goal_id, score, note=note)
+
+    def update_goal_status(self, goal_id: str, status: str) -> bool:
+        return self._store.update_goal_status(goal_id, status)
+
+    def list_goals(self, session_id: str = "", status: str = "active") -> list:
+        return self._store.list_goals(session_id=session_id, status=status)
+
+    def get_goal(self, goal_id: str) -> dict | None:
+        return self._store.get_goal(goal_id)
+
+    # ------------------------------------------------------------------
+    # Port #6 — Agent messages facade
+    # ------------------------------------------------------------------
+
+    def post_agent_message(
+        self,
+        from_agent: str,
+        to_agent: str,
+        msg_type: str,
+        content: str,
+        priority: str = "normal",
+        requires_response: bool = False,
+        deadline: str = "",
+    ) -> str:
+        return self._store.post_agent_message(
+            from_agent, to_agent, msg_type, content,
+            priority=priority, requires_response=requires_response, deadline=deadline,
+        )
+
+    def list_agent_messages(self, to_agent: str = "", status: str = "pending") -> list:
+        return self._store.list_agent_messages(to_agent=to_agent, status=status)
+
+    def ack_agent_message(self, msg_id: str) -> bool:
+        return self._store.ack_agent_message(msg_id)
 
     # ------------------------------------------------------------------
     # Working artifact façade

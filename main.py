@@ -55,6 +55,16 @@ def _relaunch_under_project_venv() -> None:
 
 _relaunch_under_project_venv()
 
+# Load .env before any module that reads os.environ (tokens, API keys, etc.)
+try:
+    import os as _os
+    from dotenv import load_dotenv as _load_dotenv
+    _dot_env = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".env")
+    if _os.path.exists(_dot_env):
+        _load_dotenv(_dot_env, override=False)  # shell env takes precedence over .env
+except ImportError:
+    pass
+
 import argparse
 import logging
 import signal
@@ -109,6 +119,16 @@ def main():
     _install_signal_handlers(kernel)
     kernel.initialize()
     app = kernel.app
+
+    # Restore persisted TTS mute preference before the greeter speaks so
+    # that "TTS: OFF" at shutdown is honoured on the very first utterance.
+    import json as _json, os as _os
+    _gui_state_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "gui_state.json")
+    try:
+        with open(_gui_state_path, "r", encoding="utf-8") as _fh:
+            app.tts_muted = bool((_json.load(_fh) or {}).get("tts_muted", False))
+    except Exception:
+        app.tts_muted = False
 
     import time
     time.sleep(2.5)

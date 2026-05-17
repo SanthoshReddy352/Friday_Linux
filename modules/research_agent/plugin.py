@@ -14,6 +14,7 @@ class ResearchAgentPlugin(FridayPlugin):
         self.service = ResearchAgentService(app)
         self.app.research_agent = self.service
         self._active_threads = []
+        self._telegram_topics: set = set()
         self.on_load()
 
     def on_load(self):
@@ -82,6 +83,8 @@ class ResearchAgentPlugin(FridayPlugin):
         cfg = MODES[mode]
         max_sources = max(1, min(max_sources, cfg["max_sources"]))
 
+        if getattr(self.app, "telegram_turn_active", False):
+            self._telegram_topics.add(topic)
         thread = self.service.start_research(
             topic,
             max_sources=max_sources,
@@ -137,6 +140,9 @@ class ResearchAgentPlugin(FridayPlugin):
     def _announce_completion(self, report: ResearchReport):
         bus = getattr(self.app, "event_bus", None)
         emit = getattr(self.app, "emit_assistant_message", None)
+        from_telegram = report.topic in self._telegram_topics
+        if from_telegram:
+            self._telegram_topics.discard(report.topic)
         if report.error:
             message = f"Research on '{report.topic}' hit a snag, sir: {report.error}"
         else:
@@ -147,6 +153,11 @@ class ResearchAgentPlugin(FridayPlugin):
                 f"{usable} of {len(report.sources)} sources made it in. "
                 f"You'll find it in friday-research/{folder_name}."
             )
+        if from_telegram:
+            comms = getattr(self.app, "comms", None)
+            if comms and comms.telegram.available:
+                comms.telegram.send(message)
+            return
         if callable(emit):
             try:
                 emit(message, source="research")

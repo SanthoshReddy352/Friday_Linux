@@ -926,6 +926,104 @@ class ContextStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS commitments (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    what TEXT NOT NULL,
+                    when_due TEXT NOT NULL DEFAULT '',
+                    priority TEXT NOT NULL DEFAULT 'medium',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    retry_policy TEXT NOT NULL DEFAULT 'none',
+                    assigned_to TEXT NOT NULL DEFAULT 'friday',
+                    result TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_name TEXT NOT NULL DEFAULT '',
+                    ok INTEGER NOT NULL DEFAULT 1,
+                    args_summary TEXT NOT NULL DEFAULT '',
+                    output_summary TEXT NOT NULL DEFAULT '',
+                    exec_ms INTEGER NOT NULL DEFAULT 0,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL DEFAULT 'friday',
+                    authority_decision TEXT NOT NULL DEFAULT 'allowed',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS entities (
+                    id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL DEFAULT 'concept',
+                    name TEXT NOT NULL,
+                    properties_json TEXT NOT NULL DEFAULT '{}',
+                    session_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS entity_facts (
+                    id TEXT PRIMARY KEY,
+                    subject_id TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    source TEXT NOT NULL DEFAULT '',
+                    verified_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS entity_relationships (
+                    id TEXT PRIMARY KEY,
+                    from_id TEXT NOT NULL,
+                    to_id TEXT NOT NULL,
+                    rel_type TEXT NOT NULL DEFAULT 'related_to',
+                    properties_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS goals (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    level TEXT NOT NULL DEFAULT 'task',
+                    parent_id TEXT NOT NULL DEFAULT '',
+                    score REAL NOT NULL DEFAULT 0.0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    health TEXT NOT NULL DEFAULT 'on_track',
+                    time_horizon TEXT NOT NULL DEFAULT 'weekly',
+                    escalation_stage TEXT NOT NULL DEFAULT 'none',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    estimated_hours REAL NOT NULL DEFAULT 0.0,
+                    actual_hours REAL NOT NULL DEFAULT 0.0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS goal_progress (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    goal_id TEXT NOT NULL,
+                    score_before REAL NOT NULL DEFAULT 0.0,
+                    score_after REAL NOT NULL DEFAULT 0.0,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_messages (
+                    id TEXT PRIMARY KEY,
+                    from_agent TEXT NOT NULL DEFAULT 'friday',
+                    to_agent TEXT NOT NULL DEFAULT 'friday',
+                    msg_type TEXT NOT NULL DEFAULT 'task',
+                    content TEXT NOT NULL DEFAULT '',
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    requires_response INTEGER NOT NULL DEFAULT 0,
+                    deadline TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -963,3 +1061,381 @@ class ContextStore:
                 return
             except Exception:
                 self._vector_available = False
+
+    # ------------------------------------------------------------------
+    # Port #2 — Commitments
+    # ------------------------------------------------------------------
+
+    def record_commitment(
+        self,
+        what: str,
+        session_id: str = "",
+        when_due: str = "",
+        priority: str = "medium",
+        retry_policy: str = "none",
+        assigned_to: str = "friday",
+    ) -> str:
+        import uuid as _uuid
+        commitment_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO commitments
+                       (id, session_id, what, when_due, priority, status,
+                        retry_policy, assigned_to, result, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, '', ?, ?)""",
+                    (commitment_id, session_id, what, when_due, priority,
+                     retry_policy, assigned_to, now, now),
+                )
+                conn.commit()
+        return commitment_id
+
+    def complete_commitment(self, commitment_id: str, result: str = "") -> bool:
+        return self._update_commitment_status(commitment_id, "completed", result)
+
+    def fail_commitment(self, commitment_id: str, result: str = "") -> bool:
+        return self._update_commitment_status(commitment_id, "failed", result)
+
+    def cancel_commitment(self, commitment_id: str) -> bool:
+        return self._update_commitment_status(commitment_id, "cancelled")
+
+    def _update_commitment_status(self, cid: str, status: str, result: str = "") -> bool:
+        now = _utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE commitments SET status=?, result=?, updated_at=? WHERE id=?",
+                    (status, result, now, cid),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def list_pending_commitments(self, session_id: str = "", limit: int = 20) -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            if session_id:
+                rows = conn.execute(
+                    """SELECT * FROM commitments WHERE status='pending' AND session_id=?
+                       ORDER BY priority DESC, created_at ASC LIMIT ?""",
+                    (session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM commitments WHERE status='pending'
+                       ORDER BY priority DESC, created_at ASC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_all_commitments(self, session_id: str = "", limit: int = 50) -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            if session_id:
+                rows = conn.execute(
+                    "SELECT * FROM commitments WHERE session_id=? ORDER BY created_at DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM commitments ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_commitment(self, commitment_id: str) -> dict | None:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM commitments WHERE id=?", (commitment_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Port #3 — Audit trail
+    # ------------------------------------------------------------------
+
+    def log_audit_event(
+        self,
+        tool_name: str,
+        ok: bool,
+        args_summary: str = "",
+        output_summary: str = "",
+        exec_ms: int = 0,
+        session_id: str = "",
+        agent_id: str = "friday",
+        authority_decision: str = "allowed",
+    ) -> None:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO audit_events
+                   (tool_name, ok, args_summary, output_summary, exec_ms,
+                    session_id, agent_id, authority_decision, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (tool_name, int(ok), str(args_summary)[:500],
+                 str(output_summary)[:500], int(exec_ms),
+                 session_id, agent_id, authority_decision, now),
+            )
+            conn.commit()
+
+    def query_audit_events(
+        self, tool_name: str = "", limit: int = 50, session_id: str = ""
+    ) -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            clauses = []
+            params: list = []
+            if tool_name:
+                clauses.append("tool_name=?")
+                params.append(tool_name)
+            if session_id:
+                clauses.append("session_id=?")
+                params.append(session_id)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT * FROM audit_events {where} ORDER BY created_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Port #9 — Knowledge graph (entities / facts / relationships)
+    # ------------------------------------------------------------------
+
+    def upsert_entity(
+        self,
+        name: str,
+        entity_type: str = "concept",
+        properties: dict | None = None,
+        session_id: str = "",
+    ) -> str:
+        import uuid as _uuid
+        existing = self._find_entity_by_name(name, entity_type)
+        if existing:
+            return existing
+        entity_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO entities
+                   (id, entity_type, name, properties_json, session_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (entity_id, entity_type, name,
+                 json.dumps(properties or {}), session_id, now, now),
+            )
+            conn.commit()
+        return entity_id
+
+    def _find_entity_by_name(self, name: str, entity_type: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM entities WHERE name=? AND entity_type=? LIMIT 1",
+                (name, entity_type),
+            ).fetchone()
+            return row[0] if row else None
+
+    def add_entity_fact(
+        self,
+        subject_id: str,
+        predicate: str,
+        obj: str,
+        confidence: float = 0.7,
+        source: str = "",
+    ) -> str:
+        import uuid as _uuid
+        fact_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO entity_facts
+                   (id, subject_id, predicate, object, confidence, source, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (fact_id, subject_id, predicate, obj, confidence, source, now),
+            )
+            conn.commit()
+        return fact_id
+
+    def add_entity_relationship(
+        self,
+        from_id: str,
+        to_id: str,
+        rel_type: str = "related_to",
+        properties: dict | None = None,
+    ) -> str:
+        import uuid as _uuid
+        rel_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO entity_relationships
+                   (id, from_id, to_id, rel_type, properties_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (rel_id, from_id, to_id, rel_type,
+                 json.dumps(properties or {}), now),
+            )
+            conn.commit()
+        return rel_id
+
+    def query_entity_facts(self, subject_id: str) -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM entity_facts WHERE subject_id=? ORDER BY confidence DESC",
+                (subject_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def find_entities(self, name_fragment: str = "", entity_type: str = "") -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            clauses, params = [], []
+            if name_fragment:
+                clauses.append("name LIKE ?")
+                params.append(f"%{name_fragment}%")
+            if entity_type:
+                clauses.append("entity_type=?")
+                params.append(entity_type)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            rows = conn.execute(
+                f"SELECT * FROM entities {where} ORDER BY name LIMIT 50",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Port #7 — Goals
+    # ------------------------------------------------------------------
+
+    def create_goal(
+        self,
+        title: str,
+        description: str = "",
+        level: str = "task",
+        parent_id: str = "",
+        time_horizon: str = "weekly",
+        tags: list | None = None,
+        session_id: str = "",
+    ) -> str:
+        import uuid as _uuid
+        goal_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO goals
+                   (id, session_id, title, description, level, parent_id,
+                    score, status, health, time_horizon, escalation_stage,
+                    tags_json, estimated_hours, actual_hours, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 0.0, 'active', 'on_track', ?, 'none', ?, 0.0, 0.0, ?, ?)""",
+                (goal_id, session_id, title, description, level, parent_id,
+                 time_horizon, json.dumps(tags or []), now, now),
+            )
+            conn.commit()
+        return goal_id
+
+    def update_goal_score(self, goal_id: str, score: float, note: str = "") -> bool:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT score FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            if not row:
+                return False
+            old_score = row["score"]
+            health = "on_track" if score >= 0.7 else ("at_risk" if score >= 0.4 else "behind")
+            conn.execute(
+                "UPDATE goals SET score=?, health=?, updated_at=? WHERE id=?",
+                (score, health, now, goal_id),
+            )
+            conn.execute(
+                """INSERT INTO goal_progress (goal_id, score_before, score_after, note, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (goal_id, old_score, score, note, now),
+            )
+            conn.commit()
+            return True
+
+    def update_goal_status(self, goal_id: str, status: str) -> bool:
+        now = _utc_now()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE goals SET status=?, updated_at=? WHERE id=?",
+                (status, now, goal_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_goals(self, session_id: str = "", status: str = "active") -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            clauses, params = ["status=?"], [status]
+            if session_id:
+                clauses.append("session_id=?")
+                params.append(session_id)
+            where = "WHERE " + " AND ".join(clauses)
+            rows = conn.execute(
+                f"SELECT * FROM goals {where} ORDER BY level, created_at", params
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_goal(self, goal_id: str) -> dict | None:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Port #6 — Agent messages
+    # ------------------------------------------------------------------
+
+    def post_agent_message(
+        self,
+        from_agent: str,
+        to_agent: str,
+        msg_type: str,
+        content: str,
+        priority: str = "normal",
+        requires_response: bool = False,
+        deadline: str = "",
+    ) -> str:
+        import uuid as _uuid
+        msg_id = str(_uuid.uuid4())
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO agent_messages
+                   (id, from_agent, to_agent, msg_type, content, priority,
+                    requires_response, deadline, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                (msg_id, from_agent, to_agent, msg_type, content, priority,
+                 int(requires_response), deadline, now),
+            )
+            conn.commit()
+        return msg_id
+
+    def list_agent_messages(self, to_agent: str = "", status: str = "pending") -> list:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            clauses, params = ["status=?"], [status]
+            if to_agent:
+                clauses.append("to_agent=?")
+                params.append(to_agent)
+            where = "WHERE " + " AND ".join(clauses)
+            rows = conn.execute(
+                f"SELECT * FROM agent_messages {where} ORDER BY priority DESC, created_at ASC",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def ack_agent_message(self, msg_id: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE agent_messages SET status='acknowledged' WHERE id=?",
+                (msg_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0

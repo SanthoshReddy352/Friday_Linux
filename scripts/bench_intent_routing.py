@@ -117,33 +117,24 @@ class LlmTarget:
 LLM_TARGETS: dict[str, LlmTarget] = {
     "gemma": LlmTarget(
         key="gemma",
-        display_name="Gemma 3 270M IT",
+        display_name="Gemma 3 270M IT (FRIDAY-tuned)",
         gguf_filename="gemma-3-270m-it-Q4_K_M.gguf",
-        install_hint="python scripts/install_gemma_270m.py --only gemma",
+        install_hint="python scripts/train_gemma_lora.py",
+        max_tokens=16,        # tool name only
     ),
     "fn-gemma": LlmTarget(
         key="fn-gemma",
-        display_name="Function Gemma 270M",
+        display_name="Function Gemma 270M (FRIDAY-tuned)",
         gguf_filename="functiongemma-270m-it-Q4_K_M.gguf",
-        install_hint="python scripts/install_gemma_270m.py --only fn",
-    ),
-    "qwen-1.7b": LlmTarget(
-        key="qwen-1.7b",
-        display_name="Qwen3 1.7B (abliterated)",
-        gguf_filename="mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf",
-        install_hint="(ships with FRIDAY by default — already in models/)",
-        n_ctx=4096,
-    ),
-    "qwen-4b": LlmTarget(
-        key="qwen-4b",
-        display_name="Qwen3 4B (abliterated)",
-        gguf_filename="mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf",
-        install_hint="(ships with FRIDAY by default — already in models/)",
-        n_ctx=4096,
+        install_hint="python scripts/train_fngemma_lora.py",
+        max_tokens=40,        # envelope + JSON: <start_function_call>{"tool":"...","args":{}}<end_function_call>
     ),
 }
 
-ALL_MODELS = ("current", "gemma", "fn-gemma", "qwen-1.7b", "qwen-4b")
+# Qwen models dropped from the lineup — too slow for the 250 ms p95
+# budget. Bench now compares only the deterministic baseline vs the
+# two FRIDAY-tuned 270M LoRAs.
+ALL_MODELS = ("current", "gemma", "fn-gemma")
 
 
 # =====================================================================
@@ -161,9 +152,27 @@ class CaseResult:
 
 
 def load_dataset(path: str, limit: int | None = None) -> list[dict]:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    cases = data.get("cases", [])
+    """Load bench cases from YAML (legacy) or JSONL (synth output)."""
+    import json
+    lower = path.lower()
+    if lower.endswith(".jsonl"):
+        cases = []
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                cases.append({
+                    "utterance":     row["utterance"],
+                    "expected_tool": row["expected_tool"],
+                    "category":      row.get("category", row["expected_tool"]),
+                    "notes":         row.get("notes") or row.get("source", ""),
+                })
+    else:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        cases = data.get("cases", [])
     if limit:
         cases = cases[:limit]
     return cases
@@ -543,7 +552,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Intent routing A/B benchmark.")
     parser.add_argument(
         "--dataset",
-        default=os.path.join(REPO_ROOT, "tests", "datasets", "intent_routing_bench.yaml"),
+        default=os.path.join(REPO_ROOT, "tests", "datasets", "intent_test.jsonl"),
+        help="Default: the held-out 328-row synth test set. Pass "
+             "tests/datasets/intent_routing_bench.yaml for the legacy regression set.",
     )
     parser.add_argument(
         "--output",

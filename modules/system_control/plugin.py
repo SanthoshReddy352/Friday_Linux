@@ -258,7 +258,55 @@ class SystemControlPlugin(FridayPlugin):
             "aliases": ["bye", "goodbye", "good bye", "exit program", "close assistant", "switch off"]
         }, self.handle_shutdown)
 
+        # Port #1: adapter-based cross-OS tools with preflight gating.
+        # The preflight checks run once at load time; only available tools
+        # are registered so the LLM never picks a tool that won't run.
+        self._load_adapter_tools()
+
         logger.info("SystemControlPlugin loaded.")
+
+    def _load_adapter_tools(self):
+        from .preflight import run_all
+        from .adapters import get_adapter
+        avail = run_all()
+        self._platform_adapter = get_adapter()
+
+        if avail["clipboard"].available:
+            self.app.router.register_tool({
+                "name": "get_clipboard",
+                "description": "Read the current clipboard text content.",
+                "parameters": {},
+                "context_terms": ["clipboard", "what's in my clipboard", "paste content"],
+            }, lambda t, a: self._platform_adapter.clipboard_read())
+            self.app.router.register_tool({
+                "name": "set_clipboard",
+                "description": "Write text to the system clipboard.",
+                "parameters": {"text": "string – text to copy to clipboard"},
+                "side_effect_level": "write",
+            }, lambda t, a: (self._platform_adapter.clipboard_write(a.get("text", t)) or "Copied to clipboard."))
+        else:
+            logger.warning("[SystemControl] clipboard unavailable: %s", avail["clipboard"].reason)
+
+        if avail["active_window"].available:
+            self.app.router.register_tool({
+                "name": "get_active_window",
+                "description": "Return the name and title of the currently focused application window.",
+                "parameters": {},
+                "context_terms": ["active window", "current window", "what app is open", "focused window"],
+            }, lambda t, a: "{} — {}".format(*self._platform_adapter.get_active_window()))
+        else:
+            logger.warning("[SystemControl] active_window unavailable: %s", avail["active_window"].reason)
+
+        if avail["open_url"].available:
+            self.app.router.register_tool({
+                "name": "open_url",
+                "description": "Open a URL in the default web browser.",
+                "parameters": {"url": "string – the URL to open"},
+                "connectivity": "online",
+                "side_effect_level": "external",
+            }, lambda t, a: (self._platform_adapter.open_url(a.get("url", "")) or "URL opened."))
+
+        self._availability = avail
 
     def handle_take_screenshot(self, text, args):
         result = take_screenshot()
@@ -353,6 +401,20 @@ class SystemControlPlugin(FridayPlugin):
         return self.file_controller.read(text, args)
 
     def handle_summarize_file(self, text, args):
+        # When a document is already loaded in session RAG and no explicit file was
+        # named, summarize directly from the in-memory chunks instead of asking
+        # "Which file would you like me to summarize?" (which ignores the loaded doc).
+        session_rag = getattr(self.app, 'session_rag', None)
+        if session_rag and session_rag.is_active and not args.get("filename"):
+            from .file_readers import _summarize_with_llm, _heuristic_summary
+            chunks = session_rag.retrieve(
+                "summary key points overview main topics", top_k=8
+            )
+            combined = "\n\n".join(chunks)
+            if combined:
+                llm = self.app.router.get_llm() if hasattr(self.app.router, "get_llm") else None
+                result = _summarize_with_llm(session_rag.source_name, combined, llm)
+                return result or _heuristic_summary(session_rag.source_name, combined)
         return self.file_controller.summarize(text, args)
 
     def handle_list_folder_contents(self, text, args):

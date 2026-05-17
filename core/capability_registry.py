@@ -159,8 +159,11 @@ class CapabilityRegistry:
 class CapabilityExecutor:
     def __init__(self, registry: CapabilityRegistry):
         self.registry = registry
+        # Injected by FridayApp after construction — None until wired in.
+        self.audit_trail = None
 
     def execute(self, name: str, raw_text: str, args: dict | None = None) -> CapabilityExecutionResult:
+        import time as _time
         descriptor = self.registry.get_descriptor(name)
         handler = self.registry.get_handler(name)
         if descriptor is None or handler is None:
@@ -170,22 +173,41 @@ class CapabilityExecutor:
                 error=f"Capability '{name}' is not registered.",
             )
 
+        t0 = _time.monotonic()
         try:
             output = handler(raw_text, dict(args or {}))
             if isinstance(output, CapabilityExecutionResult):
                 if output.descriptor is None:
                     output.descriptor = descriptor
-                return output
-            return CapabilityExecutionResult(
-                ok=True,
-                name=name,
-                output=output,
-                descriptor=descriptor,
-            )
+                result = output
+            else:
+                result = CapabilityExecutionResult(
+                    ok=True,
+                    name=name,
+                    output=output,
+                    descriptor=descriptor,
+                )
         except Exception as exc:  # pragma: no cover - defensive boundary
-            return CapabilityExecutionResult(
+            result = CapabilityExecutionResult(
                 ok=False,
                 name=name,
                 error=str(exc),
                 descriptor=descriptor,
             )
+
+        if self.audit_trail is not None:
+            try:
+                exec_ms = int((_time.monotonic() - t0) * 1000)
+                args_summary = str(args or {})[:300]
+                output_summary = str(result.output or result.error)[:300]
+                self.audit_trail.log(
+                    tool_name=name,
+                    ok=result.ok,
+                    args_summary=args_summary,
+                    output_summary=output_summary,
+                    exec_ms=exec_ms,
+                )
+            except Exception:
+                pass  # audit failure must never break execution
+
+        return result

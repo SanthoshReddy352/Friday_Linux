@@ -130,11 +130,10 @@ class ResearchPlannerWorkflow(BaseWorkflow):
                 folder_name = folder.rsplit("/", 1)[-1]
                 return self._reply(state, ws,
                     f"Understood. The briefing is in friday-research/{folder_name} when you want it.")
-            # Read the summary aloud (truncated to a TTS-friendly length).
-            speech_text = self._summary_for_speech(ws.get("summary_path", ""))
+            summary_text = self._summary_for_speech(ws.get("summary_path", ""))
             ws["step"] = "done"
             self._save(session_id, ws)
-            return self._reply(state, ws, speech_text)
+            return self._reply(state, ws, summary_text)
 
         # No matching step — bail out so the router can take over.
         state["result"] = WorkflowResult(handled=False, workflow_name=self.name, state=ws)
@@ -157,6 +156,7 @@ class ResearchPlannerWorkflow(BaseWorkflow):
         full_topic = f"{topic} ({focus})" if focus else topic
 
         ws["step"] = "researching"
+        ws["source"] = "telegram" if getattr(self.app, "telegram_turn_active", False) else "user"
         self._save(session_id, ws)
 
         # Capture what we need so the async callback can update workflow state
@@ -217,8 +217,19 @@ class ResearchPlannerWorkflow(BaseWorkflow):
             f"Briefing on '{report.topic}' is ready. "
             f"{usable} of {len(sources)} sources made it in. "
             f"Saved to friday-research/{folder_name}. "
+            "Reply 'yes' to get the summary here, or 'no' to skip."
+            if ws.get("source") == "telegram" else
+            f"Briefing on '{report.topic}' is ready. "
+            f"{usable} of {len(sources)} sources made it in. "
+            f"Saved to friday-research/{folder_name}. "
             "Want me to read the summary aloud?"
         )
+
+        if ws.get("source") == "telegram":
+            comms = getattr(self.app, "comms", None)
+            if comms and comms.telegram.available:
+                comms.telegram.send(msg)
+                return
         self._announce(msg)
 
     # ------------------------------------------------------------------
