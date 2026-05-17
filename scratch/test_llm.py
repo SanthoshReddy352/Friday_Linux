@@ -3,7 +3,7 @@ sys.path.append("/home/tricky/Friday_Linux")
 from llama_cpp import Llama
 
 llm = Llama(
-    model_path="/home/tricky/Friday_Linux/models/mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf",
+    model_path="/home/tricky/Friday_Linux/models/Qwen3.5-0.8B-Q4_K_M.gguf",
     n_ctx=2048,
     verbose=False
 )

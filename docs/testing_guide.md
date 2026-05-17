@@ -10,6 +10,8 @@
 
 | Date | Section | Change |
 |---|---|---|
+| 2026-05-17 | §35 (new) | **Phase 1 — Kali workflow planner foundation.** Extended `CapabilityDescriptor` with security fields (`network_scope`, `requires_authorization`, `command_templates`, `argument_constraints`, `parser`, `allowed_use_cases`, `forbidden_use_cases`, `success_conditions`, `failure_conditions`, `next_step_hints`, `rollback_or_cleanup`, `logging_requirements`); all optional with safe defaults so existing capabilities are unchanged. Added `PermissionService.classify_target_scope()`, `check_network_scope()`, `check_authorized_target()`. New module `modules/security_tools/` registers two capabilities — `host_service_scan` and `ping_sweep` — backed by `NmapWrapper` (shlex-safe subprocess, dangerous-flag deny-list, port spec validation, scope refusal before subprocess) and a deterministic `parse_nmap_xml()`. Audit log at `logs/security_audit.log`. New `security:` section in `config.yaml` controls `lab_mode`, `authorized_scopes`, `nmap_binary`, `default_timeout_sec`, `audit_log_path`. **Verify:** `pytest tests/test_security_tools_nmap.py -v` shows 19 green; `python -c "from modules.security_tools.wrappers.nmap_wrapper import NmapWrapper; w=NmapWrapper(authorized_scopes=['127.0.0.0/8']); print(w.host_service_scan('127.0.0.1', allowed_scope='local').status)"` prints `success`; same call with target `8.8.8.8` and `allowed_scope='lab'` prints `refused`. |
+| 2026-05-17 | config | **LLM swap**: chat model `mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf` → `Qwen3.5-0.8B-Q4_K_M.gguf`; tool/memory-extraction model `mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf` → `Qwen3.5-4B-Q4_K_M.gguf`. Updated `config.yaml`, defaults in `core/bootstrap/settings.py` and `core/model_manager.py`. Old GGUFs deleted from `models/`. **Verify:** `python -c "from core.config import ConfigManager; c=ConfigManager(); c.load(); print(c.get('models.chat.path'), c.get('models.tool.path'))"` should print the two new paths, and `ls models/*.gguf` should show no `mlabonne_*` files. |
 | 2026-05-16 | §1–§22 | **Testing guide style pass**: added `**Verify:**` blocks with terminal commands, sqlite3 queries, log greps, and file-system checks to every test in §1–§22 that previously had no runnable verification step. Updated Protocol format rules and CLAUDE.md to require Verify blocks in all future tests. |
 | 2026-05-16 | §32, §18 | **Telegram `/start` filter + session RAG summarize**: `TelegramInbound._dispatch` now intercepts messages beginning with `/` before routing to FRIDAY — `/start` sends a welcome, all other bot commands are silently dropped. `SystemControlPlugin.handle_summarize_file` now checks `app.session_rag.is_active` first; when a file is loaded and no explicit filename was provided, runs `_summarize_with_llm` (or `_heuristic_summary` fallback) against the in-memory RAG chunks instead of asking "Which file would you like me to summarize?" |
 | 2026-05-16 | §32 | **Telegram file ingestion**: `TelegramInbound._dispatch` detects `document`/`photo` fields; `_handle_file` checks extension against `_SUPPORTED_EXTENSIONS` ({.pdf,.docx,.pptx,.xlsx,.md,.txt,.html,.csv}), downloads via Telegram `getFile` + `urlretrieve`, renames to original filename, loads via `app.load_session_rag_file`, replies with status; unsupported types replied immediately with the allowed list; caption (if any) processed as a follow-up query after load. |
@@ -4690,3 +4692,126 @@ When watching `logs/friday.log` during tests, look for:
 | `[turn_feedback] ack: <text>` | Voice ack fired before VLM inference |
 | `[intent] Resolved '<pronoun>' → <value>` | Reference registry resolved a pronoun |
 | `[resource_monitor] Available RAM: N MB` | ResourceMonitor snapshot taken |
+
+---
+
+## 35. Security Tools / Kali Workflows (Phase 1+)
+
+Tests the Kali workflow planner foundation: extended capability descriptor,
+target-scope safety gates, and the nmap wrapper. Future phases (workflow
+templates, Qwen planner prompts, plan validator, replanning, Telegram
+approval, plan archive) add their tests under this section.
+
+### [T-35.1] Capability descriptor security fields persist through registration
+
+Register a synthetic capability via `CapabilityRegistry.register_tool` with
+`network_scope`, `requires_authorization`, `command_templates`, and `parser`
+in `metadata`. Confirm the descriptor returned by `get_descriptor()` carries
+those fields unchanged.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_registry_persists_security_metadata -v` passes.
+
+### [T-35.2] Existing capabilities still register without the new fields
+
+Register a tool with no `network_scope`/`command_templates` metadata. The
+descriptor must default to `network_scope="local"`, `requires_authorization=False`,
+and empty lists / dicts for the rest.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_registry_existing_capabilities_still_work_without_security_fields -v` passes; `pytest tests/test_capabilities_and_models.py` is still green.
+
+### [T-35.3] PermissionService classifies target scope
+
+`classify_target_scope()` returns:
+- `local` for `127.0.0.1`, `localhost`, `::1`
+- `lab` for any RFC1918 (10/8, 172.16/12, 192.168/16) and link-local
+- `public` for routable IPs (`8.8.8.8`)
+- `unknown` for unresolved hostnames
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_classify_target_scope -v`.
+
+### [T-35.4] PermissionService blocks public targets when capability scope = lab
+
+`check_network_scope("8.8.8.8", "lab")` → `(False, reason)`; `check_network_scope("192.168.1.1", "lab")` → `(True, "ok")`.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_check_network_scope_blocks_public_under_lab_scope -v`.
+
+### [T-35.5] PermissionService authorized-target allowlist (CIDR + hostname suffix)
+
+`check_authorized_target()` accepts IP literals matching a CIDR in the
+`authorized_scopes` list, or a hostname exactly matching or having a
+dot-bounded suffix match against an entry.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_check_authorized_target_cidr_and_hostname -v`.
+
+### [T-35.6] Dangerous nmap flags are detected before subprocess
+
+`block_dangerous_flags()` matches `--script`, `-O`, `-f`, `--mtu`, `-D`, `-S`,
+shell metacharacters (`;`, `|`, backtick, `$()`, redirection) — and returns
+`None` for the canonical wrapper template (`nmap -sT --open -oX - ...`).
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_block_dangerous_flags_catches_script_and_metachars -v`.
+
+### [T-35.7] NmapWrapper refuses out-of-scope target without spawning subprocess
+
+`NmapWrapper(...).host_service_scan("8.8.8.8", allowed_scope="lab")` returns
+`status="refused"` with `command=""` (empty — proves subprocess was never
+invoked).
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_nmap_wrapper_refuses_public_target_without_subprocess -v` and:
+`python -c "from modules.security_tools.wrappers.nmap_wrapper import NmapWrapper; r=NmapWrapper(authorized_scopes=['127.0.0.0/8']).host_service_scan('8.8.8.8', allowed_scope='lab'); print(r.status, repr(r.command))"` prints `refused ''`.
+
+### [T-35.8] Invalid port spec is refused
+
+`host_service_scan(target='127.0.0.1', ports='80; rm')` → `status="refused"`
+with the reason mentioning "port".
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_nmap_wrapper_rejects_invalid_port_spec -v`.
+
+### [T-35.9] nmap XML parser produces structured observation
+
+Feed `modules/security_tools/fixtures/nmap_localhost_open.xml` into
+`parse_nmap_xml()`. Result has `status="success"`, one host at `127.0.0.1`
+in state `up`, open ports `[22, 80, 443]`, and a `services` entry for SSH
+that includes `OpenSSH` in `version_hint`.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_parse_nmap_xml_normal_scan -v`.
+
+### [T-35.10] Empty ping sweep is success-with-no-hosts, not failure
+
+A valid `<runstats>` with zero `<host>` entries (e.g. sweep of a quiet
+subnet) parses to `status="success"`, `structured_data.hosts == []`.
+
+**Verify:** `pytest tests/test_security_tools_nmap.py::test_parse_nmap_xml_empty_sweep_is_success_not_failure -v`.
+
+### [T-35.11] Live nmap scan against localhost (integration)
+
+With nmap installed on PATH:
+
+```bash
+.venv/bin/python -c "
+from modules.security_tools.wrappers.nmap_wrapper import NmapWrapper
+from modules.security_tools.parsers.nmap_parser import parse_nmap_xml
+w = NmapWrapper(authorized_scopes=['127.0.0.0/8'])
+r = w.host_service_scan('127.0.0.1', profile='quick', allowed_scope='local')
+print(r.status, r.exec_ms, 'ms')
+print(parse_nmap_xml(r.raw_stdout)['summary'])
+"
+```
+
+**Verify:** First line shows `success`; second line is `N live host(s), M open port(s) across 1 scanned target(s)` where N=1 and M≥0. A log line `[security_tools.nmap] exec: nmap -sT --open -oX - -T4 --top-ports 100 127.0.0.1` appears via the FRIDAY logger.
+
+### [T-35.12] Audit log captures every wrapper invocation
+
+After running any `host_service_scan` or `ping_sweep` through
+`SecurityToolsPlugin`, `logs/security_audit.log` gains one JSON line per
+invocation containing `capability`, `target`, `status`, `command`, `exit_ms`,
+and `reason`.
+
+**Verify:** `tail -n 1 logs/security_audit.log | python -c "import sys,json; r=json.loads(sys.stdin.read()); print(r['capability'], r['status'], r['target'])"` prints e.g. `host_service_scan success 127.0.0.1`.
+
+### [T-35.13] (Regression) Existing capability descriptor tests still pass
+
+The new `CapabilityDescriptor` security fields default safely and do not
+break any of the 20+ existing capabilities.
+
+**Verify:** `pytest tests/test_capabilities_and_models.py tests/test_router_tools.py tests/test_planning_engines.py -q` — all green (note: an unrelated pre-existing failure in `test_app_flow.py::test_process_input_normalizes_typed_commands_before_routing` exists independently and is not introduced by Phase 1).

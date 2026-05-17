@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ModelSettings:
-    chat_path: str = "models/mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf"
-    tool_path: str = "models/mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf"
+    chat_path: str = "models/Qwen3.5-0.8B-Q4_K_M.gguf"
+    tool_path: str = "models/Qwen3.5-4B-Q4_K_M.gguf"
     chat_n_ctx: int = 4096
     tool_n_ctx: int = 2048
     chat_temperature: float = 0.7
@@ -63,8 +63,8 @@ class FridaySettings:
             app_name=_get("app.name", "FRIDAY"),
             version=_get("app.version", "0.1"),
             models=ModelSettings(
-                chat_path=_get("models.chat.path", "models/mlabonne_Qwen3-1.7B-abliterated-Q4_K_M.gguf"),
-                tool_path=_get("models.tool.path", "models/mlabonne_Qwen3-4B-abliterated-Q4_K_M.gguf"),
+                chat_path=_get("models.chat.path", "models/Qwen3.5-0.8B-Q4_K_M.gguf"),
+                tool_path=_get("models.tool.path", "models/Qwen3.5-4B-Q4_K_M.gguf"),
                 chat_n_ctx=int(_get("models.chat.n_ctx", 4096)),
                 tool_n_ctx=int(_get("models.tool.n_ctx", 2048)),
                 chat_temperature=float(_get("models.chat.temperature", 0.7)),

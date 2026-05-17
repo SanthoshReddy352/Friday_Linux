@@ -35,6 +35,22 @@ class CapabilityDescriptor:
     metadata: dict = field(default_factory=dict)
     fallback_capability: str = ""
 
+    # Security / Kali extensions. Optional; existing capabilities omit them.
+    # network_scope: "local" (loopback only), "lab" (RFC1918 + authorized CIDRs),
+    # "public" (anything else), "unknown" (target unclassified).
+    allowed_use_cases: list[str] = field(default_factory=list)
+    forbidden_use_cases: list[str] = field(default_factory=list)
+    network_scope: str = "local"
+    requires_authorization: bool = False
+    command_templates: dict = field(default_factory=dict)
+    argument_constraints: dict = field(default_factory=dict)
+    parser: str = ""
+    success_conditions: list[str] = field(default_factory=list)
+    failure_conditions: list[str] = field(default_factory=list)
+    next_step_hints: list[str] = field(default_factory=list)
+    rollback_or_cleanup: list[str] = field(default_factory=list)
+    logging_requirements: list[str] = field(default_factory=list)
+
 
 @dataclass
 class CapabilityExecutionResult:
@@ -66,6 +82,20 @@ class CapabilityRegistry:
         if not name:
             raise ValueError("Capability name is required.")
 
+        _security_keys = {
+            "allowed_use_cases",
+            "forbidden_use_cases",
+            "network_scope",
+            "requires_authorization",
+            "command_templates",
+            "argument_constraints",
+            "parser",
+            "success_conditions",
+            "failure_conditions",
+            "next_step_hints",
+            "rollback_or_cleanup",
+            "logging_requirements",
+        }
         descriptor = CapabilityDescriptor(
             name=name,
             description=str(spec.get("description") or ""),
@@ -79,9 +109,21 @@ class CapabilityRegistry:
             provider_kind=str(metadata.get("provider_kind", "inprocess")),
             resources=list(metadata.get("resources") or []),
             prompts=list(metadata.get("prompts") or []),
+            allowed_use_cases=list(metadata.get("allowed_use_cases") or []),
+            forbidden_use_cases=list(metadata.get("forbidden_use_cases") or []),
+            network_scope=str(metadata.get("network_scope") or "local"),
+            requires_authorization=bool(metadata.get("requires_authorization", False)),
+            command_templates=dict(metadata.get("command_templates") or {}),
+            argument_constraints=dict(metadata.get("argument_constraints") or {}),
+            parser=str(metadata.get("parser") or ""),
+            success_conditions=list(metadata.get("success_conditions") or []),
+            failure_conditions=list(metadata.get("failure_conditions") or []),
+            next_step_hints=list(metadata.get("next_step_hints") or []),
+            rollback_or_cleanup=list(metadata.get("rollback_or_cleanup") or []),
+            logging_requirements=list(metadata.get("logging_requirements") or []),
             metadata={
                 "tool_spec": spec,
-                **{key: value for key, value in metadata.items() if key not in {
+                **{key: value for key, value in metadata.items() if key not in ({
                     "connectivity",
                     "latency_class",
                     "permission_mode",
@@ -91,7 +133,7 @@ class CapabilityRegistry:
                     "provider_kind",
                     "resources",
                     "prompts",
-                }},
+                } | _security_keys)},
             },
         )
         self._descriptors[name] = descriptor

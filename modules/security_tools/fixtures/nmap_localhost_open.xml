@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -sT --open -oX - -T4 --top-ports 100 127.0.0.1" start="1715942400" startstr="Sat May 17 07:00:00 2026" version="7.98">
+<host>
+<status state="up" reason="conn-refused"/>
+<address addr="127.0.0.1" addrtype="ipv4"/>
+<hostnames><hostname name="localhost" type="user"/></hostnames>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/><service name="ssh" product="OpenSSH" version="9.6p1" extrainfo="protocol 2.0"/></port>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack"/><service name="http" product="nginx" version="1.24.0"/></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack"/><service name="https" product="nginx" version="1.24.0"/></port>
+</ports>
+</host>
+<runstats><finished time="1715942401" timestr="Sat May 17 07:00:01 2026" elapsed="1.23" exit="success"/></runstats>
+</nmaprun>
